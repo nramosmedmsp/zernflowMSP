@@ -27,6 +27,7 @@ import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
 import type {
   CaseRouting,
+  CaseTypeAutoTemplate,
   CaseStatus,
   CaseRuleAction,
   CaseRuleCondition,
@@ -71,6 +72,11 @@ import {
   type RuleRefTarget,
   type StageConfig,
 } from "@/components/settings/cases/config-rules";
+import {
+  buildAutoTemplate,
+  parseAutoTemplate,
+  type CustomFieldOption,
+} from "@/components/settings/cases/auto-template-rules";
 
 // ── Resultados y utilidades ────────────────────────────────────────────────
 
@@ -1475,3 +1481,92 @@ export async function saveKeyDateLabel(label: string): Promise<ConfigResult<{ la
   });
 }
 
+
+// ── Plantilla al activarse (docs/FASE-2-TECNICO.md 3.4 y 8) ────────────────
+
+export interface AutoTemplateContext {
+  /** Canales de WhatsApp activos del espacio. Sin ellos no se ofrece la plantilla. */
+  channels: { id: string; name: string }[];
+  customFields: CustomFieldOption[];
+  current: CaseTypeAutoTemplate | null;
+}
+
+/** Datos para configurar la plantilla de un tipo: canales de WhatsApp, campos personalizados y la plantilla actual. */
+export async function getAutoTemplateContext(caseTypeId: string): Promise<ConfigResult<{ context: AutoTemplateContext }>> {
+  return run(async (s) => {
+    const row = await ownedType(s, caseTypeId);
+    if (!row) return { error: TYPE_NOT_FOUND };
+    const [channels, fields, type] = await Promise.all([
+      s.db
+        .from("channels")
+        .select("id, display_name, username")
+        .eq("workspace_id", s.workspaceId)
+        .eq("platform", "whatsapp")
+        .eq("is_active", true)
+        .order("created_at", { ascending: true }),
+      s.db.from("custom_field_definitions").select("name, slug").eq("workspace_id", s.workspaceId).order("name", { ascending: true }),
+      s.db.from("case_types").select("auto_template").eq("id", row.id).eq("workspace_id", s.workspaceId).maybeSingle(),
+    ]);
+    must(channels, "channels");
+    must(fields, "custom_field_definitions");
+    must(type, "case_types");
+    return {
+      ok: true as const,
+      context: {
+        channels: (channels.data ?? []).map((c) => ({ id: c.id, name: c.display_name || c.username || "WhatsApp" })),
+        customFields: (fields.data ?? []).map((f) => ({ name: f.name, slug: f.slug })),
+        current: parseAutoTemplate(type.data?.auto_template),
+      },
+    };
+  });
+}
+
+/**
+ * Guarda (o quita, con null) la plantilla que se envía al activarse una
+ * gestión de este tipo. Solo tipos proactivos; cada variable debe ser
+ * {nombre}, {fecha_clave}, {empresa} o un campo personalizado existente.
+ */
+export async function saveAutoTemplate(input: {
+  caseTypeId: string;
+  autoTemplate: { template_name: string; language: string; params: string[] } | null;
+}): Promise<ConfigResult> {
+  return run(async (s) => {
+    const row = await ownedType(s, input?.caseTypeId);
+    if (!row) return { error: TYPE_NOT_FOUND };
+
+    let value: CaseTypeAutoTemplate | null = null;
+    if (input.autoTemplate !== null) {
+      if (!row.is_proactive) return { error: "Solo los tipos proactivos pueden enviar una plantilla al activarse." };
+      const { data: fields } = must(
+        await s.db.from("custom_field_definitions").select("slug").eq("workspace_id", s.workspaceId),
+        "custom_field_definitions",
+      );
+      const built = buildAutoTemplate({
+        templateName: input.autoTemplate?.template_name,
+        language: input.autoTemplate?.language,
+        params: input.autoTemplate?.params,
+        fieldSlugs: new Set((fields ?? []).map((f) => f.slug)),
+      });
+      if (!built.ok) return { error: built.error };
+      value = built.value;
+    }
+
+    const { data } = must(
+      await s.db
+        .from("case_types")
+        .update({ auto_template: value as unknown as Json | null, updated_at: nowIso() })
+        .eq("id", row.id)
+        .eq("workspace_id", s.workspaceId)
+        .select("id"),
+      "update case_types",
+    );
+    if ((data ?? []).length === 0) return { error: ADMIN_ONLY_MESSAGE };
+    await audit(s, "auto_template_changed", "case_type", {
+      entityId: row.id,
+      name: row.name,
+      to: value ? value.template_name : null,
+      meta: { auto_template: value },
+    });
+    return { ok: true };
+  });
+}

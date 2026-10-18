@@ -5,6 +5,15 @@
  */
 
 import type { Node, Edge } from "@xyflow/react";
+import { CASE_ACTION_TYPES } from "./types";
+import { isCaseTriggerType } from "./case-trigger-match";
+import {
+  CASE_CONDITION_LABELS,
+  evaluateCaseCondition,
+  isCaseConditionField,
+  type CaseConditionSnapshot,
+} from "./case-conditions";
+import { decideSendMode, parseNodeTemplate, previewTemplateParams, SKIP_REASON_LABELS } from "./send-mode";
 
 // --- Types ---
 
@@ -39,6 +48,8 @@ export type SimulationStepResult =
   | { type: "enroll_sequence"; sequenceId: string }
   | { type: "comment_reply"; text: string }
   | { type: "private_reply"; text: string }
+  | { type: "template"; templateName: string; language: string; params: string[] }
+  | { type: "message_skipped"; reason: string }
   | { type: "subscribe" | "unsubscribe" }
   | { type: "http_request"; method: string; url: string }
   | { type: "error"; message: string }
@@ -50,7 +61,19 @@ export interface SimulationConfig {
     tags?: string[];
     customFields?: Record<string, string>;
     isSubscribed?: boolean;
+    /** Id del tipo de contacto (condición "tipo de contacto"). */
+    contactTypeId?: string;
   };
+  /**
+   * Gestión simulada para las condiciones y los nodos de gestión. Sin indicar,
+   * hay una gestión abierta sin clasificar, sin responsable y dentro de horario.
+   */
+  mockCase?: Partial<CaseConditionSnapshot> & { hasOpenCase?: boolean };
+  /**
+   * Ventana de 24 h de WhatsApp. "false" simula que está cerrada (el nodo
+   * Enviar mensaje usa la plantilla o no envía); sin indicar, no se aplica.
+   */
+  windowOpen?: boolean;
 }
 
 export interface SimulationResult {
@@ -122,6 +145,17 @@ export function simulateFlow(
     message: config.incomingMessage,
   };
 
+  // Gestión simulada: los nodos de gestión la modifican y las condiciones la leen.
+  const caseState: CaseConditionSnapshot & { hasOpenCase: boolean } = {
+    contactTypeId: config.mockContact?.contactTypeId ?? null,
+    caseTypeId: config.mockCase?.caseTypeId ?? null,
+    stageId: config.mockCase?.stageId ?? null,
+    teamId: config.mockCase?.teamId ?? null,
+    hasAssignee: config.mockCase?.hasAssignee ?? false,
+    withinHours: config.mockCase?.withinHours ?? true,
+    hasOpenCase: config.mockCase?.hasOpenCase ?? true,
+  };
+
   // 1. Find trigger node
   const triggerNode = nodes.find((n) => n.type === "trigger");
   if (!triggerNode) {
@@ -148,7 +182,12 @@ export function simulateFlow(
     triggerMatched =
       keywords.length === 0 ||
       keywords.some((k) => msg.includes(k.toLowerCase()));
-  } else if (triggerType === "welcome" || triggerType === "default") {
+  } else if (
+    triggerType === "welcome" ||
+    triggerType === "default" ||
+    isCaseTriggerType(triggerType)
+  ) {
+    // Los disparadores de gestión no dependen del mensaje: se asume que el evento ocurrió.
     triggerMatched = true;
   }
 
@@ -196,7 +235,14 @@ export function simulateFlow(
     let nextHandle: string | undefined;
     let shouldPause = false;
 
-    switch (node.type) {
+    // Los nodos de gestión se guardan como "action" con data.actionType.
+    const actionType = data.actionType as string | undefined;
+    const kind: string =
+      node.type === "action" && actionType && (CASE_ACTION_TYPES as readonly string[]).includes(actionType)
+        ? actionType
+        : node.type || "unknown";
+
+    switch (kind) {
       case "sendMessage": {
         const messages = (data.messages as Array<{ type?: string; text?: string; imageUrl?: string }>) || [];
         const texts = messages
@@ -204,6 +250,39 @@ export function simulateFlow(
           .map((m) => interpolate(m.text!, variables));
         const buttons = (data.buttons as Array<{ title: string }>) || [];
         const quickReplies = (data.quickReplies as Array<{ title: string }>) || [];
+        if (config.windowOpen === false) {
+          // Ventana de 24 h cerrada: plantilla del nodo o no se envía.
+          const template = parseNodeTemplate(data.template);
+          const decision = decideSendMode({
+            platform: "whatsapp",
+            windowOpen: false,
+            hasText: texts.length > 0,
+            hasTemplate: !!template,
+          });
+          if (decision.mode === "template" && template) {
+            steps.push({
+              nodeId: node.id,
+              nodeType: "sendMessage",
+              nodeLabel: label,
+              result: {
+                type: "template",
+                templateName: template.template_name,
+                language: template.language,
+                params: previewTemplateParams(template.params),
+              },
+            });
+            break;
+          }
+          if (decision.mode === "skip") {
+            steps.push({
+              nodeId: node.id,
+              nodeType: "sendMessage",
+              nodeLabel: label,
+              result: { type: "message_skipped", reason: SKIP_REASON_LABELS[decision.reason] },
+            });
+            break;
+          }
+        }
         steps.push({
           nodeId: node.id,
           nodeType: "sendMessage",
@@ -229,6 +308,12 @@ export function simulateFlow(
         const results = conditions.map((c) => {
           let fieldValue: string | undefined;
 
+          if (isCaseConditionField(c.field)) {
+            return evaluateCaseCondition(
+              { field: c.field, operator: c.operator, value: c.value },
+              caseState
+            );
+          }
           if (c.field === "platform") {
             fieldValue = "instagram"; // simulated
           } else if (c.field === "is_subscribed") {
@@ -262,14 +347,123 @@ export function simulateFlow(
           nodeLabel: label,
           result: {
             type: "condition",
-            conditions: conditions.map(
-              (c) => `${c.field} ${c.operator} "${c.value}"`
+            conditions: conditions.map((c) =>
+              isCaseConditionField(c.field)
+                ? `${CASE_CONDITION_LABELS[c.field]} ${c.operator} "${c.value}"`
+                : `${c.field} ${c.operator} "${c.value}"`
             ),
             result: passed,
             path: passed ? "true" : "false",
           },
         });
         nextHandle = passed ? "true" : "false";
+        break;
+      }
+
+      case "classifyCase": {
+        const typeName = (data.caseTypeName as string) || (data.caseTypeId as string) || "";
+        const stageName = (data.stageName as string) || "";
+        if (!data.caseTypeId) {
+          steps.push({
+            nodeId: node.id,
+            nodeType: "classifyCase",
+            nodeLabel: label,
+            result: { type: "error", message: "Falta elegir el tipo de gestión en el nodo Clasificar gestión." },
+          });
+          break;
+        }
+        const opens = caseState.hasOpenCase ? "" : "Como no hay gestión abierta, abriría una. ";
+        caseState.hasOpenCase = true;
+        caseState.caseTypeId = data.caseTypeId as string;
+        caseState.stageId = (data.stageId as string) || null;
+        steps.push({
+          nodeId: node.id,
+          nodeType: "classifyCase",
+          nodeLabel: label,
+          result: {
+            type: "action",
+            actionType: "classifyCase",
+            detail: `${opens}Clasificaría la gestión como "${typeName}"${stageName ? ` y la pasaría a la etapa "${stageName}"` : ""}`,
+          },
+        });
+        break;
+      }
+
+      case "changeStage": {
+        const stageName = (data.stageName as string) || (data.stageId as string) || "";
+        if (!data.stageId) {
+          steps.push({
+            nodeId: node.id,
+            nodeType: "changeStage",
+            nodeLabel: label,
+            result: { type: "error", message: "Falta elegir la etapa en el nodo Cambiar etapa." },
+          });
+          break;
+        }
+        const opens = caseState.hasOpenCase ? "" : "Como no hay gestión abierta, abriría una. ";
+        caseState.hasOpenCase = true;
+        caseState.stageId = data.stageId as string;
+        steps.push({
+          nodeId: node.id,
+          nodeType: "changeStage",
+          nodeLabel: label,
+          result: {
+            type: "action",
+            actionType: "changeStage",
+            detail: `${opens}Cambiaría la etapa de la gestión a "${stageName}"`,
+          },
+        });
+        break;
+      }
+
+      case "assignTeam": {
+        const reroute = data.mode === "reroute";
+        const teamName = (data.teamName as string) || (data.teamId as string) || "";
+        if (!reroute && !data.teamId) {
+          steps.push({
+            nodeId: node.id,
+            nodeType: "assignTeam",
+            nodeLabel: label,
+            result: { type: "error", message: "Falta elegir el equipo en el nodo Asignar a equipo." },
+          });
+          break;
+        }
+        const opens = caseState.hasOpenCase ? "" : "Como no hay gestión abierta, abriría una. ";
+        caseState.hasOpenCase = true;
+        if (!reroute) caseState.teamId = data.teamId as string;
+        caseState.hasAssignee = true;
+        steps.push({
+          nodeId: node.id,
+          nodeType: "assignTeam",
+          nodeLabel: label,
+          result: {
+            type: "action",
+            actionType: "assignTeam",
+            detail: reroute
+              ? `${opens}Volvería a calcular el equipo según el tipo de gestión y el contacto, y repartiría la gestión a un asesor del equipo`
+              : `${opens}Asignaría la gestión al equipo "${teamName}" y la repartiría a un asesor del equipo`,
+          },
+        });
+        break;
+      }
+
+      case "distributeCase": {
+        const replace = data.replaceAssignee === true;
+        const opens = caseState.hasOpenCase ? "" : "Como no hay gestión abierta, abriría una. ";
+        let detail: string;
+        if (caseState.hasAssignee && !replace) {
+          detail = "La gestión ya tiene responsable: no cambiaría nada";
+        } else {
+          detail = `${opens}Repartiría la gestión a un asesor del equipo actual${replace ? " (aunque ya tenga responsable)" : ""}`;
+          caseState.hasAssignee = true;
+        }
+        caseState.hasOpenCase = true;
+        steps.push({
+          nodeId: node.id,
+          nodeType: "distributeCase",
+          nodeLabel: label,
+          result: { type: "action", actionType: "distributeCase", detail },
+        });
         break;
       }
 
@@ -289,12 +483,12 @@ export function simulateFlow(
       case "removeTag": {
         const tagName = (data.tagName as string) || "desconocida";
         const actionType =
-          node.type === "addTag"
+          kind === "addTag"
             ? "addTag"
-            : (data.actionType as string) || node.type;
+            : (data.actionType as string) || kind;
         steps.push({
           nodeId: node.id,
-          nodeType: node.type,
+          nodeType: kind,
           nodeLabel: label,
           result: {
             type: "action",
@@ -434,7 +628,7 @@ export function simulateFlow(
       case "unsubscribe": {
         steps.push({
           nodeId: node.id,
-          nodeType: node.type,
+          nodeType: kind,
           nodeLabel: label,
           result: { type: node.type as "subscribe" | "unsubscribe" },
         });
@@ -493,8 +687,16 @@ export function simulateFlow(
     // Find next edge
     let nextEdge: Edge | undefined;
     if (nextHandle) {
+      // El lienzo dibuja las salidas de la condición como "yes"/"no" y las
+      // plantillas como "true"/"false": se aceptan ambas.
+      const accepted =
+        nextHandle === "true" || nextHandle === "yes"
+          ? ["true", "yes"]
+          : nextHandle === "false" || nextHandle === "no"
+            ? ["false", "no"]
+            : [nextHandle];
       nextEdge = edges.find(
-        (e) => e.source === node.id && e.sourceHandle === nextHandle
+        (e) => e.source === node.id && !!e.sourceHandle && accepted.includes(e.sourceHandle)
       );
     }
     if (!nextEdge) {

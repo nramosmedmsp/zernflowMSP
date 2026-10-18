@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Archive, ArchiveRestore, Trash2 } from "lucide-react";
 import { archiveCaseType, removeCaseType, restoreCaseType, updateCaseType } from "@/lib/actions/case-config";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { AutoTemplateSection } from "./auto-template-section";
 import { NAME_ERROR, cleanName } from "./config-rules";
 import {
   ColorPicker,
@@ -90,6 +91,8 @@ export function GeneralTab({ type, data, run, busy, onGone }: TabProps & { onGon
           label="Proactiva"
           hint="Las gestiones proactivas las crea una regla, una importación o una persona (por ejemplo, Recompra o Renovación) y aparecen en «Para hoy» el día que toca."
         />
+
+        {type.isProactive && <AutoTemplateSection type={type} run={run} busy={busy} />}
 
         <fieldset>
           <legend className="mb-1 text-xs font-medium text-muted-foreground">Se sugiere al abrir para estos tipos de contacto</legend>

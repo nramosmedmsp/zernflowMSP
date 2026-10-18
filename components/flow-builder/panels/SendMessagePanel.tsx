@@ -3,6 +3,7 @@
 import { useCallback, useRef } from "react";
 import { Plus, X, GripVertical, Image, Type, MousePointer, MessageCircle, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SendTemplateSection } from "./SendTemplateSection";
 
 interface QuickReply {
   title: string;
@@ -41,6 +42,8 @@ interface Message {
 
 interface SendMessagePanelData {
   messages?: Message[];
+  /** Plantilla de WhatsApp para cuando la ventana de 24 h está cerrada (fase 2). */
+  template?: { template_name: string; language: string; params: string[] };
   [key: string]: unknown;
 }
 
@@ -131,6 +134,14 @@ export function SendMessagePanel({ data: rawData, onChange, availableVariables }
           Agrega al menos un mensaje para enviar.
         </p>
       )}
+
+      <SendTemplateSection
+        template={data.template}
+        onChange={(template) => {
+          const { template: _previous, ...rest } = data;
+          onChange(template ? { ...rest, template } : rest);
+        }}
+      />
 
       {/* Platform hints */}
       <div className="rounded-lg border border-border bg-muted p-3">

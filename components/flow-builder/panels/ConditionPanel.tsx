@@ -3,6 +3,14 @@
 import { useCallback } from "react";
 import { Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  CASE_CONDITION_FIELDS,
+  CASE_CONDITION_LABELS,
+  isBooleanCaseField,
+  isCaseConditionField,
+  type CaseConditionField,
+} from "@/lib/flow-engine/case-conditions";
+import { useCaseCatalog, type CaseCatalog } from "./use-case-catalog";
 
 interface Condition {
   field: string;
@@ -30,6 +38,33 @@ const fieldOptions = [
   { value: "last_interaction", label: "Última interacción" },
 ];
 
+// Condiciones de gestión (fase 2): se comparan con el id elegido o con Sí/No.
+const caseFieldOptions = CASE_CONDITION_FIELDS.map((f) => ({ value: f, label: CASE_CONDITION_LABELS[f] }));
+const caseOperatorOptions = [
+  { value: "equals", label: "es igual a" },
+  { value: "not_equals", label: "no es igual a" },
+];
+
+/** Opciones del valor de una condición de gestión (ids para tipos, etapas y equipos; Sí/No para el resto). */
+function caseValueOptions(field: CaseConditionField, catalog: CaseCatalog): Array<{ value: string; label: string }> {
+  switch (field) {
+    case "contact_type":
+      return catalog.contactTypes.map((t) => ({ value: t.id, label: t.name }));
+    case "case_type":
+      return catalog.caseTypes.map((t) => ({ value: t.id, label: t.name }));
+    case "case_stage":
+      return catalog.caseTypes.flatMap((t) => t.stages.map((s) => ({ value: s.id, label: `${t.name} > ${s.name}` })));
+    case "case_team":
+      return catalog.teams.map((t) => ({ value: t.id, label: t.name }));
+    case "has_assignee":
+    case "within_hours":
+      return [
+        { value: "true", label: "Sí" },
+        { value: "false", label: "No" },
+      ];
+  }
+}
+
 const operatorOptions = [
   { value: "equals", label: "es igual a" },
   { value: "not_equals", label: "no es igual a" },
@@ -41,6 +76,7 @@ const operatorOptions = [
 
 export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps) {
   const data = rawData as ConditionPanelData;
+  const catalog = useCaseCatalog();
   const conditions = data.conditions || [];
   const logic = data.logic || "and";
 
@@ -131,9 +167,19 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
               <div className="space-y-2">
                 <select
                   value={condition.field}
-                  onChange={(e) =>
-                    updateCondition(index, { ...condition, field: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const field = e.target.value;
+                    // Al pasar a un campo de gestión el valor es un id o Sí/No, y el operador solo igual / no igual.
+                    if (isCaseConditionField(field)) {
+                      updateCondition(index, {
+                        field,
+                        operator: condition.operator === "not_equals" ? "not_equals" : "equals",
+                        value: isBooleanCaseField(field) ? "true" : "",
+                      });
+                    } else {
+                      updateCondition(index, { ...condition, field });
+                    }
+                  }}
                   className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
                 >
                   {fieldOptions.map((f) => (
@@ -141,6 +187,13 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
                       {f.label}
                     </option>
                   ))}
+                  <optgroup label="Gestión">
+                    {caseFieldOptions.map((f) => (
+                      <option key={f.value} value={f.value}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
 
                 {/* Operator */}
@@ -151,15 +204,42 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
                   }
                   className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
                 >
-                  {operatorOptions.map((o) => (
+                  {(isCaseConditionField(condition.field) ? caseOperatorOptions : operatorOptions).map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>
                   ))}
                 </select>
 
+                {isCaseConditionField(condition.field) && (
+                  <>
+                    <select
+                      value={condition.value}
+                      onChange={(e) => updateCondition(index, { ...condition, value: e.target.value })}
+                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    >
+                      {!isBooleanCaseField(condition.field) && <option value="">Selecciona...</option>}
+                      {caseValueOptions(condition.field, catalog).map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    {condition.field === "within_hours" && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Usa el horario del equipo de la gestión, o el de la empresa si no tiene, con sus feriados.
+                      </p>
+                    )}
+                    {condition.field === "has_assignee" && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Mira la gestión abierta del contacto (o la del evento que disparó el flujo).
+                      </p>
+                    )}
+                  </>
+                )}
+
                 {/* Value (hidden for "exists" operator) */}
-                {condition.operator !== "exists" && (
+                {!isCaseConditionField(condition.field) && condition.operator !== "exists" && (
                   <input
                     type="text"
                     value={condition.value}

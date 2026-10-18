@@ -12,6 +12,8 @@ interface Enrollment {
   currentStepIndex: number;
   status: "active" | "completed" | "cancelled";
   enrolledAt: string;
+  /** Último paso que no se pudo enviar (la inscripción siguió con el paso siguiente). */
+  lastFailure?: { stepIndex: number; reason: string; at: string } | null;
 }
 
 const statusConfig = {
@@ -91,6 +93,11 @@ export function EnrollmentList({
                       <span className="mx-1.5">-</span>
                       Inscrito el {formatDateTime(enrollment.enrolledAt)}
                     </p>
+                    {enrollment.lastFailure && (
+                      <p className="mt-0.5 text-xs text-red-600 dark:text-red-400">
+                        Paso {enrollment.lastFailure.stepIndex + 1} no enviado: {enrollment.lastFailure.reason}
+                      </p>
+                    )}
                   </div>
                   <span
                     className={cn(

@@ -13,6 +13,11 @@ import {
   parseAttentionInput,
   type AttentionSettings,
 } from "@/app/(dashboard)/dashboard/settings/attention/attention-rules";
+import {
+  mergeAutomationSettings,
+  parseAutomationInput,
+  type AutomationForm,
+} from "@/app/(dashboard)/dashboard/settings/attention/automation-rules";
 import type { Json } from "@/lib/types/database";
 import {
   getWorkspaceSecretsStatus,
@@ -131,6 +136,48 @@ export async function saveAttentionSettings(
     .single();
   if (updateError) {
     console.error("[saveAttentionSettings]", updateError.message);
+    return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
+  }
+
+  revalidatePath("/dashboard/settings/attention");
+  return { ok: true };
+}
+
+/**
+ * Atención automática (docs/FASE-2-TECNICO.md 3 y 8): respuesta fuera de
+ * horario y reasignación por espera. Lee los settings actuales y solo cambia
+ * `off_hours_reply` y `reassign_after_minutes`, para no pisar el resto.
+ */
+export async function saveAttentionAutomation(
+  workspaceId: string,
+  input: AutomationForm,
+): Promise<{ error: string } | { ok: true }> {
+  const { workspace, role, supabase } = await getWorkspace();
+  if (workspace.id !== workspaceId) return { error: WORKSPACE_CHANGED };
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
+
+  const parsed = parseAutomationInput(input);
+  if ("error" in parsed) return parsed;
+
+  const { data: current, error: readError } = await supabase
+    .from("workspaces")
+    .select("settings")
+    .eq("id", workspace.id)
+    .single();
+  if (readError || !current) {
+    console.error("[saveAttentionAutomation] leer", readError?.message);
+    return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
+  }
+
+  const settings = mergeAutomationSettings(current.settings, parsed.value) as Json;
+  const { error: updateError } = await supabase
+    .from("workspaces")
+    .update({ settings })
+    .eq("id", workspace.id)
+    .select("id")
+    .single();
+  if (updateError) {
+    console.error("[saveAttentionAutomation]", updateError.message);
     return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
   }
 

@@ -6,15 +6,26 @@ import { ArrowLeft, Check, Loader2, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { saveAttentionSettings } from "@/lib/actions/settings";
 import { ASSIGNMENT_MODE_OPTIONS } from "@/components/settings/teams/team-rules";
+import type { BusinessHours } from "@/lib/types/database";
 import { AGENT_VISIBILITY_OPTIONS, type AttentionSettings } from "./attention-rules";
+import type { AutomationForm } from "./automation-rules";
+import { AutomationSection } from "./automation-section";
 
 export function AttentionView({
   workspaceId,
+  workspaceName,
   initial,
+  automation,
+  businessHours,
+  holidayDates,
   activeTeams,
 }: {
   workspaceId: string;
+  workspaceName: string;
   initial: AttentionSettings;
+  automation: AutomationForm;
+  businessHours: BusinessHours | null;
+  holidayDates: string[];
   activeTeams: number;
 }) {
   const [visibility, setVisibility] = useState(initial.agentVisibility);
@@ -183,6 +194,15 @@ export function AttentionView({
             )}
             {error && <span className="text-sm text-red-600">{error}</span>}
           </div>
+
+          <AutomationSection
+            workspaceId={workspaceId}
+            workspaceName={workspaceName}
+            initial={automation}
+            businessHours={businessHours}
+            holidayDates={holidayDates}
+            activeTeams={activeTeams}
+          />
         </div>
       </div>
     </div>

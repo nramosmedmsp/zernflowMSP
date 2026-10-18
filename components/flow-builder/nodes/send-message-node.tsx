@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 
 export interface SendMessageNodeProps {
   label?: string;
+  template?: { template_name?: string; language?: string };
   messages?: Array<{
     text?: string;
     imageUrl?: string;
@@ -58,6 +59,11 @@ export function SendMessageNode({ data, selected }: NodeProps) {
           {messageCount > 1 && (
             <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
               {messageCount} mensajes
+            </span>
+          )}
+          {nodeData.template?.template_name && (
+            <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">
+              Plantilla: {nodeData.template.template_name}
             </span>
           )}
           {buttonCount > 0 && (

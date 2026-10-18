@@ -44,7 +44,13 @@ function isError(value: unknown): value is { error: string } {
 /** Cambia la etapa (solo etapas abiertas: para cerrar se usa closeCase). */
 export async function changeStage(
   db: Db,
-  params: { caseId: string; stageId: string; actorId: string | null },
+  params: {
+    caseId: string;
+    stageId: string;
+    actorId: string | null;
+    /** Flujos que ya corrieron en esta cadena de eventos (evita bucles; ver case-triggers.ts). */
+    flowChain?: readonly string[];
+  },
 ): Promise<EngineResult> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
@@ -72,7 +78,7 @@ export async function changeStage(
     from_value: row.stage_id,
     to_value: stage.id,
   });
-  emitStageChanged(db, row, row.stage_id, stage.id);
+  emitStageChanged(db, row, row.stage_id, stage.id, params.flowChain);
   await runEventRules(db, {
     caseRow: { ...row, stage_id: stage.id },
     ctx: {
@@ -94,7 +100,7 @@ export async function changeStage(
  */
 export async function classifyCase(
   db: Db,
-  params: { caseId: string; caseTypeId: string; actorId: string | null },
+  params: { caseId: string; caseTypeId: string; actorId: string | null; flowChain?: readonly string[] },
 ): Promise<EngineResult<{ rerouted: boolean }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
@@ -157,7 +163,7 @@ export async function classifyCase(
   ]);
 
   const fresh = { ...row, case_type_id: type.id, stage_id: stageId, category_id: null };
-  emitStageChanged(db, fresh, row.stage_id, stageId);
+  emitStageChanged(db, fresh, row.stage_id, stageId, params.flowChain);
   if (row.case_type_id === null && row.status === "open") {
     await runEventRules(db, {
       caseRow: fresh,

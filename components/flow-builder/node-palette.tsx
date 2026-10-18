@@ -15,6 +15,10 @@ import {
   Hourglass,
   Sparkles,
   ListOrdered,
+  Layers,
+  Flag,
+  Users,
+  UserPlus,
 } from "lucide-react";
 import type { DragEvent } from "react";
 
@@ -73,6 +77,39 @@ const categories: PaletteCategory[] = [
         label: "Espera inteligente",
         icon: Hourglass,
         actionType: "smartDelay",
+      },
+    ],
+  },
+  {
+    name: "Gestiones",
+    items: [
+      {
+        type: "action",
+        nodeType: "classifyCase",
+        label: "Clasificar gestión",
+        icon: Layers,
+        actionType: "classifyCase",
+      },
+      {
+        type: "action",
+        nodeType: "changeStage",
+        label: "Cambiar etapa",
+        icon: Flag,
+        actionType: "changeStage",
+      },
+      {
+        type: "action",
+        nodeType: "assignTeam",
+        label: "Asignar a equipo",
+        icon: Users,
+        actionType: "assignTeam",
+      },
+      {
+        type: "action",
+        nodeType: "distributeCase",
+        label: "Repartir a asesor",
+        icon: UserPlus,
+        actionType: "distributeCase",
       },
     ],
   },

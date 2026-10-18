@@ -6,10 +6,21 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { Database } from "@/lib/types/database";
 import { PLATFORMS, PLATFORM_LABELS } from "@/lib/platforms";
+import { listCaseMembers } from "@/lib/actions/cases";
+import { formatDateRange, parseDateRange } from "@/lib/broadcasts/segment";
+import { SEGMENT_NONE_VALUE } from "@/lib/broadcasts/tokens";
 
 type Tag = Database["public"]["Tables"]["tags"]["Row"];
 type CustomFieldDef =
   Database["public"]["Tables"]["custom_field_definitions"]["Row"];
+type NamedOption = { id: string; name: string };
+
+/** Listas para los filtros de tipo de contacto, equipo y responsable. */
+interface Lookups {
+  contactTypes: NamedOption[];
+  teams: NamedOption[];
+  members: NamedOption[];
+}
 
 // --- Filter types ---
 
@@ -20,7 +31,8 @@ export type FilterOperator =
   | "gt"
   | "lt"
   | "before"
-  | "after";
+  | "after"
+  | "between";
 
 export type FilterField =
   | "has_tag"
@@ -28,7 +40,11 @@ export type FilterField =
   | "custom_field"
   | "platform"
   | "is_subscribed"
-  | "last_interaction";
+  | "last_interaction"
+  | "contact_type"
+  | "team"
+  | "owner"
+  | "key_date";
 
 export interface FilterRule {
   id: string;
@@ -55,7 +71,17 @@ const fieldConfig: Record<
   {
     label: string;
     operators: { value: FilterOperator; label: string }[];
-    valueType: "tag" | "custom_field" | "platform" | "boolean" | "date" | "text";
+    valueType:
+      | "tag"
+      | "custom_field"
+      | "platform"
+      | "boolean"
+      | "date"
+      | "text"
+      | "contact_type"
+      | "team"
+      | "owner"
+      | "key_date";
   }
 > = {
   has_tag: {
@@ -99,6 +125,39 @@ const fieldConfig: Record<
       { value: "after", label: "después de" },
     ],
     valueType: "date",
+  },
+  contact_type: {
+    label: "Tipo de contacto",
+    operators: [
+      { value: "equals", label: "es" },
+      { value: "not_equals", label: "no es" },
+    ],
+    valueType: "contact_type",
+  },
+  team: {
+    label: "Equipo",
+    operators: [
+      { value: "equals", label: "es" },
+      { value: "not_equals", label: "no es" },
+    ],
+    valueType: "team",
+  },
+  owner: {
+    label: "Responsable",
+    operators: [
+      { value: "equals", label: "es" },
+      { value: "not_equals", label: "no es" },
+    ],
+    valueType: "owner",
+  },
+  key_date: {
+    label: "Fecha clave",
+    operators: [
+      { value: "between", label: "entre" },
+      { value: "after", label: "desde" },
+      { value: "before", label: "hasta" },
+    ],
+    valueType: "key_date",
   },
 };
 
@@ -180,6 +239,7 @@ function FilterRuleRow({
   rule,
   tags,
   customFields,
+  lookups,
   onChange,
   onRemove,
   canRemove,
@@ -187,6 +247,7 @@ function FilterRuleRow({
   rule: FilterRule;
   tags: Tag[];
   customFields: CustomFieldDef[];
+  lookups: Lookups;
   onChange: (rule: FilterRule) => void;
   onRemove: () => void;
   canRemove: boolean;
@@ -288,6 +349,81 @@ function FilterRuleRow({
             className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         );
+      case "contact_type":
+      case "team":
+      case "owner": {
+        const options =
+          config.valueType === "contact_type"
+            ? lookups.contactTypes
+            : config.valueType === "team"
+              ? lookups.teams
+              : lookups.members;
+        const placeholder =
+          config.valueType === "contact_type"
+            ? "Selecciona un tipo..."
+            : config.valueType === "team"
+              ? "Selecciona un equipo..."
+              : "Selecciona una persona...";
+        const noneLabel =
+          config.valueType === "contact_type"
+            ? "Sin tipo"
+            : config.valueType === "team"
+              ? "Sin equipo"
+              : "Sin responsable";
+        return (
+          <select
+            value={rule.value}
+            onChange={(e) => onChange({ ...rule, value: e.target.value })}
+            className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">{placeholder}</option>
+            <option value={SEGMENT_NONE_VALUE}>{noneLabel}</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        );
+      }
+      case "key_date": {
+        const inputClass =
+          "rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+        if (rule.operator !== "between") {
+          return (
+            <input
+              type="date"
+              value={rule.value}
+              onChange={(e) => onChange({ ...rule, value: e.target.value })}
+              className={inputClass}
+            />
+          );
+        }
+        const { from, to } = parseDateRange(rule.value);
+        return (
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              aria-label="Fecha clave desde"
+              value={from ?? ""}
+              onChange={(e) =>
+                onChange({ ...rule, value: formatDateRange(e.target.value || null, to) })
+              }
+              className={inputClass}
+            />
+            <span className="text-xs text-muted-foreground">y</span>
+            <input
+              type="date"
+              aria-label="Fecha clave hasta"
+              value={to ?? ""}
+              onChange={(e) =>
+                onChange({ ...rule, value: formatDateRange(from, e.target.value || null) })
+              }
+              className={inputClass}
+            />
+          </div>
+        );
+      }
       default:
         return (
           <input
@@ -323,7 +459,12 @@ function FilterRuleRow({
         <select
           value={rule.operator}
           onChange={(e) =>
-            onChange({ ...rule, operator: e.target.value as FilterOperator })
+            onChange({
+              ...rule,
+              operator: e.target.value as FilterOperator,
+              // Cambiar entre rango y fecha única deja el valor anterior sin sentido.
+              value: rule.field === "key_date" ? "" : rule.value,
+            })
           }
           className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         >
@@ -357,6 +498,7 @@ function FilterGroupCard({
   group,
   tags,
   customFields,
+  lookups,
   onChange,
   onRemove,
   canRemove,
@@ -364,6 +506,7 @@ function FilterGroupCard({
   group: FilterGroup;
   tags: Tag[];
   customFields: CustomFieldDef[];
+  lookups: Lookups;
   onChange: (group: FilterGroup) => void;
   onRemove: () => void;
   canRemove: boolean;
@@ -431,6 +574,7 @@ function FilterGroupCard({
               rule={rule}
               tags={tags}
               customFields={customFields}
+              lookups={lookups}
               onChange={(updated) => updateRule(rule.id, updated)}
               onRemove={() => removeRule(rule.id)}
               canRemove={group.rules.length > 1}
@@ -464,12 +608,13 @@ export function SegmentBuilder({
 }) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [customFields, setCustomFields] = useState<CustomFieldDef[]>([]);
+  const [lookups, setLookups] = useState<Lookups>({ contactTypes: [], teams: [], members: [] });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchData() {
       const supabase = createClient();
-      const [tagsRes, fieldsRes] = await Promise.all([
+      const [tagsRes, fieldsRes, typesRes, teamsRes, membersRes] = await Promise.all([
         supabase
           .from("tags")
           .select("*")
@@ -480,9 +625,29 @@ export function SegmentBuilder({
           .select("*")
           .eq("workspace_id", workspaceId)
           .order("name"),
+        supabase
+          .from("contact_types")
+          .select("id, name")
+          .eq("workspace_id", workspaceId)
+          .is("archived_at", null)
+          .order("position"),
+        supabase
+          .from("teams")
+          .select("id, name")
+          .eq("workspace_id", workspaceId)
+          .order("name"),
+        listCaseMembers(),
       ]);
       setTags(tagsRes.data ?? []);
       setCustomFields(fieldsRes.data ?? []);
+      setLookups({
+        contactTypes: typesRes.data ?? [],
+        teams: teamsRes.data ?? [],
+        members:
+          "members" in membersRes
+            ? membersRes.members.map((m) => ({ id: m.userId, name: m.name }))
+            : [],
+      });
       setLoading(false);
     }
     fetchData();
@@ -548,6 +713,7 @@ export function SegmentBuilder({
             group={group}
             tags={tags}
             customFields={customFields}
+            lookups={lookups}
             onChange={(updated) => updateGroup(group.id, updated)}
             onRemove={() => removeGroup(group.id)}
             canRemove={value.groups.length > 1}

@@ -39,7 +39,14 @@ interface CaseRef {
 }
 
 /** case_stage_changed si la etapa cambió. */
-export function emitStageChanged(db: Db, row: CaseRef, fromStageId: string | null, toStageId: string | null): void {
+export function emitStageChanged(
+  db: Db,
+  row: CaseRef,
+  fromStageId: string | null,
+  toStageId: string | null,
+  /** Flujos que provocaron el cambio (protección contra bucles). */
+  flowChain?: readonly string[],
+): void {
   if (fromStageId === toStageId) return;
   emitCaseEvent(db, {
     type: "case_stage_changed",
@@ -48,6 +55,7 @@ export function emitStageChanged(db: Db, row: CaseRef, fromStageId: string | nul
     contactId: row.contact_id,
     caseTypeId: row.case_type_id,
     stageId: toStageId,
+    ...(flowChain && flowChain.length > 0 ? { chain: [...flowChain] } : {}),
   });
 }
 

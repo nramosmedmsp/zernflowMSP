@@ -20,7 +20,7 @@ export interface InboundResult {
 }
 
 /** Tipo de gestión sugerido para el tipo de contacto (el primero por posición). */
-async function suggestedCaseTypeId(db: Db, workspaceId: string, contactTypeId: string | null) {
+export async function suggestedCaseTypeId(db: Db, workspaceId: string, contactTypeId: string | null) {
   if (!contactTypeId) return null;
   const { data } = await db
     .from("case_types")

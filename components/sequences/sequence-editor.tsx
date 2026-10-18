@@ -15,9 +15,11 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { updateSequence, deleteSequence } from "@/lib/actions/sequences";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import type { SequenceStep } from "@/lib/types/database";
+import { TemplateContentEditor } from "@/components/sequences/template-content-editor";
+import type { SequenceStep, TemplateMessageContent } from "@/lib/types/database";
 
 interface SequenceEditorProps {
+  workspaceId: string;
   sequence: {
     id: string;
     name: string;
@@ -44,7 +46,7 @@ const statusConfig = {
   },
 };
 
-export function SequenceEditor({ sequence }: SequenceEditorProps) {
+export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
   const router = useRouter();
   const [name, setName] = useState(sequence.name);
   const [description, setDescription] = useState(sequence.description || "");
@@ -56,12 +58,21 @@ export function SequenceEditor({ sequence }: SequenceEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const hasMessageStep = steps.some((s) => s.type === "message");
+  const hasMessageStep = steps.some((s) => s.type === "message" || s.type === "template");
 
   const handleSave = useCallback(async () => {
-    setSaving(true);
     setError(null);
     setSuccess(null);
+
+    // Los pasos de plantilla necesitan una plantilla elegida.
+    const missing = steps.findIndex(
+      (s) => s.type === "template" && !(s.template?.template_name && s.template?.language)
+    );
+    if (missing >= 0) {
+      setError("El paso " + (missing + 1) + " es de plantilla: elige una plantilla aprobada.");
+      return;
+    }
+    setSaving(true);
 
     const result = await updateSequence(sequence.id, {
       name: name.trim(),
@@ -91,11 +102,13 @@ export function SequenceEditor({ sequence }: SequenceEditorProps) {
   }, [sequence.id, router]);
 
   const addStep = useCallback(
-    (index: number, type: "message" | "delay") => {
+    (index: number, type: "message" | "template" | "delay") => {
       const newStep: SequenceStep =
         type === "message"
           ? { type: "message", content: "" }
-          : { type: "delay", delayMinutes: 60 };
+          : type === "template"
+            ? { type: "template", template: null }
+            : { type: "delay", delayMinutes: 60 };
 
       const updated = [...steps];
       updated.splice(index, 0, newStep);
@@ -257,6 +270,7 @@ export function SequenceEditor({ sequence }: SequenceEditorProps) {
             {steps.map((step, index) => (
               <div key={index}>
                 <StepCard
+                  workspaceId={workspaceId}
                   step={step}
                   index={index}
                   onChange={(data) => updateStep(index, data)}
@@ -272,18 +286,54 @@ export function SequenceEditor({ sequence }: SequenceEditorProps) {
   );
 }
 
+type MessageMode = "message" | "template" | "fallback";
+
+function modeOf(step: SequenceStep): MessageMode {
+  if (step.type === "template") return "template";
+  return step.template ? "fallback" : "message";
+}
+
+const MODE_LABELS: Record<MessageMode, string> = {
+  message: "Mensaje",
+  template: "Plantilla",
+  fallback: "Mensaje con plantilla alternativa",
+};
+
+const MODE_HINTS: Record<MessageMode, string> = {
+  message:
+    "Solo sale si el contacto escribió hace menos de 24 horas. Si no, el paso falla y la secuencia sigue con el siguiente.",
+  template: "Plantilla aprobada de WhatsApp: llega siempre, aunque hayan pasado más de 24 horas.",
+  fallback:
+    "Si el contacto escribió hace menos de 24 horas se envía el mensaje; si no, se envía la plantilla.",
+};
+
 function StepCard({
+  workspaceId,
   step,
   index,
   onChange,
   onRemove,
 }: {
+  workspaceId: string;
   step: SequenceStep;
   index: number;
   onChange: (data: Partial<SequenceStep>) => void;
   onRemove: () => void;
 }) {
-  const isMessage = step.type === "message";
+  const isMessage = step.type === "message" || step.type === "template";
+  const mode = modeOf(step);
+
+  function changeMode(next: MessageMode) {
+    if (next === mode) return;
+    if (next === "template") {
+      // Plantilla pura: se conserva la plantilla; el texto ya no aplica.
+      onChange({ type: "template", content: undefined, template: step.template ?? null });
+    } else if (next === "message") {
+      onChange({ type: "message", content: step.content ?? "", template: null });
+    } else {
+      onChange({ type: "message", content: step.content ?? "", template: step.template ?? null });
+    }
+  }
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -292,7 +342,7 @@ function StepCard({
           <div
             className={cn(
               "flex h-7 w-7 items-center justify-center rounded-md text-white",
-              isMessage ? "bg-blue-500" : "bg-purple-500"
+              !isMessage ? "bg-purple-500" : step.type === "template" ? "bg-emerald-500" : "bg-blue-500"
             )}
           >
             {isMessage ? (
@@ -303,7 +353,8 @@ function StepCard({
           </div>
           <div>
             <p className="text-sm font-medium">
-              Paso {index + 1}: {isMessage ? "Enviar mensaje" : "Esperar"}
+              Paso {index + 1}:{" "}
+              {!isMessage ? "Esperar" : step.type === "template" ? "Enviar plantilla" : "Enviar mensaje"}
             </p>
           </div>
         </div>
@@ -317,13 +368,46 @@ function StepCard({
 
       <div className="mt-3">
         {isMessage ? (
-          <textarea
-            value={step.content || ""}
-            onChange={(e) => onChange({ content: e.target.value })}
-            placeholder="Escribe tu mensaje..."
-            rows={3}
-            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
+          <div className="space-y-3">
+            <div>
+              <select
+                value={mode}
+                onChange={(e) => changeMode(e.target.value as MessageMode)}
+                aria-label="Tipo de envío"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                {(Object.keys(MODE_LABELS) as MessageMode[]).map((m) => (
+                  <option key={m} value={m}>
+                    {MODE_LABELS[m]}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">{MODE_HINTS[mode]}</p>
+            </div>
+
+            {mode !== "template" && (
+              <textarea
+                value={step.content || ""}
+                onChange={(e) => onChange({ content: e.target.value })}
+                placeholder="Escribe tu mensaje..."
+                rows={3}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            )}
+
+            {mode !== "message" && (
+              <div>
+                {mode === "fallback" && (
+                  <p className="mb-2 text-xs font-medium">Plantilla si pasaron más de 24 horas</p>
+                )}
+                <TemplateContentEditor
+                  workspaceId={workspaceId}
+                  value={step.template ?? null}
+                  onChange={(template: TemplateMessageContent | null) => onChange({ template })}
+                />
+              </div>
+            )}
+          </div>
         ) : (
           <DelayPicker
             minutes={step.delayMinutes || 60}
@@ -403,7 +487,7 @@ function DelayPicker({
 function AddStepButton({
   onAdd,
 }: {
-  onAdd: (type: "message" | "delay") => void;
+  onAdd: (type: "message" | "template" | "delay") => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -420,6 +504,16 @@ function AddStepButton({
           >
             <MessageSquare className="h-3 w-3" />
             Mensaje
+          </button>
+          <button
+            onClick={() => {
+              onAdd("template");
+              setOpen(false);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors"
+          >
+            <MessageSquare className="h-3 w-3" />
+            Plantilla
           </button>
           <button
             onClick={() => {

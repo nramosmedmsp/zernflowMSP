@@ -126,7 +126,7 @@ async function whatsappTarget(db: Db, workspaceId: string, contactId: string, co
   return { channelId: list[0].id, lateAccountId: list[0].late_account_id, phone: phoneDigits(contactPhone) };
 }
 
-async function customFieldsOf(db: Db, workspaceId: string, contactId: string): Promise<Record<string, string>> {
+export async function customFieldsOf(db: Db, workspaceId: string, contactId: string): Promise<Record<string, string>> {
   const [{ data: defs }, { data: values }] = await Promise.all([
     db.from("custom_field_definitions").select("id, slug").eq("workspace_id", workspaceId),
     db.from("contact_custom_fields").select("field_id, value").eq("contact_id", contactId),

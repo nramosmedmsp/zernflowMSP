@@ -256,7 +256,8 @@ export type ActivityType =
   | "auto_template_sent"
   | "auto_template_failed"
   | "auto_template_skipped"
-  | "contacts_imported";
+  | "contacts_imported"
+  | "sequence_step_failed";
 
 export interface Database {
   public: {

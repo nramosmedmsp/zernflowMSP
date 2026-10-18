@@ -1,7 +1,15 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { createZernioClient } from "@/lib/zernio-client";
-import { getLateApiKey } from "@/lib/workspace-secrets";
-import type { SequenceStep } from "@/lib/types/database";
+import {
+  loadDeliveryContext,
+  sendTemplateToContact,
+  sendTextToContact,
+  windowStateOf,
+  type DeliveryResult,
+} from "@/lib/broadcasts/delivery";
+import { decideStepSend } from "@/lib/broadcasts/sequence-step";
+import type { Json, SequenceStep } from "@/lib/types/database";
+
+type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
 /**
  * Process all sequence enrollments that are due.
@@ -43,7 +51,7 @@ export async function processSequenceSteps() {
 }
 
 async function processEnrollment(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  supabase: ServiceClient,
   enrollment: {
     id: string;
     sequence_id: string;
@@ -85,14 +93,20 @@ async function processEnrollment(
 
   const currentStep = steps[stepIndex];
 
-  if (currentStep.type === "message") {
-    await sendSequenceMessage(
-      supabase,
-      sequence.workspace_id,
-      enrollment.contact_id,
-      enrollment.channel_id,
-      currentStep.content || ""
-    );
+  if (currentStep.type === "message" || currentStep.type === "template") {
+    // Comportamiento ante un paso fallido (igual que antes de la fase 2): el
+    // fallo se registra (activity 'sequence_step_failed' con el motivo) y la
+    // inscripción SIGUE con el paso siguiente; un paso fallido no detiene ni
+    // cancela la secuencia.
+    await runMessageStep(supabase, {
+      enrollmentId: enrollment.id,
+      sequenceId: sequence.id,
+      workspaceId: sequence.workspace_id,
+      contactId: enrollment.contact_id,
+      channelId: enrollment.channel_id,
+      stepIndex,
+      step: currentStep,
+    });
   }
   // Delay steps don't need action; they just waited until next_step_at
 
@@ -135,75 +149,84 @@ async function processEnrollment(
     .eq("id", enrollment.id);
 }
 
-async function sendSequenceMessage(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  workspaceId: string,
-  contactId: string,
-  channelId: string,
-  text: string
-) {
-  // Get workspace API key (workspace_secrets, service client)
-  const lateApiKey = await getLateApiKey(workspaceId, supabase);
-  if (!lateApiKey) {
-    console.error("No Zernio API key for workspace:", workspaceId);
-    return;
-  }
+interface MessageStepParams {
+  enrollmentId: string;
+  sequenceId: string;
+  workspaceId: string;
+  contactId: string;
+  channelId: string;
+  stepIndex: number;
+  step: SequenceStep;
+}
 
-  const zernio = createZernioClient(lateApiKey);
-
-  // Get channel's late_account_id
-  const { data: channel } = await supabase
-    .from("channels")
-    .select("late_account_id")
-    .eq("id", channelId)
-    .single();
-
-  if (!channel?.late_account_id) {
-    console.error("No late_account_id for channel:", channelId);
-    return;
-  }
-
-  // Get conversation for this contact + channel
-  const { data: conversation } = await supabase
-    .from("conversations")
-    .select("id, late_conversation_id")
-    .eq("contact_id", contactId)
-    .eq("channel_id", channelId)
-    .single();
-
-  if (!conversation?.late_conversation_id) {
-    console.error(
-      "No conversation found for contact:",
-      contactId,
-      "channel:",
-      channelId
-    );
-    return;
-  }
-
+/**
+ * Envía un paso de mensaje o de plantilla (docs/FASE-2-TECNICO.md 5). Decide
+ * texto o plantilla según la ventana de 24 h (decideStepSend), revisa el
+ * resultado del envío (el SDK no lanza) y, si falla, registra el motivo. Tras
+ * un envío exitoso sella la salida del bot en la gestión abierta del contacto
+ * (lo hace sendTextToContact / sendTemplateToContact). Nunca lanza.
+ */
+async function runMessageStep(supabase: ServiceClient, p: MessageStepParams): Promise<void> {
   try {
-    const response = await zernio.messages.sendInboxMessage({
-      path: { conversationId: conversation.late_conversation_id },
-      body: { accountId: channel.late_account_id, message: text },
+    const ctx = await loadDeliveryContext(supabase, {
+      workspaceId: p.workspaceId,
+      contactId: p.contactId,
+      channelId: p.channelId,
     });
+    const decision = decideStepSend(p.step, windowStateOf(ctx));
 
-    // Store outbound message
-    await supabase.from("messages").insert({
-      conversation_id: conversation.id,
-      direction: "outbound",
-      text,
-      status: "sent",
-      platform_message_id: response.data?.data?.messageId || null,
-    });
+    if (decision.action === "fail") {
+      await recordStepFailure(supabase, p, ctx.conversation?.id ?? null, decision.reason);
+      return;
+    }
+
+    let result: DeliveryResult;
+    let storedText: string;
+    if (decision.action === "text") {
+      storedText = decision.text;
+      // La ventana ya se comprobó en la decisión.
+      result = await sendTextToContact(supabase, ctx, decision.text);
+    } else {
+      storedText = `Plantilla: ${decision.template.template_name}`;
+      result = await sendTemplateToContact(supabase, ctx, decision.template);
+    }
+
+    // Mensaje saliente en la conversación (si ya existe una).
+    if (ctx.conversation) {
+      await supabase.from("messages").insert({
+        conversation_id: ctx.conversation.id,
+        direction: "outbound",
+        text: storedText,
+        status: result.ok ? "sent" : "failed",
+        platform_message_id: result.ok ? result.messageId : null,
+      });
+    }
+    if (!result.ok) await recordStepFailure(supabase, p, ctx.conversation?.id ?? null, result.error);
   } catch (err) {
-    console.error("Failed to send sequence message:", err);
-
-    // Store failed message
-    await supabase.from("messages").insert({
-      conversation_id: conversation.id,
-      direction: "outbound",
-      text,
-      status: "failed",
-    });
+    console.error("Failed to send sequence step:", err);
+    await recordStepFailure(supabase, p, null, err instanceof Error ? err.message : String(err));
   }
+}
+
+async function recordStepFailure(
+  supabase: ServiceClient,
+  p: MessageStepParams,
+  conversationId: string | null,
+  reason: string
+): Promise<void> {
+  console.error(`Sequence ${p.sequenceId} step ${p.stepIndex + 1} failed for contact ${p.contactId}: ${reason}`);
+  const { error } = await supabase.from("activity").insert({
+    workspace_id: p.workspaceId,
+    type: "sequence_step_failed",
+    contact_id: p.contactId,
+    conversation_id: conversationId,
+    meta: {
+      sequence_id: p.sequenceId,
+      enrollment_id: p.enrollmentId,
+      step_index: p.stepIndex,
+      step_type: p.step.type,
+      reason,
+    } as unknown as Json,
+  });
+  if (error) console.error("Failed to record sequence step failure:", error.message);
 }

@@ -11,14 +11,19 @@ import {
   Shuffle,
   Hourglass,
   Cog,
+  Layers,
+  Flag,
+  Users,
+  UserPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeType } from "@/lib/types/database";
+import type { CaseActionType } from "@/lib/flow-engine/types";
 import { unitLabel } from "../labels";
 
 export interface ActionNodeProps {
   label?: string;
-  actionType?: NodeType;
+  actionType?: NodeType | CaseActionType;
   tagName?: string;
   action?: "add" | "remove";
   fieldSlug?: string;
@@ -30,6 +35,14 @@ export interface ActionNodeProps {
   paths?: Array<{ name: string; weight: number }>;
   timeout?: number;
   timeoutUnit?: string;
+  caseTypeName?: string;
+  stageName?: string;
+  stageId?: string;
+  mode?: "fixed" | "reroute";
+  teamId?: string;
+  teamName?: string;
+  replaceAssignee?: boolean;
+  caseTypeId?: string;
 }
 
 const actionConfig: Record<
@@ -96,6 +109,26 @@ const actionConfig: Record<
     label: "Espera inteligente",
     color: "bg-gray-500",
   },
+  classifyCase: {
+    icon: Layers,
+    label: "Clasificar gestión",
+    color: "bg-indigo-500",
+  },
+  changeStage: {
+    icon: Flag,
+    label: "Cambiar etapa",
+    color: "bg-indigo-500",
+  },
+  assignTeam: {
+    icon: Users,
+    label: "Asignar a equipo",
+    color: "bg-indigo-500",
+  },
+  distributeCase: {
+    icon: UserPlus,
+    label: "Repartir a asesor",
+    color: "bg-indigo-500",
+  },
 };
 
 function getSummary(nodeData: ActionNodeProps): string | null {
@@ -128,6 +161,18 @@ function getSummary(nodeData: ActionNodeProps): string | null {
         return nodeData.paths.map((p) => `${p.name}: ${p.weight}%`).join(", ");
       }
       return null;
+    case "classifyCase":
+      if (!nodeData.caseTypeId) return null;
+      return nodeData.stageName
+        ? `${nodeData.caseTypeName || "Tipo"} > ${nodeData.stageName}`
+        : nodeData.caseTypeName || "Tipo elegido";
+    case "changeStage":
+      return nodeData.stageId ? `Etapa: ${nodeData.stageName || "elegida"}` : null;
+    case "assignTeam":
+      if (nodeData.mode === "reroute") return "Volver a rutear y repartir";
+      return nodeData.teamId ? `Equipo: ${nodeData.teamName || "elegido"}` : null;
+    case "distributeCase":
+      return nodeData.replaceAssignee ? "Repartir aunque tenga responsable" : "Repartir si no tiene responsable";
     case "smartDelay":
       return nodeData.timeout
         ? `Esperar hasta ${nodeData.timeout} ${unitLabel(nodeData.timeoutUnit || "minutes")}`

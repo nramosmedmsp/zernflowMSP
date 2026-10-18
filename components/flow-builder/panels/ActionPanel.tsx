@@ -4,10 +4,12 @@ import { useCallback } from "react";
 import { Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeType } from "@/lib/types/database";
+import type { CaseActionType } from "@/lib/flow-engine/types";
 import { EnrollSequencePanel } from "./EnrollSequencePanel";
+import { AssignTeamPanel, ChangeStagePanel, ClassifyCasePanel, DistributeCasePanel } from "./CaseActionPanels";
 
 interface ActionPanelData {
-  actionType?: NodeType;
+  actionType?: NodeType | CaseActionType;
   tagName?: string;
   action?: "add" | "remove";
   fieldSlug?: string;
@@ -63,6 +65,14 @@ export function ActionPanel({ data: rawData, onChange }: ActionPanelProps) {
       return <SmartDelayConfig data={data} onChange={onChange} />;
     case "enrollSequence":
       return <EnrollSequencePanel data={rawData} onChange={onChange} />;
+    case "classifyCase":
+      return <ClassifyCasePanel data={rawData} onChange={onChange} />;
+    case "changeStage":
+      return <ChangeStagePanel data={rawData} onChange={onChange} />;
+    case "assignTeam":
+      return <AssignTeamPanel data={rawData} onChange={onChange} />;
+    case "distributeCase":
+      return <DistributeCasePanel data={rawData} onChange={onChange} />;
     default:
       return (
         <p className="text-sm text-muted-foreground">

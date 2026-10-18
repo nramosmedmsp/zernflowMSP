@@ -22,6 +22,13 @@ import { adaptMessage } from "./platform-adapter";
 import { createZernioClient } from "@/lib/zernio-client";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { stampBotOutbound } from "@/lib/cases/inbound";
+import { messagePreview } from "@/lib/message-preview";
+import { CASE_ACTION_TYPES, type CaseActionType } from "./types";
+import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
+import { evaluateCaseCondition, isCaseConditionField } from "./case-conditions";
+import { decideSendMode, isWindowOpen, parseNodeTemplate, SKIP_REASON_LABELS } from "./send-mode";
+import { executeCaseAction, loadCaseSnapshot } from "./nodes/case-actions";
+import { sendFlowTemplate } from "./nodes/send-template";
 
 export async function executeFlow(
   supabase: SupabaseClient<Database>,
@@ -39,15 +46,18 @@ export async function executeFlow(
     context.variables.message ??= context.incomingMessage.text;
   }
 
-  // Check for active session waiting for input
-  const { data: activeSession } = await supabase
-    .from("flow_sessions")
-    .select("*")
-    .eq("contact_id", context.contactId)
-    .eq("channel_id", context.channelId)
-    .eq("status", "active")
-    .eq("waiting_for_input", true)
-    .single();
+  // Check for active session waiting for input. Los flujos disparados por un
+  // evento de gestión (startFresh) no reanudan la sesión que espera al cliente.
+  const { data: activeSession } = context.startFresh
+    ? { data: null }
+    : await supabase
+        .from("flow_sessions")
+        .select("*")
+        .eq("contact_id", context.contactId)
+        .eq("channel_id", context.channelId)
+        .eq("status", "active")
+        .eq("waiting_for_input", true)
+        .single();
 
   if (activeSession) {
     return resumeSession(supabase, activeSession, context);
@@ -288,8 +298,13 @@ async function traverseNodes(
   const result = await executeNode(supabase, node, context, sessionId);
 
   // Persist variables written by output-producing nodes so they survive
-  // pauses (resumeSession reloads them from the session row).
-  if (node.type === "aiResponse" || node.type === "httpRequest") {
+  // pauses (resumeSession reloads them from the session row). Los nodos de
+  // gestión guardan case_id (la gestión que abrieron).
+  if (
+    nodeKind(node) === "aiResponse" ||
+    nodeKind(node) === "httpRequest" ||
+    nodeKind(node) !== (node.type as string)
+  ) {
     await supabase
       .from("flow_sessions")
       .update({ variables: (context.variables ?? {}) as Json })
@@ -305,8 +320,11 @@ async function traverseNodes(
   if (result && typeof result === "string" && result.startsWith("handle:")) {
     // Condition/split nodes specify which handle to follow
     const handle = result.replace("handle:", "");
+    // El lienzo dibuja las salidas de la condición como "yes"/"no" y las
+    // plantillas como "true"/"false": se aceptan ambas.
+    const accepted = conditionHandleAliases(handle);
     nextEdge = edges.find(
-      (e) => e.source === node.id && e.sourceHandle === handle
+      (e) => e.source === node.id && !!e.sourceHandle && accepted.includes(e.sourceHandle)
     );
   } else {
     nextEdge = edges.find((e) => e.source === node.id);
@@ -327,13 +345,66 @@ async function traverseNodes(
   await traverseNodes(supabase, sessionId, nextNode, nodes, edges, context, depth + 1);
 }
 
+/**
+ * Tipos que el lienzo guarda como nodo `action` con `data.actionType`
+ * (el `switch` de `executeNode` los atiende por su nombre).
+ */
+const CANVAS_ACTION_KINDS: readonly string[] = [
+  "addTag",
+  "removeTag",
+  "setCustomField",
+  "httpRequest",
+  "goToFlow",
+  "humanTakeover",
+  "subscribe",
+  "unsubscribe",
+  "abSplit",
+  "smartDelay",
+  "enrollSequence",
+];
+
+/**
+ * Tipo efectivo del nodo. El lienzo guarda todas las acciones (etiquetas, campo
+ * personalizado, HTTP, suscripción, secuencia, A/B, gestiones...) como nodo
+ * `action` con `data.actionType`; aquí se resuelve a ese tipo. Los nodos con
+ * `type` propio (formato antiguo) se ejecutan igual que antes.
+ */
+function nodeKind(node: FlowNode): string {
+  const type = node.type as string;
+  if (type === "action") {
+    const actionType = (node.data as { actionType?: string } | undefined)?.actionType;
+    if (
+      actionType &&
+      ((CASE_ACTION_TYPES as readonly string[]).includes(actionType) || CANVAS_ACTION_KINDS.includes(actionType))
+    ) {
+      return actionType;
+    }
+  }
+  return type;
+}
+
+function conditionHandleAliases(handle: string): string[] {
+  if (handle === "true" || handle === "yes") return ["true", "yes"];
+  if (handle === "false" || handle === "no") return ["false", "no"];
+  return [handle];
+}
+
 async function executeNode(
   supabase: SupabaseClient<Database>,
   node: FlowNode,
   context: FlowExecutionContext,
   sessionId: string
 ): Promise<string | void> {
-  switch (node.type) {
+  const kind = nodeKind(node);
+  if ((CASE_ACTION_TYPES as readonly string[]).includes(kind)) {
+    return executeCaseAction(
+      supabase,
+      kind as CaseActionType,
+      node.data as unknown as Record<string, unknown>,
+      context
+    );
+  }
+  switch (kind) {
     case "sendMessage":
       return executeSendMessage(supabase, node.data as SendMessageNodeData, context);
     case "condition":
@@ -342,7 +413,7 @@ async function executeNode(
       return executeDelay(supabase, node.data as DelayNodeData, sessionId, node.id, context);
     case "addTag":
     case "removeTag":
-      return executeTag(supabase, node.data as TagNodeData, context);
+      return executeTag(supabase, node.data as Partial<TagNodeData>, kind === "addTag", context);
     case "setCustomField":
       return executeSetField(supabase, node.data as SetFieldNodeData, context);
     case "httpRequest":
@@ -353,7 +424,7 @@ async function executeNode(
       return executeHumanTakeover(supabase, context, sessionId);
     case "subscribe":
     case "unsubscribe":
-      return executeSubscription(supabase, node.type, context);
+      return executeSubscription(supabase, kind, context);
     case "commentReply":
       return executeCommentReply(supabase, node.data as CommentReplyNodeData, context);
     case "privateReply":
@@ -408,7 +479,7 @@ async function sendFirstMessageAsPrivateReply(
       status: "sent",
     });
 
-    await stampBotOutbound(supabase, { contactId: context.contactId });
+    await stampFlowOutbound(supabase, context);
 
     await supabase.from("analytics_events").insert({
       workspace_id: context.workspaceId,
@@ -433,6 +504,99 @@ async function sendFirstMessageAsPrivateReply(
       "Comment flow Send Message node had multiple messages; only the first was sent (one private reply per comment)."
     );
   }
+}
+
+/**
+ * Sella la salida del bot en la gestión. Los flujos de "cliente sin responder"
+ * no la sellan: su propio mensaje reiniciaría la cuenta del cron y el flujo se
+ * repetiría cada N minutos.
+ */
+async function stampFlowOutbound(
+  supabase: SupabaseClient<Database>,
+  context: FlowExecutionContext
+) {
+  if (context.variables?.[CASE_EVENT_VARIABLE] === "client_no_reply") return;
+  await stampBotOutbound(supabase, { contactId: context.contactId });
+}
+
+/** ¿El mensaje lleva algo que enviar como mensaje libre (texto, media, botones o carrusel)? */
+function messageHasContent(msg: SendMessageNodeData["messages"][number]): boolean {
+  const raw = msg as { text?: string; mediaUrl?: string; imageUrl?: string };
+  return !!(raw.text?.trim() || raw.mediaUrl || raw.imageUrl || msg.carousel?.elements?.length);
+}
+
+/**
+ * Ventana de 24 h de WhatsApp. Si el flujo nació de un mensaje del cliente está
+ * abierta; si no (evento, espera que se reanuda), se mira el último mensaje
+ * entrante de sus gestiones.
+ */
+async function isFlowWindowOpen(
+  supabase: SupabaseClient<Database>,
+  context: FlowExecutionContext
+): Promise<boolean> {
+  const incoming = context.incomingMessage;
+  if (incoming.text || incoming.postbackPayload || incoming.quickReplyPayload || incoming.callbackData) {
+    return true;
+  }
+  const { data } = await supabase
+    .from("cases")
+    .select("last_inbound_at")
+    .eq("contact_id", context.contactId)
+    .not("last_inbound_at", "is", null)
+    .order("last_inbound_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return isWindowOpen(data?.last_inbound_at);
+}
+
+/** Envía la plantilla del nodo y deja el mensaje y la analítica registrados. */
+async function sendTemplateFromNode(
+  supabase: SupabaseClient<Database>,
+  context: FlowExecutionContext,
+  template: NonNullable<ReturnType<typeof parseNodeTemplate>>,
+  lateAccountId: string
+) {
+  const text = `Plantilla: ${template.template_name}`;
+  const result = await sendFlowTemplate(supabase, context, template, lateAccountId);
+  if (!result.ok) {
+    console.error("Failed to send template:", result.error);
+    await supabase.from("messages").insert({
+      conversation_id: context.conversationId,
+      direction: "outbound",
+      text,
+      sent_by_flow_id: context.flowId,
+      status: "failed",
+    });
+    await supabase.from("analytics_events").insert({
+      workspace_id: context.workspaceId,
+      flow_id: context.flowId,
+      contact_id: context.contactId,
+      event_type: "message_failed",
+      metadata: { error: result.error, template: template.template_name },
+    });
+    return;
+  }
+
+  await supabase.from("messages").insert({
+    conversation_id: context.conversationId,
+    direction: "outbound",
+    text,
+    sent_by_flow_id: context.flowId,
+    platform_message_id: result.messageId,
+    status: "sent",
+  });
+  await supabase
+    .from("conversations")
+    .update({ last_message_at: new Date().toISOString(), last_message_preview: messagePreview(text) })
+    .eq("id", context.conversationId);
+  await stampFlowOutbound(supabase, context);
+  await supabase.from("analytics_events").insert({
+    workspace_id: context.workspaceId,
+    flow_id: context.flowId,
+    contact_id: context.contactId,
+    event_type: "message_sent",
+    metadata: { template: template.template_name },
+  });
 }
 
 async function executeSendMessage(
@@ -484,6 +648,33 @@ async function executeSendMessage(
       return;
     }
     lateConversationId = conversation.late_conversation_id;
+  }
+
+  // WhatsApp (fase 2): texto o plantilla según la ventana de 24 h.
+  if (context.platform === "whatsapp") {
+    const template = parseNodeTemplate(data.template);
+    const decision = decideSendMode({
+      platform: "whatsapp",
+      windowOpen: await isFlowWindowOpen(supabase, context),
+      hasText: data.messages.some(messageHasContent),
+      hasTemplate: !!template,
+    });
+    if (decision.mode === "skip") {
+      const reason = SKIP_REASON_LABELS[decision.reason];
+      console.warn(`[flows] mensaje no enviado (flujo ${context.flowId}): ${reason}`);
+      await supabase.from("analytics_events").insert({
+        workspace_id: context.workspaceId,
+        flow_id: context.flowId,
+        contact_id: context.contactId,
+        event_type: "message_skipped",
+        metadata: { reason: decision.reason, detail: reason },
+      });
+      return;
+    }
+    if (decision.mode === "template" && template) {
+      await sendTemplateFromNode(supabase, context, template, lateAccountId);
+      return;
+    }
   }
 
   for (const msg of data.messages) {
@@ -545,7 +736,7 @@ async function executeSendMessage(
       });
 
       // Gestiones: el bot solo sella la salida (no cuenta como respuesta humana).
-      await stampBotOutbound(supabase, { contactId: context.contactId });
+      await stampFlowOutbound(supabase, context);
 
       await supabase.from("analytics_events").insert({
         workspace_id: context.workspaceId,
@@ -592,8 +783,21 @@ async function executeCondition(
 
   if (!contact) return "handle:false";
 
+  // Condiciones de gestión (fase 2): tipo de contacto, tipo de gestión, etapa,
+  // equipo, responsable y horario. Se cargan una sola vez si alguna las usa.
+  const caseSnapshot = data.conditions.some((c) => isCaseConditionField(c.field))
+    ? await loadCaseSnapshot(supabase, context, contact.contact_type_id ?? null)
+    : null;
+
   const results = data.conditions.map((condition) => {
     let fieldValue: string | undefined;
+
+    if (caseSnapshot && isCaseConditionField(condition.field)) {
+      return evaluateCaseCondition(
+        { field: condition.field, operator: condition.operator, value: condition.value },
+        caseSnapshot
+      );
+    }
 
     // Check built-in fields
     if (condition.field === "platform") {
@@ -703,9 +907,13 @@ async function executeDelay(
 
 async function executeTag(
   supabase: SupabaseClient<Database>,
-  data: TagNodeData,
+  data: Partial<TagNodeData>,
+  isAdd: boolean,
   context: FlowExecutionContext
 ) {
+  // El lienzo no guarda data.action: agregar o quitar lo define el tipo del nodo
+  // (addTag / removeTag).
+  if (!data.tagName) return;
   // Find or create tag
   const { data: tag } = await supabase
     .from("tags")
@@ -718,7 +926,7 @@ async function executeTag(
 
   if (!tag) return;
 
-  if (data.action === "add") {
+  if (isAdd) {
     await supabase
       .from("contact_tags")
       .upsert({ contact_id: context.contactId, tag_id: tag.id })
@@ -961,7 +1169,7 @@ async function executePrivateReply(
       status: "sent",
     });
 
-    await stampBotOutbound(supabase, { contactId: context.contactId });
+    await stampFlowOutbound(supabase, context);
   } catch (error) {
     console.error("Failed to send private reply:", error);
     await supabase.from("messages").insert({

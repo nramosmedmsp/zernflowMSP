@@ -43,6 +43,9 @@ const TRIGGER_TYPE_LABELS: Record<string, string> = {
   welcome: "Bienvenida",
   default: "Por defecto",
   comment_keyword: "Palabra clave en comentario",
+  case_stage_changed: "Cambio de etapa",
+  case_closed: "Gestión cerrada",
+  client_no_reply: "Cliente sin responder",
 };
 
 /** Tipo de disparador interno ("quick_reply") -> etiqueta en español. */
@@ -70,6 +73,10 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   abSplit: "Prueba A/B",
   smartDelay: "Espera inteligente",
   enrollSequence: "Inscribir en secuencia",
+  classifyCase: "Clasificar gestión",
+  changeStage: "Cambiar etapa",
+  assignTeam: "Asignar a equipo",
+  distributeCase: "Repartir a asesor",
   end: "Fin",
   unknown: "Desconocido",
 };

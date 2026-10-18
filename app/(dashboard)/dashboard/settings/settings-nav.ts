@@ -12,6 +12,7 @@ export type SettingsLinkKey =
   | "cases"
   | "contact-types"
   | "teams"
+  | "hours"
   | "attention"
   | "replies"
   | "whatsapp-templates"
@@ -69,9 +70,16 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     adminOnly: true,
   },
   {
+    key: "hours",
+    title: "Horarios",
+    description: "Horario de atención de la empresa y de cada equipo, y feriados.",
+    href: "/dashboard/settings/hours",
+    adminOnly: true,
+  },
+  {
     key: "attention",
     title: "Atención",
-    description: "Qué ve cada asesor y cómo se reparten las gestiones sin equipos.",
+    description: "Qué ve cada asesor, reparto, respuesta fuera de horario y reasignación por espera.",
     href: "/dashboard/settings/attention",
     adminOnly: true,
   },

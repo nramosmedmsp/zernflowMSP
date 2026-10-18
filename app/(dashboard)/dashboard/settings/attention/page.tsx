@@ -3,7 +3,9 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { getWorkspace } from "@/lib/workspace";
 import { isAdminRole } from "@/lib/permissions";
+import { parseBusinessHours } from "@/lib/business-hours";
 import { attentionFromSettings } from "./attention-rules";
+import { automationFromSettings } from "./automation-rules";
 import { AttentionView } from "./attention-view";
 
 export const metadata: Metadata = { title: "Atención" };
@@ -40,10 +42,28 @@ export default async function AttentionSettingsPage() {
     .eq("workspace_id", workspace.id)
     .is("archived_at", null);
 
+  // Feriados de la empresa: la vista previa de la respuesta fuera de horario calcula la próxima apertura real.
+  const { data: holidays } = await supabase
+    .from("holidays")
+    .select("date")
+    .eq("workspace_id", workspace.id)
+    .is("team_id", null)
+    .order("date", { ascending: true })
+    .limit(500);
+
+  const settings =
+    workspace.settings && typeof workspace.settings === "object" && !Array.isArray(workspace.settings)
+      ? (workspace.settings as Record<string, unknown>)
+      : {};
+
   return (
     <AttentionView
       workspaceId={workspace.id}
+      workspaceName={workspace.name}
       initial={attentionFromSettings(workspace.settings)}
+      automation={automationFromSettings(workspace.settings)}
+      businessHours={parseBusinessHours(settings.business_hours)}
+      holidayDates={(holidays ?? []).map((h) => h.date.slice(0, 10))}
       activeTeams={count ?? 0}
     />
   );

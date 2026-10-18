@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TriggerType } from "@/lib/types/database";
+import { openStages, useCaseCatalog } from "./use-case-catalog";
 
 interface Keyword {
   value: string;
@@ -15,6 +16,13 @@ interface TriggerPanelData {
   keywords?: Keyword[];
   payload?: string;
   alsoMatchInDms?: boolean;
+  /** Disparadores de gestión (fase 2). Los nombres son solo para mostrar. */
+  caseTypeId?: string;
+  caseTypeName?: string;
+  stageId?: string;
+  stageName?: string;
+  outcome?: "won" | "lost" | "resolved";
+  minutes?: number;
   [key: string]: unknown;
 }
 
@@ -30,7 +38,136 @@ const triggerTypes: Array<{ value: TriggerType; label: string; description: stri
   { value: "welcome", label: "Bienvenida", description: "Se activa cuando el cliente inicia una conversación" },
   { value: "default", label: "Por defecto", description: "Se activa cuando ningún otro disparador coincide" },
   { value: "comment_keyword", label: "Palabra clave en comentario", description: "Se activa con palabras clave en los comentarios de una publicación" },
+  { value: "case_stage_changed", label: "Cambio de etapa", description: "Se activa cuando una gestión cambia de etapa" },
+  { value: "case_closed", label: "Gestión cerrada", description: "Se activa cuando una gestión se gana, se pierde o se resuelve" },
+  { value: "client_no_reply", label: "Cliente sin responder", description: "Se activa cuando el cliente no responde al último mensaje que le enviaste" },
 ];
+
+const outcomeOptions: Array<{ value: "won" | "lost" | "resolved"; label: string }> = [
+  { value: "won", label: "Ganada" },
+  { value: "lost", label: "Perdida" },
+  { value: "resolved", label: "Resuelta" },
+];
+
+const caseSelectClass =
+  "w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500";
+
+/** Opciones de los disparadores de gestión: tipo, etapa, resultado y minutos. */
+function CaseTriggerOptions({
+  data,
+  triggerType,
+  onChange,
+}: {
+  data: TriggerPanelData;
+  triggerType: string;
+  onChange: (data: Record<string, unknown>) => void;
+}) {
+  const catalog = useCaseCatalog();
+  const caseTypeId = data.caseTypeId || "";
+  const type = catalog.caseTypes.find((t) => t.id === caseTypeId);
+  const stages = openStages(type);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="mb-2 block text-xs font-semibold text-foreground">Tipo de gestión (opcional)</label>
+        <select
+          value={caseTypeId}
+          onChange={(e) => {
+            const next = catalog.caseTypes.find((t) => t.id === e.target.value);
+            onChange({
+              ...data,
+              caseTypeId: e.target.value,
+              caseTypeName: next?.name ?? "",
+              stageId: "",
+              stageName: "",
+            });
+          }}
+          className={caseSelectClass}
+        >
+          <option value="">Cualquier tipo</option>
+          {catalog.caseTypes.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {triggerType === "case_stage_changed" && (
+        <div>
+          <label className="mb-2 block text-xs font-semibold text-foreground">Etapa nueva (opcional)</label>
+          <select
+            value={data.stageId || ""}
+            disabled={!caseTypeId}
+            onChange={(e) => {
+              const stage = stages.find((s) => s.id === e.target.value);
+              onChange({ ...data, stageId: e.target.value, stageName: stage?.name ?? "" });
+            }}
+            className={caseSelectClass + " disabled:opacity-50"}
+          >
+            <option value="">Cualquier etapa</option>
+            {stages.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {caseTypeId
+              ? "Se activa solo cuando la gestión llega a esta etapa."
+              : "Elige primero un tipo de gestión para filtrar por etapa."}
+          </p>
+        </div>
+      )}
+
+      {triggerType === "case_closed" && (
+        <div>
+          <label className="mb-2 block text-xs font-semibold text-foreground">Resultado (opcional)</label>
+          <select
+            value={data.outcome || ""}
+            onChange={(e) => onChange({ ...data, outcome: e.target.value || undefined })}
+            className={caseSelectClass}
+          >
+            <option value="">Cualquier resultado</option>
+            {outcomeOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {triggerType === "client_no_reply" && (
+        <div>
+          <label className="mb-2 block text-xs font-semibold text-foreground">Minutos sin respuesta</label>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={data.minutes ?? ""}
+            onChange={(e) => {
+              const n = Math.floor(Number(e.target.value));
+              onChange({ ...data, minutes: Number.isFinite(n) && n > 0 ? n : undefined });
+            }}
+            placeholder="60"
+            className={caseSelectClass}
+          />
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Se activa cuando pasan estos minutos desde tu último mensaje sin que el cliente responda. Si lo dejas
+            vacío, son 60 minutos. Al enviar un mensaje desde este flujo, la cuenta no se reinicia.
+          </p>
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Estos flujos corren en la conversación más reciente del contacto, y no corren si pausaste la automatización
+        en ella. Un flujo no se vuelve a activar a sí mismo por los cambios que él mismo hace en la gestión.
+      </p>
+    </div>
+  );
+}
 
 const matchTypes: Array<{ value: "exact" | "contains" | "startsWith"; label: string }> = [
   { value: "exact", label: "Coincidencia exacta" },
@@ -78,6 +215,8 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
 
   const showKeywords = triggerType === "keyword" || triggerType === "comment_keyword";
   const showPayload = triggerType === "postback" || triggerType === "quick_reply";
+  const showCaseOptions =
+    triggerType === "case_stage_changed" || triggerType === "case_closed" || triggerType === "client_no_reply";
 
   return (
     <div className="space-y-5">
@@ -232,6 +371,8 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
           )}
         </div>
       )}
+
+      {showCaseOptions && <CaseTriggerOptions data={data} triggerType={triggerType} onChange={onChange} />}
 
       {/* Payload Section */}
       {showPayload && (

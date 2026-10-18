@@ -43,6 +43,8 @@ interface TestPanelProps {
 const stepIcons: Record<string, typeof MessageSquare> = {
   trigger: Zap,
   message: MessageSquare,
+  template: MessageSquare,
+  message_skipped: AlertCircle,
   condition: GitBranch,
   delay: Clock,
   action: Tag,
@@ -64,6 +66,8 @@ const stepIcons: Record<string, typeof MessageSquare> = {
 const stepColors: Record<string, string> = {
   trigger: "text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-950",
   message: "text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-950",
+  template: "text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-950",
+  message_skipped: "text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-950",
   condition:
     "text-purple-600 bg-purple-50 dark:text-purple-400 dark:bg-purple-950",
   delay: "text-orange-600 bg-orange-50 dark:text-orange-400 dark:bg-orange-950",
@@ -98,6 +102,9 @@ export function TestPanel({
 }: TestPanelProps) {
   const [message, setMessage] = useState("ayuda");
   const [tags, setTags] = useState("");
+  const [windowClosed, setWindowClosed] = useState(false);
+  const [offHours, setOffHours] = useState(false);
+  const [hasAssignee, setHasAssignee] = useState(false);
   const [result, setResult] = useState<SimulationResult | null>(null);
 
   function runTest() {
@@ -112,6 +119,8 @@ export function TestPanel({
         tags: mockTags,
         isSubscribed: true,
       },
+      mockCase: { withinHours: !offHours, hasAssignee },
+      windowOpen: windowClosed ? false : undefined,
     });
 
     setResult(sim);
@@ -167,6 +176,32 @@ export function TestPanel({
             )}
           </div>
         );
+
+      case "template":
+        return (
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">
+              Ventana de 24 h cerrada: enviaría la plantilla{" "}
+              <span className="font-mono">
+                {r.templateName} ({r.language})
+              </span>
+            </p>
+            {r.params.length > 0 && (
+              <div className="rounded-lg bg-primary/10 px-3 py-2 text-xs">
+                {r.params.map((p, i) => (
+                  <p key={i}>
+                    {"{{"}
+                    {i + 1}
+                    {"}}"} = {p}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+
+      case "message_skipped":
+        return <p className="text-xs text-amber-600">No se enviaría. {r.reason}</p>;
 
       case "condition":
         return (
@@ -358,6 +393,35 @@ export function TestPanel({
             placeholder="vip, mayorista"
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
+        </div>
+        <div className="space-y-1.5">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={windowClosed}
+              onChange={(e) => setWindowClosed(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-input"
+            />
+            Ventana de 24 h de WhatsApp cerrada
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={offHours}
+              onChange={(e) => setOffHours(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-input"
+            />
+            Fuera de horario
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={hasAssignee}
+              onChange={(e) => setHasAssignee(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-input"
+            />
+            La gestión ya tiene responsable
+          </label>
         </div>
         <button
           onClick={runTest}

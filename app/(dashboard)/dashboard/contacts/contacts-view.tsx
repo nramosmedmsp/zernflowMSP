@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Search,
   Users,
@@ -11,13 +12,24 @@ import {
   XCircle,
   Filter,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatNumber, formatRelative } from "@/lib/format";
+import { NO_VALUE_FILTER } from "@/components/contacts/contact-filters";
 import {
-  NO_VALUE_FILTER,
-  matchesContactFilters,
-} from "@/components/contacts/contact-filters";
+  CONTACTS_PAGE_SIZE,
+  CONTACT_SORTS,
+  CONTACT_SORT_LABELS,
+  contactListHref,
+  contactPageCount,
+  defaultDirFor,
+  hasContactFilters,
+  type ContactListParams,
+  type ContactSort,
+} from "@/components/contacts/contact-list-query";
 import {
   SegmentBuilder,
   createEmptyFilter,
@@ -26,7 +38,7 @@ import {
 import type { Database } from "@/lib/types/database";
 
 type Tag = Database["public"]["Tables"]["tags"]["Row"];
-type ContactWithTags = Database["public"]["Tables"]["contacts"]["Row"] & {
+export type ContactWithTags = Database["public"]["Tables"]["contacts"]["Row"] & {
   contact_tags: {
     tag_id: string;
     tags: Tag | null;
@@ -48,26 +60,32 @@ interface ContactTypeOption {
 const FILTER_SELECT_CLASS =
   "rounded-lg border border-input bg-background px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
+const SEARCH_DEBOUNCE_MS = 350;
+
 export function ContactsView({
   contacts,
+  total,
+  params,
   tags,
   contactTypes,
   teams,
   members,
   workspaceId,
+  canImport,
 }: {
   contacts: ContactWithTags[];
+  /** Total que cumple los filtros (todas las páginas). */
+  total: number;
+  params: ContactListParams;
   tags: Tag[];
   contactTypes: ContactTypeOption[];
   teams: { id: string; name: string }[];
   members: { userId: string; name: string }[];
   workspaceId: string;
+  canImport: boolean;
 }) {
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
-  const [ownerFilter, setOwnerFilter] = useState("");
-  const [teamFilter, setTeamFilter] = useState("");
-  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const router = useRouter();
+  const [search, setSearch] = useState(params.search);
   const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
   const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>(
     createEmptyFilter()
@@ -77,16 +95,32 @@ export function ContactsView({
   const memberName = new Map(members.map((m) => [m.userId, m.name]));
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
 
-  const filtered = contacts.filter((contact) =>
-    matchesContactFilters(contact, {
-      search,
-      tagId: selectedTagId,
-      contactTypeId: typeFilter,
-      ownerId: ownerFilter,
-      teamId: teamFilter,
-    })
+  // Los filtros viven en la URL: cada cambio vuelve a pedir la lista al servidor.
+  function go(patch: Partial<ContactListParams>) {
+    router.replace(contactListHref({ ...params, page: 1, ...patch }));
+  }
+
+  // Búsqueda con espera, para no consultar en cada tecla.
+  useEffect(() => {
+    if (search.trim() === params.search) return;
+    const timer = setTimeout(() => {
+      router.replace(contactListHref({ ...params, search: search.trim(), page: 1 }));
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search, params, router]);
+
+
+  const pages = contactPageCount(total);
+  const firstShown = total === 0 ? 0 : (params.page - 1) * CONTACTS_PAGE_SIZE + 1;
+  const lastShown = (params.page - 1) * CONTACTS_PAGE_SIZE + contacts.length;
+  const filtersActive = hasContactFilters(params);
+  const hasExtraFilters = !!(
+    params.typeId ||
+    params.ownerId ||
+    params.teamId ||
+    params.keyFrom ||
+    params.keyTo
   );
-  const hasExtraFilters = !!(typeFilter || ownerFilter || teamFilter);
 
   return (
     <div className="flex h-full flex-col">
@@ -96,9 +130,20 @@ export function ContactsView({
           <div>
             <h1 className="text-2xl font-bold">Contactos</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {formatNumber(contacts.length)} {contacts.length === 1 ? "contacto" : "contactos"} en tu espacio de trabajo
+              {filtersActive
+                ? `${formatNumber(total)} ${total === 1 ? "contacto coincide" : "contactos coinciden"} con los filtros`
+                : `${formatNumber(total)} ${total === 1 ? "contacto" : "contactos"} en tu espacio de trabajo`}
             </p>
           </div>
+          {canImport && (
+            <Link
+              href="/dashboard/contacts/import"
+              className="inline-flex items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Upload className="h-4 w-4" />
+              Importar
+            </Link>
+          )}
         </div>
 
         {/* Search and filters */}
@@ -115,8 +160,8 @@ export function ContactsView({
           </div>
           <select
             aria-label="Tipo de contacto"
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
+            value={params.typeId}
+            onChange={(e) => go({ typeId: e.target.value })}
             className={FILTER_SELECT_CLASS}
           >
             <option value="">Todos los tipos</option>
@@ -130,8 +175,8 @@ export function ContactsView({
           </select>
           <select
             aria-label="Responsable"
-            value={ownerFilter}
-            onChange={(e) => setOwnerFilter(e.target.value)}
+            value={params.ownerId}
+            onChange={(e) => go({ ownerId: e.target.value })}
             className={FILTER_SELECT_CLASS}
           >
             <option value="">Todos los responsables</option>
@@ -145,8 +190,8 @@ export function ContactsView({
           {teams.length > 0 && (
             <select
               aria-label="Equipo"
-              value={teamFilter}
-              onChange={(e) => setTeamFilter(e.target.value)}
+              value={params.teamId}
+              onChange={(e) => go({ teamId: e.target.value })}
               className={FILTER_SELECT_CLASS}
             >
               <option value="">Todos los equipos</option>
@@ -158,13 +203,41 @@ export function ContactsView({
               ))}
             </select>
           )}
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            Fecha clave
+            <input
+              type="date"
+              aria-label="Fecha clave desde"
+              value={params.keyFrom}
+              onChange={(e) => go({ keyFrom: e.target.value })}
+              className={FILTER_SELECT_CLASS}
+            />
+            <span>a</span>
+            <input
+              type="date"
+              aria-label="Fecha clave hasta"
+              value={params.keyTo}
+              onChange={(e) => go({ keyTo: e.target.value })}
+              className={FILTER_SELECT_CLASS}
+            />
+          </label>
+          <select
+            aria-label="Ordenar por"
+            value={params.sort}
+            onChange={(e) => go({ sort: e.target.value as ContactSort, dir: defaultDirFor(e.target.value as ContactSort) })}
+            className={FILTER_SELECT_CLASS}
+          >
+            {CONTACT_SORTS.map((s) => (
+              <option key={s} value={s}>
+                Orden: {CONTACT_SORT_LABELS[s]}
+              </option>
+            ))}
+          </select>
           {hasExtraFilters && (
             <button
-              onClick={() => {
-                setTypeFilter("");
-                setOwnerFilter("");
-                setTeamFilter("");
-              }}
+              onClick={() =>
+                go({ typeId: "", ownerId: "", teamId: "", keyFrom: "", keyTo: "" })
+              }
               className="text-sm text-muted-foreground underline hover:text-foreground"
             >
               Limpiar filtros
@@ -205,10 +278,10 @@ export function ContactsView({
         {tags.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             <button
-              onClick={() => setSelectedTagId(null)}
+              onClick={() => go({ tagId: "" })}
               className={cn(
                 "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-                selectedTagId === null
+                params.tagId === ""
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground hover:bg-accent"
               )}
@@ -218,17 +291,15 @@ export function ContactsView({
             {tags.map((tag) => (
               <button
                 key={tag.id}
-                onClick={() =>
-                  setSelectedTagId(tag.id === selectedTagId ? null : tag.id)
-                }
+                onClick={() => go({ tagId: tag.id === params.tagId ? "" : tag.id })}
                 className={cn(
                   "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-                  selectedTagId === tag.id
+                  params.tagId === tag.id
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-muted-foreground hover:bg-accent"
                 )}
                 style={
-                  tag.color && selectedTagId !== tag.id
+                  tag.color && params.tagId !== tag.id
                     ? {
                         backgroundColor: `${tag.color}20`,
                         color: tag.color,
@@ -245,7 +316,7 @@ export function ContactsView({
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
-        {filtered.length === 0 ? (
+        {contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Users className="h-10 w-10 text-muted-foreground/40" />
             <p className="mt-3 text-sm font-medium text-muted-foreground">
@@ -286,7 +357,7 @@ export function ContactsView({
               </tr>
             </thead>
             <tbody>
-              {filtered.map((contact) => {
+              {contacts.map((contact) => {
                 const contactTags = contact.contact_tags
                   .map((ct) => ct.tags)
                   .filter(Boolean) as Tag[];
@@ -421,6 +492,46 @@ export function ContactsView({
           </table>
         )}
       </div>
+
+      {/* Paginación */}
+      {total > 0 && (
+        <div className="flex items-center justify-between border-t border-border px-8 py-3 text-sm text-muted-foreground">
+          <span>
+            Mostrando {formatNumber(firstShown)}–{formatNumber(lastShown)} de {formatNumber(total)}
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs">
+              Página {formatNumber(params.page)} de {formatNumber(pages)}
+            </span>
+            {params.page > 1 ? (
+              <Link
+                href={contactListHref({ ...params, page: params.page - 1 })}
+                aria-label="Página anterior"
+                className="rounded-lg border border-input p-1.5 hover:bg-accent hover:text-foreground"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Link>
+            ) : (
+              <span className="rounded-lg border border-input p-1.5 opacity-40">
+                <ChevronLeft className="h-4 w-4" />
+              </span>
+            )}
+            {params.page < pages ? (
+              <Link
+                href={contactListHref({ ...params, page: params.page + 1 })}
+                aria-label="Página siguiente"
+                className="rounded-lg border border-input p-1.5 hover:bg-accent hover:text-foreground"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            ) : (
+              <span className="rounded-lg border border-input p-1.5 opacity-40">
+                <ChevronRight className="h-4 w-4" />
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

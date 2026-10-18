@@ -9,6 +9,10 @@ export interface TriggerNodeProps {
   triggerType?: string;
   keywords?: Array<{ value: string; matchType: string }>;
   alsoMatchInDms?: boolean;
+  caseTypeName?: string;
+  stageName?: string;
+  outcome?: string;
+  minutes?: number;
 }
 
 const triggerLabels: Record<string, string> = {
@@ -18,7 +22,22 @@ const triggerLabels: Record<string, string> = {
   welcome: "Bienvenida",
   default: "Por defecto",
   comment_keyword: "Palabra clave en comentario",
+  case_stage_changed: "Cambio de etapa",
+  case_closed: "Gestión cerrada",
+  client_no_reply: "Cliente sin responder",
 };
+
+const outcomeLabels: Record<string, string> = { won: "Ganada", lost: "Perdida", resolved: "Resuelta" };
+
+/** Resumen de los filtros de un disparador de gestión. */
+function caseTriggerSummary(data: TriggerNodeProps, triggerType: string): string | null {
+  const parts: string[] = [];
+  if (data.caseTypeName) parts.push(data.caseTypeName);
+  if (triggerType === "case_stage_changed" && data.stageName) parts.push(data.stageName);
+  if (triggerType === "case_closed" && data.outcome) parts.push(outcomeLabels[data.outcome] ?? data.outcome);
+  if (triggerType === "client_no_reply") parts.push(`${data.minutes ?? 60} min`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
 
 export function TriggerNode({ data, selected }: NodeProps) {
   const nodeData = data as TriggerNodeProps;
@@ -57,7 +76,7 @@ export function TriggerNode({ data, selected }: NodeProps) {
         )}
         {!nodeData.keywords?.length && triggerType !== "keyword" && (
           <p className="mt-1 text-xs text-muted-foreground">
-            {triggerLabels[triggerType] || triggerType}
+            {caseTriggerSummary(nodeData, triggerType) ?? (triggerLabels[triggerType] || triggerType)}
           </p>
         )}
       </div>

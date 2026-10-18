@@ -568,32 +568,11 @@ async function processJob(
 
       if (recipient.status !== "pending") return;
 
-      // Get workspace API key
-      const broadcast = recipient.broadcasts as { workspace_id: string } | null;
+      // Fase 2: la difusión puede ser texto o plantilla de WhatsApp; el envío
+      // (clave, canal, conversación, ventana de 24 h, teléfono y variables)
+      // vive en lib/broadcasts/deliver.ts y devuelve el motivo si falla.
+      const broadcast = recipient.broadcasts as { workspace_id: string; message_content: unknown } | null;
       if (!broadcast) return;
-
-      const { getLateApiKey } = await import("@/lib/workspace-secrets");
-      const lateApiKey = await getLateApiKey(broadcast.workspace_id, supabase);
-      if (!lateApiKey) return;
-
-      const { createZernioClient } = await import("@/lib/zernio-client");
-      const zernio = createZernioClient(lateApiKey);
-
-      const channel = recipient.channels as { late_account_id: string } | null;
-      if (!channel) return;
-
-      // Get the conversation for this contact+channel (need late_conversation_id)
-      const { data: conv } = await supabase
-        .from("conversations")
-        .select("late_conversation_id")
-        .eq("contact_id", recipient.contact_id)
-        .eq("channel_id", recipient.channel_id)
-        .single();
-
-      if (!conv?.late_conversation_id) return;
-
-      const broadcastData = recipient.broadcasts as { message_content: { text?: string } } | null;
-      const messageContent = broadcastData?.message_content;
 
       // CAS to 'sending' before the API call so a crash between the send and
       // the 'sent' write cannot cause a re-send when the job is reclaimed
@@ -613,12 +592,22 @@ async function processJob(
       }
       if (!sendClaim || sendClaim.length === 0) return;
 
+      // El SDK de Zernio no lanza excepciones: deliverBroadcast revisa
+      // res.error y devuelve { ok: false, error } con el motivo.
+      let delivery: { ok: true } | { ok: false; error: string };
       try {
-        await zernio.messages.sendInboxMessage({
-          path: { conversationId: conv.late_conversation_id },
-          body: { accountId: channel.late_account_id, message: messageContent?.text || "" },
+        const { deliverBroadcast } = await import("@/lib/broadcasts/deliver");
+        delivery = await deliverBroadcast(supabase, {
+          workspaceId: broadcast.workspace_id,
+          contactId: recipient.contact_id,
+          channelId: recipient.channel_id,
+          messageContent: broadcast.message_content,
         });
+      } catch (err) {
+        delivery = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
 
+      if (delivery.ok) {
         await supabase
           .from("broadcast_recipients")
           .update({ status: "sent", sent_at: new Date().toISOString() })
@@ -628,13 +617,10 @@ async function processJob(
         await supabase.rpc("increment_broadcast_sent", {
           b_id: payload.broadcastId,
         });
-      } catch (err) {
+      } else {
         await supabase
           .from("broadcast_recipients")
-          .update({
-            status: "failed",
-            error_message: err instanceof Error ? err.message : String(err),
-          })
+          .update({ status: "failed", error_message: delivery.error })
           .eq("id", payload.recipientId);
 
         await supabase.rpc("increment_broadcast_failed", {

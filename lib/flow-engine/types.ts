@@ -1,8 +1,23 @@
 import type { NodeType, Platform } from "@/lib/types/database";
+import type { NodeTemplate } from "./send-mode";
+
+/**
+ * Nodos de gestión (fase 2). El constructor los guarda como nodo `action` con
+ * `data.actionType` igual a uno de estos valores; el motor acepta también el
+ * tipo directo.
+ */
+export type CaseActionType = "classifyCase" | "changeStage" | "assignTeam" | "distributeCase";
+
+export const CASE_ACTION_TYPES: readonly CaseActionType[] = [
+  "classifyCase",
+  "changeStage",
+  "assignTeam",
+  "distributeCase",
+];
 
 export interface FlowNode {
   id: string;
-  type: NodeType;
+  type: NodeType | CaseActionType;
   data: NodeData;
   position: { x: number; y: number };
 }
@@ -31,7 +46,11 @@ export type NodeData =
   | CommentReplyNodeData
   | PrivateReplyNodeData
   | AiResponseNodeData
-  | EnrollSequenceNodeData;
+  | EnrollSequenceNodeData
+  | ClassifyCaseNodeData
+  | ChangeStageNodeData
+  | AssignTeamNodeData
+  | DistributeCaseNodeData;
 
 export interface TriggerNodeData {
   triggerType: string;
@@ -43,6 +62,12 @@ export interface TriggerNodeData {
 }
 
 export interface SendMessageNodeData {
+  /**
+   * Plantilla de WhatsApp para cuando la ventana de 24 h está cerrada. Las
+   * variables admiten {nombre}, {fecha_clave}, {empresa}, {sede} y
+   * {campo:slug}.
+   */
+  template?: NodeTemplate;
   messages: Array<{
     text?: string;
     imageUrl?: string;
@@ -154,6 +179,38 @@ export interface EnrollSequenceNodeData {
   sequenceId: string;
 }
 
+/** Clasificar gestión: tipo (y etapa opcional) de la gestión abierta del contacto. */
+export interface ClassifyCaseNodeData {
+  caseTypeId?: string;
+  /** Solo para mostrar en el lienzo y el simulador. */
+  caseTypeName?: string;
+  stageId?: string;
+  stageName?: string;
+}
+
+/** Cambiar etapa: etapa abierta del tipo actual de la gestión. */
+export interface ChangeStageNodeData {
+  stageId?: string;
+  stageName?: string;
+}
+
+/**
+ * Asignar a equipo: `fixed` mueve la gestión al equipo elegido; `reroute`
+ * vuelve a calcular el equipo según el tipo de gestión y el contacto. En ambos
+ * casos, sin responsable, se aplica el reparto del equipo.
+ */
+export interface AssignTeamNodeData {
+  mode?: "fixed" | "reroute";
+  teamId?: string;
+  teamName?: string;
+}
+
+/** Repartir a asesor: aplica el reparto del equipo actual. */
+export interface DistributeCaseNodeData {
+  /** Repartir de nuevo aunque ya tenga responsable. */
+  replaceAssignee?: boolean;
+}
+
 export interface FlowExecutionContext {
   triggerId: string;
   flowId: string;
@@ -174,4 +231,9 @@ export interface FlowExecutionContext {
   };
   variables?: Record<string, string>;
   platform?: Platform;
+  /**
+   * Flujo disparado por un evento (no por un mensaje): empieza una sesión
+   * nueva en vez de reanudar la que espera una respuesta del cliente.
+   */
+  startFresh?: boolean;
 }
