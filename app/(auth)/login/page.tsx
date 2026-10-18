@@ -11,6 +11,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [magicSent, setMagicSent] = useState(false);
+  const [magicLoading, setMagicLoading] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -32,6 +34,32 @@ export default function LoginPage() {
 
     router.push("/dashboard");
     router.refresh();
+  }
+
+  // Passwordless sign-in. Must start in the browser: the client uses the PKCE
+  // flow, so the code verifier cookie is set here and /auth/callback can
+  // exchange the code from the emailed link. Links sent from the Supabase
+  // dashboard use the implicit flow and are rejected by this client.
+  async function handleMagicLink() {
+    setError(null);
+    if (!email) {
+      setError("Enter your email first.");
+      return;
+    }
+    setMagicLoading(true);
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    setMagicLoading(false);
+    if (error) {
+      setError(error.message);
+      return;
+    }
+    setMagicSent(true);
   }
 
   async function handleGitHubLogin() {
@@ -102,6 +130,21 @@ export default function LoginPage() {
           >
             {loading ? "Signing in..." : "Sign in"}
           </button>
+
+          {magicSent ? (
+            <p className="text-center text-sm text-muted-foreground">
+              Check your email: we sent you a sign-in link.
+            </p>
+          ) : (
+            <button
+              type="button"
+              onClick={handleMagicLink}
+              disabled={magicLoading}
+              className="w-full text-center text-sm font-medium text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+            >
+              {magicLoading ? "Sending link..." : "Forgot your password? Email me a sign-in link"}
+            </button>
+          )}
         </form>
 
         <div className="relative">
