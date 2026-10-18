@@ -1,18 +1,23 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Send, Paperclip, Bot, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2 } from "lucide-react";
+import { Paperclip, Bot, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import { formatDate, formatTime } from "@/lib/format";
+import type { CaseView } from "@/lib/actions/cases";
 import type { Database, ConversationStatus } from "@/lib/types/database";
+import { Composer } from "./composer";
+import { latestIso, memberName, type InboxConversation, type InboxMember } from "./inbox-model";
+import type { CaseNote } from "./use-case-notes";
 
 type Message = Database["public"]["Tables"]["messages"]["Row"];
-type Conversation = Database["public"]["Tables"]["conversations"]["Row"] & {
-  contacts: Database["public"]["Tables"]["contacts"]["Row"] | null;
-};
+
+type TimelineItem =
+  | { kind: "message"; at: string; message: Message }
+  | { kind: "note"; at: string; note: CaseNote };
 
 const CONVERSATION_STATUS_LABELS: Record<ConversationStatus, string> = {
   open: "Abierta",
@@ -26,16 +31,6 @@ function formatDateSeparator(dateStr: string): string {
   if (day === formatDate(now)) return "Hoy";
   if (day === formatDate(now - 24 * 60 * 60 * 1000)) return "Ayer";
   return day;
-}
-
-function shouldShowDateSeparator(
-  current: Message,
-  previous: Message | undefined
-): boolean {
-  if (!previous) return true;
-  const currentDate = formatDate(current.created_at);
-  const previousDate = formatDate(previous.created_at);
-  return currentDate !== previousDate;
 }
 
 function MessageBubble({ message }: { message: Message }) {
@@ -108,21 +103,85 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
+/** Resalta las menciones "@Nombre" de los miembros mencionados. */
+function NoteBody({ note, members }: { note: CaseNote; members: InboxMember[] }) {
+  const names = note.mentions
+    .map((id) => members.find((m) => m.userId === id)?.name)
+    .filter((n): n is string => !!n)
+    .sort((a, b) => b.length - a.length);
+  if (names.length === 0) return <p className="whitespace-pre-wrap">{note.body}</p>;
+
+  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const parts = note.body.split(new RegExp(`(@(?:${escaped.join("|")}))`, "g"));
+  return (
+    <p className="whitespace-pre-wrap">
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <span key={i} className="font-semibold text-amber-900 dark:text-amber-200">
+            {part}
+          </span>
+        ) : (
+          part
+        ),
+      )}
+    </p>
+  );
+}
+
+function NoteBubble({ note, members }: { note: CaseNote; members: InboxMember[] }) {
+  return (
+    <div className="flex justify-center">
+      <div className="w-full max-w-[85%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
+        <div className="mb-0.5 flex items-center gap-1 text-[10px] font-medium text-amber-800 dark:text-amber-300">
+          <StickyNote className="h-3 w-3" />
+          <span>Nota interna</span>
+          <span>·</span>
+          <span>{note.author_id ? memberName(members, note.author_id) : "Sistema"}</span>
+          <span>·</span>
+          <span>{formatTime(note.created_at)}</span>
+        </div>
+        <NoteBody note={note} members={members} />
+      </div>
+    </div>
+  );
+}
+
 export function MessageThread({
   conversation,
   messages: initialMessages,
+  loading = false,
+  caseSlot,
+  notes = [],
+  members = [],
+  noteCase = null,
+  me,
+  teamName = null,
+  workspaceName = "",
+  onNoteAdded,
+  onCaseActivity,
 }: {
-  conversation: Conversation | null;
+  conversation: InboxConversation | null;
   messages: Message[];
+  loading?: boolean;
+  /** Tarjeta de gestión, debajo de la cabecera. */
+  caseSlot?: ReactNode;
+  notes?: CaseNote[];
+  members?: InboxMember[];
+  /** Gestión activa (para notas, la ventana de WhatsApp y las respuestas guardadas). */
+  noteCase?: CaseView | null;
+  me: { userId: string; name: string };
+  teamName?: string | null;
+  workspaceName?: string;
+  onNoteAdded?: (note: CaseNote) => void;
+  /** Se envió algo al cliente: la gestión cambia (sellos, espera). */
+  onCaseActivity?: () => void;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const conversationId = conversation?.id ?? null;
 
   const updateConversationStatus = useCallback(async (status: ConversationStatus) => {
     if (!conversation || statusUpdating) return;
@@ -141,68 +200,78 @@ export function MessageThread({
     }
   }, [conversation, statusUpdating, router]);
 
-  const autoResize = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-  }, []);
-
   useEffect(() => {
     setMessages(initialMessages);
   }, [initialMessages]);
 
-  // Auto-scroll to bottom when messages change
+  const refetchMessages = useCallback(async () => {
+    if (!conversationId) return;
+    try {
+      const res = await fetch(`/api/v1/messages?conversationId=${conversationId}`);
+      if (res.ok) {
+        const freshMessages: Message[] = await res.json();
+        setMessages((prev) => {
+          const optimistic = prev.filter((m) => m.id.startsWith("optimistic-"));
+          return [...freshMessages, ...optimistic];
+        });
+      }
+    } catch (err) {
+      console.error("Failed to refresh messages:", err);
+    }
+  }, [conversationId]);
+
+  // Mensajes y notas intercalados por fecha.
+  const timeline = useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [
+      ...messages.map((message) => ({ kind: "message" as const, at: message.created_at, message })),
+      ...notes.map((note) => ({ kind: "note" as const, at: note.created_at, note })),
+    ];
+    return items
+      .map((item, index) => ({ item, index, t: new Date(item.at).getTime() || 0 }))
+      .sort((a, b) => a.t - b.t || a.index - b.index)
+      .map(({ item }) => item);
+  }, [messages, notes]);
+
+  // Auto-scroll to bottom when messages or notes change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [timeline.length]);
 
   // Listen for conversation updates (last_message_at changes when a new message arrives)
   // and re-fetch messages from Zernio API.
   useEffect(() => {
-    if (!conversation) return;
+    if (!conversationId) return;
 
     const supabase = createClient();
     const channel = supabase
-      .channel(`conversation-${conversation.id}`)
+      .channel(`conversation-${conversationId}`)
       .on(
         "postgres_changes",
         {
           event: "UPDATE",
           schema: "public",
           table: "conversations",
-          filter: `id=eq.${conversation.id}`,
+          filter: `id=eq.${conversationId}`,
         },
-        async () => {
-          try {
-            const res = await fetch(
-              `/api/v1/messages?conversationId=${conversation.id}`
-            );
-            if (res.ok) {
-              const freshMessages = await res.json();
-              setMessages((prev) => {
-                const optimistic = prev.filter((m) => m.id.startsWith("optimistic-"));
-                return [...freshMessages, ...optimistic];
-              });
-            }
-          } catch (err) {
-            console.error("Failed to refresh messages:", err);
-          }
-        }
+        () => void refetchMessages()
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversation?.id]);
+  }, [conversationId, refetchMessages]);
 
-  async function handleSend() {
-    if (!input.trim() || !conversation || sending) return;
+  const lastInboundMessageAt = useMemo(() => {
+    let latest: string | null = null;
+    for (const m of messages) {
+      if (m.direction === "inbound" && !m.id.startsWith("optimistic-")) latest = latestIso(latest, m.created_at);
+    }
+    return latest;
+  }, [messages]);
 
-    const text = input.trim();
-    setInput("");
-    setSending(true);
+  async function handleSend(text: string) {
+    if (!conversation) return;
 
     // Optimistic update: add a temporary message immediately
     const optimisticId = `optimistic-${Date.now()}`;
@@ -242,6 +311,7 @@ export function MessageThread({
       setMessages((prev) =>
         prev.map((m) => (m.id === optimisticId ? confirmedMessage : m))
       );
+      onCaseActivity?.();
     } catch (err) {
       console.error("Failed to send message:", err);
       // Mark optimistic message as failed
@@ -250,8 +320,6 @@ export function MessageThread({
           m.id === optimisticId ? { ...m, status: "failed" as const } : m
         )
       );
-    } finally {
-      setSending(false);
     }
   }
 
@@ -272,10 +340,11 @@ export function MessageThread({
   return (
     <div className="flex h-full flex-col bg-background">
       {/* Header */}
-      <div className="flex h-14 items-center justify-between border-b border-border px-4">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-3">
           <div className="relative">
             {conversation.contacts?.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={conversation.contacts.avatar_url}
                 alt=""
@@ -357,65 +426,59 @@ export function MessageThread({
         </div>
       </div>
 
-      {/* Messages */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4">
-        <div className="mx-auto max-w-2xl space-y-4">
-          {messages.map((message, i) => (
-            <div key={message.id}>
-              {shouldShowDateSeparator(message, messages[i - 1]) && (
-                <div className="my-4 flex items-center gap-3">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="text-[11px] text-muted-foreground">
-                    {formatDateSeparator(message.created_at)}
-                  </span>
-                  <div className="h-px flex-1 bg-border" />
+      {caseSlot}
+
+      {/* Messages and internal notes */}
+      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
+        {loading ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+          </div>
+        ) : (
+          <div className="mx-auto max-w-2xl space-y-4">
+            {timeline.map((item, i) => {
+              const previous = timeline[i - 1];
+              const showSeparator = !previous || formatDate(previous.at) !== formatDate(item.at);
+              return (
+                <div key={item.kind === "message" ? item.message.id : `note-${item.note.id}`}>
+                  {showSeparator && (
+                    <div className="my-4 flex items-center gap-3">
+                      <div className="h-px flex-1 bg-border" />
+                      <span className="text-[11px] text-muted-foreground">
+                        {formatDateSeparator(item.at)}
+                      </span>
+                      <div className="h-px flex-1 bg-border" />
+                    </div>
+                  )}
+                  {item.kind === "message" ? (
+                    <MessageBubble message={item.message} />
+                  ) : (
+                    <NoteBubble note={item.note} members={members} />
+                  )}
                 </div>
-              )}
-              <MessageBubble message={message} />
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+        )}
       </div>
 
       {/* Composer */}
-      <div className="border-t border-border p-4">
-        <div className="mx-auto flex max-w-2xl items-end gap-2">
-          <div className="flex-1">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                autoResize();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Escribe un mensaje..."
-              rows={1}
-              className="w-full resize-none rounded-lg border border-input bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              style={{ maxHeight: 150 }}
-            />
-          </div>
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || sending}
-            aria-label="Enviar mensaje"
-            className={cn(
-              "flex h-10 w-10 items-center justify-center rounded-lg transition-colors",
-              input.trim() && !sending
-                ? "bg-primary text-primary-foreground hover:opacity-90"
-                : "bg-muted text-muted-foreground"
-            )}
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <Composer
+        conversation={conversation}
+        noteCase={noteCase}
+        lastInboundAt={latestIso(noteCase?.lastInboundAt, lastInboundMessageAt)}
+        members={members}
+        me={me}
+        teamName={teamName}
+        workspaceName={workspaceName}
+        onSendMessage={(text) => void handleSend(text)}
+        onNoteAdded={(note) => onNoteAdded?.(note)}
+        onTemplateSent={() => {
+          void refetchMessages();
+          onCaseActivity?.();
+        }}
+      />
     </div>
   );
 }

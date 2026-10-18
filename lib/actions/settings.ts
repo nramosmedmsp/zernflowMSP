@@ -9,6 +9,12 @@ import {
   isAdminRole,
 } from "@/lib/permissions";
 import {
+  mergeAttentionSettings,
+  parseAttentionInput,
+  type AttentionSettings,
+} from "@/app/(dashboard)/dashboard/settings/attention/attention-rules";
+import type { Json } from "@/lib/types/database";
+import {
   getWorkspaceSecretsStatus,
   saveWorkspaceSecrets,
   type WorkspaceSecretsPatch,
@@ -87,4 +93,47 @@ export async function saveWorkspaceSettings(
   const status = await getWorkspaceSecretsStatus(workspace.id);
   revalidatePath("/dashboard/settings");
   return { ok: true, hasApiKey: status.hasLateApiKey, hasAiKey: status.hasAiApiKey };
+}
+
+/**
+ * Atención (docs/PLAN-CRM.md 4.3 y 5.2): visibilidad del asesor, modo de
+ * reparto sin equipos y si un asesor puede devolver una gestión a la cola.
+ * Lee los settings actuales y solo cambia esas tres claves, para no pisar
+ * business_template, key_date_label ni otras que se agreguen.
+ */
+export async function saveAttentionSettings(
+  workspaceId: string,
+  input: AttentionSettings,
+): Promise<{ error: string } | { ok: true }> {
+  const { workspace, role, supabase } = await getWorkspace();
+  if (workspace.id !== workspaceId) return { error: WORKSPACE_CHANGED };
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
+
+  const parsed = parseAttentionInput(input);
+  if ("error" in parsed) return parsed;
+
+  const { data: current, error: readError } = await supabase
+    .from("workspaces")
+    .select("settings")
+    .eq("id", workspace.id)
+    .single();
+  if (readError || !current) {
+    console.error("[saveAttentionSettings] leer", readError?.message);
+    return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
+  }
+
+  const settings = mergeAttentionSettings(current.settings, parsed.value) as Json;
+  const { error: updateError } = await supabase
+    .from("workspaces")
+    .update({ settings })
+    .eq("id", workspace.id)
+    .select("id")
+    .single();
+  if (updateError) {
+    console.error("[saveAttentionSettings]", updateError.message);
+    return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
+  }
+
+  revalidatePath("/dashboard/settings/attention");
+  return { ok: true };
 }

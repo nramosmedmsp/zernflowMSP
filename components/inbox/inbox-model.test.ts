@@ -1,0 +1,208 @@
+import { describe, expect, it } from "vitest";
+import {
+  EMPTY_FILTERS,
+  availableViews,
+  buildRows,
+  caseMatchesView,
+  groupCasesByContact,
+  mentionQueryAt,
+  mentionedIds,
+  outsideWhatsAppWindow,
+  waitingText,
+  type InboxCase,
+  type InboxConversation,
+  type InboxMeta,
+} from "./inbox-model";
+
+const ME = "00000000-0000-0000-0000-000000000001";
+const OTHER = "00000000-0000-0000-0000-000000000002";
+const TEAM = "00000000-0000-0000-0000-0000000000aa";
+const NOW = new Date("2026-10-18T15:00:00Z"); // 10:00 en Lima
+
+function meta(overrides: Partial<InboxMeta> = {}): InboxMeta {
+  return {
+    userId: ME,
+    isAdmin: false,
+    agentSeesQueue: false,
+    supervisedTeamIds: [],
+    myTeamIds: [],
+    workspaceHasTeams: false,
+    workspaceName: "Muscle Shop",
+    caseTypes: [],
+    teams: [],
+    members: [],
+    ...overrides,
+  };
+}
+
+function kase(overrides: Partial<InboxCase>): InboxCase {
+  return {
+    id: "case-1",
+    workspace_id: "ws",
+    contact_id: "contact-1",
+    case_type_id: null,
+    stage_id: null,
+    category_id: null,
+    status: "open",
+    team_id: null,
+    assignee_id: null,
+    origin: "inbound",
+    scheduled_for: null,
+    opened_at: "2026-10-10T10:00:00Z",
+    last_inbound_at: null,
+    last_outbound_at: null,
+    waiting_since: null,
+    first_response_at: null,
+    next_action_at: null,
+    next_action_note: null,
+    next_action_notified_at: null,
+    closed_at: null,
+    closed_by: null,
+    outcome_reason_id: null,
+    outcome_note: null,
+    legal_due_at: null,
+    priority: "normal",
+    created_by: null,
+    created_at: "2026-10-10T10:00:00Z",
+    updated_at: "2026-10-10T10:00:00Z",
+    ...overrides,
+  };
+}
+
+function conv(id: string, contactId: string, lastMessageAt: string | null = null): InboxConversation {
+  return {
+    id,
+    workspace_id: "ws",
+    channel_id: "ch",
+    contact_id: contactId,
+    late_conversation_id: null,
+    platform: "whatsapp",
+    status: "open",
+    assigned_to: null,
+    last_message_at: lastMessageAt,
+    last_message_preview: null,
+    unread_count: 0,
+    is_automation_paused: false,
+    created_at: "2026-10-01T00:00:00Z",
+    updated_at: "2026-10-01T00:00:00Z",
+    contacts: null,
+  };
+}
+
+describe("availableViews", () => {
+  it("asesor: solo sus vistas", () => {
+    expect(availableViews(meta())).toEqual(["mine", "today"]);
+  });
+  it("asesor con cola visible: suma Sin asignar", () => {
+    expect(availableViews(meta({ agentSeesQueue: true }))).toEqual(["mine", "today", "unassigned"]);
+  });
+  it("supervisor: suma Sin asignar y Mi equipo", () => {
+    expect(availableViews(meta({ supervisedTeamIds: [TEAM] }))).toEqual(["mine", "today", "unassigned", "team"]);
+  });
+  it("administrador: todas", () => {
+    expect(availableViews(meta({ isAdmin: true }))).toEqual(["mine", "today", "unassigned", "team", "all"]);
+  });
+});
+
+describe("caseMatchesView", () => {
+  it("Para hoy: próximo contacto vencido o de hoy, o activada hoy", () => {
+    const m = meta();
+    expect(caseMatchesView(kase({ assignee_id: ME, next_action_at: "2026-10-18T22:00:00Z" }), "today", m, null, NOW)).toBe(true);
+    expect(caseMatchesView(kase({ assignee_id: ME, next_action_at: "2026-10-19T15:00:00Z" }), "today", m, null, NOW)).toBe(false);
+    expect(
+      caseMatchesView(
+        kase({ assignee_id: ME, scheduled_for: "2026-10-18T14:00:00Z", opened_at: "2026-10-18T14:00:01Z" }),
+        "today",
+        m,
+        null,
+        NOW,
+      ),
+    ).toBe(true);
+    expect(caseMatchesView(kase({ assignee_id: OTHER, next_action_at: "2026-10-18T12:00:00Z" }), "today", m, null, NOW)).toBe(false);
+  });
+
+  it("Mi equipo: equipo de la gestión o del contacto", () => {
+    const m = meta({ supervisedTeamIds: [TEAM] });
+    expect(caseMatchesView(kase({ team_id: TEAM }), "team", m, null, NOW)).toBe(true);
+    expect(caseMatchesView(kase({ team_id: null }), "team", m, TEAM, NOW)).toBe(true);
+    expect(caseMatchesView(kase({ team_id: "otro" }), "team", m, null, NOW)).toBe(false);
+  });
+});
+
+describe("buildRows", () => {
+  it("ordena por espera y elige la gestión mía", () => {
+    const cases = [
+      kase({ id: "a", contact_id: "c1", assignee_id: ME, waiting_since: "2026-10-18T14:00:00Z" }),
+      kase({ id: "b", contact_id: "c2", assignee_id: ME, waiting_since: "2026-10-18T10:00:00Z" }),
+      kase({ id: "c", contact_id: "c3", assignee_id: ME }),
+      kase({ id: "d", contact_id: "c1", assignee_id: OTHER, waiting_since: "2026-10-18T09:00:00Z" }),
+    ];
+    const rows = buildRows(
+      [conv("x1", "c1"), conv("x2", "c2"), conv("x3", "c3", "2026-10-18T14:30:00Z"), conv("x4", "c4")],
+      groupCasesByContact(cases),
+      "mine",
+      EMPTY_FILTERS,
+      meta(),
+      NOW,
+    );
+    expect(rows.map((r) => [r.conversation.id, r.case?.id])).toEqual([
+      ["x2", "b"],
+      ["x1", "a"],
+      ["x3", "c"],
+    ]);
+  });
+
+  it("Todas incluye chats sin gestión y el filtro Sin gestión los aísla", () => {
+    const cases = [kase({ id: "a", contact_id: "c1" })];
+    const grouped = groupCasesByContact(cases);
+    const convs = [conv("x1", "c1"), conv("x2", "c2")];
+    const admin = meta({ isAdmin: true });
+    expect(buildRows(convs, grouped, "all", EMPTY_FILTERS, admin, NOW)).toHaveLength(2);
+    const none = buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, status: "none" }, admin, NOW);
+    expect(none.map((r) => r.conversation.id)).toEqual(["x2"]);
+  });
+
+  it("filtra por esperando respuesta y por responsable", () => {
+    const cases = [
+      kase({ id: "a", contact_id: "c1", waiting_since: "2026-10-18T14:00:00Z" }),
+      kase({ id: "b", contact_id: "c2", assignee_id: OTHER }),
+    ];
+    const grouped = groupCasesByContact(cases);
+    const convs = [conv("x1", "c1"), conv("x2", "c2")];
+    const admin = meta({ isAdmin: true });
+    expect(buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, waitingOnly: true }, admin, NOW).map((r) => r.case?.id)).toEqual(["a"]);
+    expect(buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, assigneeId: OTHER }, admin, NOW).map((r) => r.case?.id)).toEqual(["b"]);
+    expect(buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, assigneeId: "none" }, admin, NOW).map((r) => r.case?.id)).toEqual(["a"]);
+  });
+});
+
+describe("textos y ventana", () => {
+  it("waitingText", () => {
+    expect(waitingText("hace 5 min")).toBe("Esperando hace 5 min");
+    expect(waitingText("ayer")).toBe("Esperando ayer");
+    expect(waitingText("3 oct 2026")).toBe("Esperando desde 3 oct 2026");
+  });
+
+  it("ventana de 24 horas solo en WhatsApp", () => {
+    const now = NOW.getTime();
+    expect(outsideWhatsAppWindow("whatsapp", "2026-10-17T14:00:00Z", now)).toBe(true);
+    expect(outsideWhatsAppWindow("whatsapp", "2026-10-17T16:00:00Z", now)).toBe(false);
+    expect(outsideWhatsAppWindow("instagram", "2026-10-01T00:00:00Z", now)).toBe(false);
+    expect(outsideWhatsAppWindow("whatsapp", null, now)).toBe(false);
+  });
+});
+
+describe("menciones", () => {
+  it("detecta la consulta tras @", () => {
+    expect(mentionQueryAt("Hola @Ana", 9)).toEqual({ start: 5, query: "Ana" });
+    expect(mentionQueryAt("correo@dominio", 14)).toBeNull();
+    expect(mentionQueryAt("@", 1)).toEqual({ start: 0, query: "" });
+  });
+  it("solo envía las menciones que siguen en el texto", () => {
+    const picked = new Map([
+      [ME, "Ana Pérez"],
+      [OTHER, "Luis"],
+    ]);
+    expect(mentionedIds("Revisa esto @Ana Pérez", picked)).toEqual([ME]);
+  });
+});

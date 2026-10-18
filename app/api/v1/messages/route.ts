@@ -4,6 +4,7 @@ import { handleHumanOutboundForConversation } from "@/lib/cases";
 import { createZernioClient } from "@/lib/zernio-client";
 import { messagePreview } from "@/lib/message-preview";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { zernioErrorMessage, zernioFailed } from "../templates/zernio-error";
 
 /**
  * GET /api/v1/messages?conversationId=...
@@ -147,6 +148,15 @@ export async function POST(request: NextRequest) {
       path: { conversationId: conversation.late_conversation_id },
       body: { accountId: channel.late_account_id, message: text },
     });
+
+    // El SDK no lanza excepciones: un envío rechazado llega en res.error.
+    if (zernioFailed(res) || !res.data) {
+      console.error("[messages] Zernio rechazó el mensaje:", res.error);
+      return NextResponse.json(
+        { error: zernioErrorMessage(res, "Zernio rechazó el mensaje") },
+        { status: 502 }
+      );
+    }
 
     const messageId = (res.data as any)?.data?.messageId ?? null;
 

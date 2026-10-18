@@ -18,9 +18,71 @@ import {
   ChevronRight,
   Sparkles,
   Mail,
+  Briefcase,
+  Contact,
+  UsersRound,
+  Headset,
+  MessageSquareText,
+  MessageCircle,
+  KeyRound,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { saveWorkspaceSettings } from "@/lib/actions/settings";
+import { isAdminRole } from "@/lib/permissions";
+import { settingsLinksFor, type SettingsLinkKey } from "./settings-nav";
+
+const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
+  general: Settings,
+  team: Users,
+  mail: Mail,
+  cases: Briefcase,
+  "contact-types": Contact,
+  teams: UsersRound,
+  attention: Headset,
+  replies: MessageSquareText,
+  "whatsapp-templates": MessageCircle,
+  password: KeyRound,
+};
+
+/** Navegación de Configuración: cada persona ve solo lo que puede usar. */
+function SettingsNav({ role }: { role: string | null | undefined }) {
+  const links = settingsLinksFor(role);
+  return (
+    <nav aria-label="Secciones de configuración">
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {links.map((link) => {
+          const Icon = LINK_ICONS[link.key];
+          const className =
+            "group flex h-full items-start gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:bg-muted";
+          const content = (
+            <>
+              <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">{link.title}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{link.description}</span>
+              </span>
+              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            </>
+          );
+          return (
+            <li key={link.key}>
+              {link.href.startsWith("#") ? (
+                <a href={link.href} className={className}>
+                  {content}
+                </a>
+              ) : (
+                <Link href={link.href} className={className}>
+                  {content}
+                </Link>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
 
 interface WorkspaceSettings {
   id: string;
@@ -38,11 +100,11 @@ interface TestResult {
 
 export function SettingsView({
   workspace,
-  canManageTeam = false,
+  role,
   canManageSecrets = false,
 }: {
   workspace: WorkspaceSettings;
-  canManageTeam?: boolean;
+  role: string | null | undefined;
   /** Solo el Dueño cambia las claves; el resto ve si están configuradas. */
   canManageSecrets?: boolean;
 }) {
@@ -150,6 +212,25 @@ export function SettingsView({
     }
   }
 
+  const isAdmin = isAdminRole(role);
+
+  // Los miembros no administran el espacio: solo ven lo suyo.
+  if (!isAdmin) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="border-b border-border px-8 py-6">
+          <h1 className="text-2xl font-bold">Configuración</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Tus respuestas guardadas y tu cuenta</p>
+        </div>
+        <div className="flex-1 overflow-auto">
+          <div className="mx-auto max-w-2xl px-8 py-8">
+            <SettingsNav role={role} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -163,8 +244,12 @@ export function SettingsView({
       {/* Settings form */}
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-2xl space-y-8 px-8 py-8">
+          <SettingsNav role={role} />
+
+          <hr className="border-border" />
+
           {/* Nombre del espacio de trabajo */}
-          <section>
+          <section id="general" className="scroll-mt-8">
             <div className="flex items-center gap-2">
               <Settings className="h-4 w-4 text-muted-foreground" />
               <h2 className="text-sm font-semibold">General</h2>
@@ -407,52 +492,6 @@ export function SettingsView({
               </p>
             )}
           </section>
-
-          <hr className="border-border" />
-
-          {/* Equipo */}
-          <section>
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Equipo</h2>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Crea usuarios, reenvía invitaciones y administra los miembros del espacio de trabajo.
-            </p>
-            <Link
-              href="/dashboard/settings/team"
-              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
-            >
-              <Users className="h-4 w-4" />
-              Administrar equipo
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-            </Link>
-          </section>
-
-          {canManageTeam && (
-            <>
-              <hr className="border-border" />
-
-              {/* Correo */}
-              <section>
-                <div className="flex items-center gap-2">
-                  <Mail className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold">Correo</h2>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Servidor SMTP para enviar invitaciones y enlaces para restablecer contraseñas.
-                </p>
-                <Link
-                  href="/dashboard/settings/correo"
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
-                >
-                  <Mail className="h-4 w-4" />
-                  Configurar correo
-                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                </Link>
-              </section>
-            </>
-          )}
 
           <hr className="border-border" />
 

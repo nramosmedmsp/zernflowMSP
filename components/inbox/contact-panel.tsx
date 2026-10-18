@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
   X,
   Mail,
@@ -8,20 +9,37 @@ import {
   Tag,
   User,
   Hash,
+  Plus,
+  ExternalLink,
+  Users,
+  UserRound,
+  Contact as ContactIcon,
+  CalendarDays,
+  Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
-import { formatDateTime } from "@/lib/format";
+import { formatDate as formatDay, formatDateTime } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
+import { limaDateTimeIso } from "@/lib/cases/dates";
+import { listCaseMembers, type ContactCasesView } from "@/lib/actions/cases";
+import {
+  addContactTag,
+  removeContactTag,
+  setContactOwner,
+  setContactTeam,
+  updateContactType,
+  type ContactActionResult,
+} from "@/lib/actions/contacts";
 import type { Database, Platform } from "@/lib/types/database";
+import { useContactCases } from "./use-contact-cases";
+import { selectClass } from "./ui";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
 type TagRow = Database["public"]["Tables"]["tags"]["Row"];
 type CustomFieldDef =
   Database["public"]["Tables"]["custom_field_definitions"]["Row"];
-type CustomFieldValue =
-  Database["public"]["Tables"]["contact_custom_fields"]["Row"];
 
 interface ContactDetails {
   contact: Contact;
@@ -33,81 +51,216 @@ interface ContactDetails {
   }[];
 }
 
+interface MemberOption {
+  userId: string;
+  name: string;
+}
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "Nunca";
   return formatDateTime(dateStr);
+}
+
+/** "YYYY-MM-DD" como día de Lima (al mediodía para no correrse de día). */
+function formatKeyDate(date: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? formatDay(limaDateTimeIso(date, 12)) : date;
+}
+
+async function fetchContactDetails(id: string): Promise<ContactDetails | null> {
+  const supabase = createClient();
+
+  const [contactRes, tagsRes, fieldsRes, channelsRes] = await Promise.all([
+    supabase.from("contacts").select("*").eq("id", id).single(),
+    supabase
+      .from("contact_tags")
+      .select("tag_id, tags(*)")
+      .eq("contact_id", id),
+    supabase
+      .from("contact_custom_fields")
+      .select("*, custom_field_definitions(*)")
+      .eq("contact_id", id),
+    supabase
+      .from("contact_channels")
+      .select("platform_username, channels(platform)")
+      .eq("contact_id", id),
+  ]);
+
+  if (contactRes.data) {
+    const tags = (tagsRes.data ?? [])
+      .map((ct) => ct.tags)
+      .filter(Boolean) as TagRow[];
+
+    const customFields = (fieldsRes.data ?? [])
+      .map((cf) => ({
+        definition: cf.custom_field_definitions as unknown as CustomFieldDef,
+        value: cf.value,
+      }))
+      .filter((cf) => cf.definition);
+
+    const channels = (channelsRes.data ?? []).map((cc) => ({
+      platform: (cc.channels as unknown as { platform: Platform }).platform,
+      platform_username: cc.platform_username,
+    }));
+
+    return {
+      contact: contactRes.data,
+      tags: tags.sort((a, b) => a.name.localeCompare(b.name, "es")),
+      customFields,
+      channels,
+    };
+  }
+  return null;
 }
 
 export function ContactPanel({
   contactId,
   workspaceId,
   onClose,
+  cases: providedCases,
+  members: providedMembers,
+  onContactChanged,
 }: {
   contactId: string | null;
   workspaceId: string;
   onClose: () => void;
+  /** Vista de getContactCases si ya la tiene quien abre el panel (la bandeja). */
+  cases?: ContactCasesView | null;
+  members?: MemberOption[];
+  /** Se cambió el tipo, el responsable o el equipo. */
+  onContactChanged?: () => void;
 }) {
   const [loadedDetails, setDetails] = useState<ContactDetails | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [notFoundId, setNotFoundId] = useState<string | null>(null);
+  const [workspaceTags, setWorkspaceTags] = useState<TagRow[]>([]);
+  const [addingTag, setAddingTag] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedMembers, setLoadedMembers] = useState<MemberOption[]>([]);
+
+  // Sin datos de la bandeja, el panel los pide por su cuenta.
+  const own = useContactCases(providedCases === undefined ? contactId : null);
+  const caseData = providedCases === undefined ? own.data : providedCases;
+  const members = providedMembers ?? loadedMembers;
+
+  useEffect(() => {
+    if (providedMembers) return;
+    let cancelled = false;
+    void listCaseMembers().then((r) => {
+      if (!cancelled && "members" in r) setLoadedMembers(r.members.map((m) => ({ userId: m.userId, name: m.name })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [providedMembers]);
+
+  const loadContact = useCallback(async (id: string) => {
+    const details = await fetchContactDetails(id);
+    if (details) setDetails(details);
+    else setNotFoundId(id);
+  }, []);
 
   useEffect(() => {
     if (!contactId) return;
-
-    async function loadContact() {
-      setLoading(true);
-      const supabase = createClient();
-
-      const [contactRes, tagsRes, fieldsRes, channelsRes] = await Promise.all([
-        supabase.from("contacts").select("*").eq("id", contactId!).single(),
-        supabase
-          .from("contact_tags")
-          .select("tag_id, tags(*)")
-          .eq("contact_id", contactId!),
-        supabase
-          .from("contact_custom_fields")
-          .select("*, custom_field_definitions(*)")
-          .eq("contact_id", contactId!),
-        supabase
-          .from("contact_channels")
-          .select("platform_username, channels(platform)")
-          .eq("contact_id", contactId!),
-      ]);
-
-      if (contactRes.data) {
-        const tags = (tagsRes.data ?? [])
-          .map((ct) => ct.tags)
-          .filter(Boolean) as TagRow[];
-
-        const customFields = (fieldsRes.data ?? [])
-          .map((cf) => ({
-            definition: cf.custom_field_definitions as unknown as CustomFieldDef,
-            value: cf.value,
-          }))
-          .filter((cf) => cf.definition);
-
-        const channels = (channelsRes.data ?? []).map((cc) => ({
-          platform: (cc.channels as unknown as { platform: Platform }).platform,
-          platform_username: cc.platform_username,
-        }));
-
-        setDetails({
-          contact: contactRes.data,
-          tags,
-          customFields,
-          channels,
-        });
-      }
-
-      setLoading(false);
-    }
-
-    loadContact();
+    let cancelled = false;
+    void fetchContactDetails(contactId).then((details) => {
+      if (cancelled) return;
+      if (details) setDetails(details);
+      else setNotFoundId(contactId);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [contactId, workspaceId]);
+
+  // Etiquetas existentes del espacio (crearlas es de administradores, en Configuración).
+  useEffect(() => {
+    let cancelled = false;
+    void createClient()
+      .from("tags")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .order("name", { ascending: true })
+      .then(({ data }) => {
+        if (!cancelled) setWorkspaceTags(data ?? []);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
 
   if (!contactId) return null;
 
   const details =
     loadedDetails?.contact.id === contactId ? loadedDetails : null;
+  const cases = caseData && caseData.contact.id === contactId ? caseData : null;
+  const isAdmin = !!cases?.me.isAdmin;
+
+  /** Cambia un dato del contacto con la acción de servidor (valida permisos y registra la actividad). */
+  async function updateContact(key: string, action: (contactId: string) => Promise<ContactActionResult>) {
+    if (!details) return;
+    setSaving(key);
+    setError(null);
+    let result: ContactActionResult;
+    try {
+      result = await action(details.contact.id);
+    } catch {
+      result = { error: "No se pudo guardar el cambio. Inténtalo de nuevo." };
+    }
+    setSaving(null);
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+    await loadContact(details.contact.id);
+    onContactChanged?.();
+    if (providedCases === undefined) void own.reload();
+  }
+
+  async function addTag(tagId: string) {
+    if (!details || !tagId) return;
+    setSaving("tags");
+    setError(null);
+    let result: ContactActionResult;
+    try {
+      result = await addContactTag(details.contact.id, tagId);
+    } catch {
+      result = { error: "No se pudo agregar la etiqueta." };
+    }
+    setSaving(null);
+    setAddingTag(false);
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+    await loadContact(details.contact.id);
+  }
+
+  async function removeTag(tagId: string) {
+    if (!details) return;
+    setSaving("tags");
+    setError(null);
+    let result: ContactActionResult;
+    try {
+      result = await removeContactTag(details.contact.id, tagId);
+    } catch {
+      result = { error: "No se pudo quitar la etiqueta." };
+    }
+    setSaving(null);
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+    await loadContact(details.contact.id);
+  }
+
+  const contact = details?.contact;
+  const ownerId = contact?.owner_id ?? null;
+  const teamId = contact?.team_id ?? null;
+  const ownerName = ownerId ? members.find((m) => m.userId === ownerId)?.name ?? "Otra persona" : "Sin responsable";
+  const teamName = teamId ? cases?.teams.find((t) => t.id === teamId)?.name ?? "Equipo archivado" : "Sin equipo";
+  const contactTypes = cases?.contactTypes ?? [];
+  const currentType = contactTypes.find((t) => t.id === contact?.contact_type_id) ?? null;
+  const availableTags = workspaceTags.filter((t) => !details?.tags.some((x) => x.id === t.id));
 
   return (
     <div className="flex h-full w-80 flex-col border-l border-border bg-background">
@@ -123,47 +276,173 @@ export function ContactPanel({
         </button>
       </div>
 
-      {loading ? (
+      {!details && notFoundId !== contactId ? (
         <div className="flex flex-1 items-center justify-center">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
         </div>
-      ) : details ? (
+      ) : details && contact ? (
         <div className="flex-1 overflow-y-auto">
           {/* Profile section */}
           <div className="flex flex-col items-center border-b border-border p-6">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-xl font-semibold">
-              {details.contact.avatar_url ? (
+              {contact.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={details.contact.avatar_url}
+                  src={contact.avatar_url}
                   alt=""
                   className="h-16 w-16 rounded-full object-cover"
                 />
               ) : (
-                details.contact.display_name?.[0]?.toUpperCase() ?? "?"
+                contact.display_name?.[0]?.toUpperCase() ?? "?"
               )}
             </div>
             <p className="mt-3 text-sm font-semibold">
-              {details.contact.display_name ?? "Desconocido"}
+              {contact.display_name ?? "Desconocido"}
             </p>
-            {details.contact.email && (
+            {contact.email && (
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {details.contact.email}
+                {contact.email}
               </p>
             )}
-            <span
-              className={cn(
-                "mt-2 rounded-full px-2.5 py-0.5 text-[10px] font-medium",
-                details.contact.is_subscribed
-                  ? "bg-green-100 text-green-700"
-                  : "bg-muted text-muted-foreground"
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+              {currentType && (
+                <span
+                  className="rounded-full border border-border px-2.5 py-0.5 text-[10px] font-medium"
+                  style={
+                    currentType.color
+                      ? { backgroundColor: `${currentType.color}20`, borderColor: `${currentType.color}40`, color: currentType.color }
+                      : undefined
+                  }
+                >
+                  {currentType.name}
+                </span>
               )}
+              <span
+                className={cn(
+                  "rounded-full px-2.5 py-0.5 text-[10px] font-medium",
+                  contact.is_subscribed
+                    ? "bg-green-100 text-green-700"
+                    : "bg-muted text-muted-foreground"
+                )}
+              >
+                {contact.is_subscribed ? "Suscrito" : "No suscrito"}
+              </span>
+            </div>
+            <Link
+              href={`/dashboard/contacts/${contact.id}`}
+              className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
             >
-              {details.contact.is_subscribed ? "Suscrito" : "No suscrito"}
-            </span>
+              Ver ficha completa
+              <ExternalLink className="h-3 w-3" />
+            </Link>
           </div>
 
           {/* Details */}
           <div className="space-y-4 p-4">
+            {error && <p className="text-xs text-destructive">{error}</p>}
+
+            {/* Contact type */}
+            <div>
+              <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+                <ContactIcon className="h-3 w-3" />
+                Tipo de contacto
+                {saving === "type" && <Loader2 className="h-3 w-3 animate-spin" />}
+              </h4>
+              {contactTypes.length > 0 ? (
+                <select
+                  value={contact.contact_type_id ?? ""}
+                  disabled={saving !== null}
+                  onChange={(e) => void updateContact("type", (id) => updateContactType(id, e.target.value || null))}
+                  className={cn(selectClass, "mt-1 w-full text-sm")}
+                  aria-label="Tipo de contacto"
+                >
+                  <option value="">Sin tipo</option>
+                  {contactTypes.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="mt-1 text-sm">{currentType?.name ?? "Sin tipo"}</p>
+              )}
+            </div>
+
+            {/* Owner */}
+            <div>
+              <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+                <UserRound className="h-3 w-3" />
+                Responsable
+                {saving === "owner" && <Loader2 className="h-3 w-3 animate-spin" />}
+              </h4>
+              {isAdmin ? (
+                <select
+                  value={ownerId ?? ""}
+                  disabled={saving !== null}
+                  onChange={(e) => void updateContact("owner", (id) => setContactOwner(id, e.target.value || null))}
+                  className={cn(selectClass, "mt-1 w-full text-sm")}
+                  aria-label="Responsable del contacto"
+                >
+                  <option value="">Sin responsable</option>
+                  {ownerId && !members.some((m) => m.userId === ownerId) && (
+                    <option value={ownerId}>{ownerName}</option>
+                  )}
+                  {members.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="mt-1 text-sm">{ownerName}</p>
+              )}
+            </div>
+
+            {/* Team */}
+            {(isAdmin ? (cases?.teams.length ?? 0) > 0 : !!teamId) && (
+              <div>
+                <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+                  <Users className="h-3 w-3" />
+                  Equipo
+                  {saving === "team" && <Loader2 className="h-3 w-3 animate-spin" />}
+                </h4>
+                {isAdmin ? (
+                  <select
+                    value={teamId ?? ""}
+                    disabled={saving !== null}
+                    onChange={(e) => void updateContact("team", (id) => setContactTeam(id, e.target.value || null))}
+                    className={cn(selectClass, "mt-1 w-full text-sm")}
+                    aria-label="Equipo del contacto"
+                  >
+                    <option value="">Sin equipo</option>
+                    {teamId && !cases?.teams.some((t) => t.id === teamId) && (
+                      <option value={teamId}>{teamName}</option>
+                    )}
+                    {cases?.teams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="mt-1 text-sm">{teamName}</p>
+                )}
+              </div>
+            )}
+
+            {/* Key date */}
+            {(contact.key_date || cases?.keyDateLabel) && (
+              <div>
+                <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+                  <CalendarDays className="h-3 w-3" />
+                  {cases?.keyDateLabel ?? "Fecha clave"}
+                </h4>
+                <p className="mt-1 text-sm">
+                  {contact.key_date ? formatKeyDate(contact.key_date) : "Sin fecha"}
+                </p>
+              </div>
+            )}
+
             {/* Connected platforms */}
             {details.channels.length > 0 && (
               <div>
@@ -196,13 +475,13 @@ export function ContactPanel({
             )}
 
             {/* Email */}
-            {details.contact.email && (
+            {contact.email && (
               <div>
                 <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                   <Mail className="h-3 w-3" />
                   Correo electrónico
                 </h4>
-                <p className="mt-1 text-sm">{details.contact.email}</p>
+                <p className="mt-1 text-sm">{contact.email}</p>
               </div>
             )}
 
@@ -213,7 +492,7 @@ export function ContactPanel({
                 Última interacción
               </h4>
               <p className="mt-1 text-sm">
-                {formatDate(details.contact.last_interaction_at)}
+                {formatDate(contact.last_interaction_at)}
               </p>
             </div>
 
@@ -224,22 +503,54 @@ export function ContactPanel({
                 Creado
               </h4>
               <p className="mt-1 text-sm">
-                {formatDate(details.contact.created_at)}
+                {formatDate(contact.created_at)}
               </p>
             </div>
 
             {/* Tags */}
             <div>
-              <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                <Tag className="h-3 w-3" />
-                Etiquetas
-              </h4>
+              <div className="flex items-center justify-between">
+                <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+                  <Tag className="h-3 w-3" />
+                  Etiquetas
+                  {saving === "tags" && <Loader2 className="h-3 w-3 animate-spin" />}
+                </h4>
+                {availableTags.length > 0 && !addingTag && (
+                  <button
+                    onClick={() => setAddingTag(true)}
+                    disabled={saving !== null}
+                    className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Agregar
+                  </button>
+                )}
+              </div>
+              {addingTag && (
+                <select
+                  autoFocus
+                  defaultValue=""
+                  onChange={(e) => void addTag(e.target.value)}
+                  onBlur={() => setAddingTag(false)}
+                  className={cn(selectClass, "mt-2 w-full text-sm")}
+                  aria-label="Agregar etiqueta"
+                >
+                  <option value="" disabled>
+                    Elige una etiqueta
+                  </option>
+                  {availableTags.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               {details.tags.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {details.tags.map((tag) => (
                     <span
                       key={tag.id}
-                      className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-xs"
+                      className="group inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"
                       style={
                         tag.color
                           ? {
@@ -251,11 +562,19 @@ export function ContactPanel({
                       }
                     >
                       {tag.name}
+                      <button
+                        onClick={() => void removeTag(tag.id)}
+                        disabled={saving !== null}
+                        aria-label={`Quitar la etiqueta ${tag.name}`}
+                        className="rounded-full opacity-60 hover:opacity-100 disabled:opacity-30"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
                     </span>
                   ))}
                 </div>
               ) : (
-                <p className="mt-1 text-xs text-muted-foreground">Sin etiquetas</p>
+                !addingTag && <p className="mt-1 text-xs text-muted-foreground">Sin etiquetas</p>
               )}
             </div>
 

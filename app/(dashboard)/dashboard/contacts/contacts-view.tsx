@@ -15,6 +15,10 @@ import {
 import { cn } from "@/lib/utils";
 import { formatNumber, formatRelative } from "@/lib/format";
 import {
+  NO_VALUE_FILTER,
+  matchesContactFilters,
+} from "@/components/contacts/contact-filters";
+import {
   SegmentBuilder,
   createEmptyFilter,
   type SegmentFilter,
@@ -34,39 +38,55 @@ function formatDate(dateStr: string | null): string {
   return formatRelative(dateStr);
 }
 
+interface ContactTypeOption {
+  id: string;
+  name: string;
+  color: string | null;
+  archived: boolean;
+}
+
+const FILTER_SELECT_CLASS =
+  "rounded-lg border border-input bg-background px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+
 export function ContactsView({
   contacts,
   tags,
+  contactTypes,
+  teams,
+  members,
   workspaceId,
 }: {
   contacts: ContactWithTags[];
   tags: Tag[];
+  contactTypes: ContactTypeOption[];
+  teams: { id: string; name: string }[];
+  members: { userId: string; name: string }[];
   workspaceId: string;
 }) {
   const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
   const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>(
     createEmptyFilter()
   );
 
-  const filtered = contacts.filter((contact) => {
-    // Search filter
-    if (search) {
-      const q = search.toLowerCase();
-      const name = contact.display_name?.toLowerCase() ?? "";
-      const email = contact.email?.toLowerCase() ?? "";
-      if (!name.includes(q) && !email.includes(q)) return false;
-    }
-    // Tag filter
-    if (selectedTagId) {
-      const hasTag = contact.contact_tags.some(
-        (ct) => ct.tag_id === selectedTagId
-      );
-      if (!hasTag) return false;
-    }
-    return true;
-  });
+  const typeById = new Map(contactTypes.map((t) => [t.id, t]));
+  const memberName = new Map(members.map((m) => [m.userId, m.name]));
+  const teamName = new Map(teams.map((t) => [t.id, t.name]));
+
+  const filtered = contacts.filter((contact) =>
+    matchesContactFilters(contact, {
+      search,
+      tagId: selectedTagId,
+      contactTypeId: typeFilter,
+      ownerId: ownerFilter,
+      teamId: teamFilter,
+    })
+  );
+  const hasExtraFilters = !!(typeFilter || ownerFilter || teamFilter);
 
   return (
     <div className="flex h-full flex-col">
@@ -82,17 +102,74 @@ export function ContactsView({
         </div>
 
         {/* Search and filters */}
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="text"
-              placeholder="Buscar por nombre o correo..."
+              placeholder="Buscar por nombre, correo o teléfono..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
+          <select
+            aria-label="Tipo de contacto"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className={FILTER_SELECT_CLASS}
+          >
+            <option value="">Todos los tipos</option>
+            <option value={NO_VALUE_FILTER}>Sin tipo</option>
+            {contactTypes.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+                {t.archived ? " (archivado)" : ""}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Responsable"
+            value={ownerFilter}
+            onChange={(e) => setOwnerFilter(e.target.value)}
+            className={FILTER_SELECT_CLASS}
+          >
+            <option value="">Todos los responsables</option>
+            <option value={NO_VALUE_FILTER}>Sin responsable</option>
+            {members.map((m) => (
+              <option key={m.userId} value={m.userId}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+          {teams.length > 0 && (
+            <select
+              aria-label="Equipo"
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+              className={FILTER_SELECT_CLASS}
+            >
+              <option value="">Todos los equipos</option>
+              <option value={NO_VALUE_FILTER}>Sin equipo</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {hasExtraFilters && (
+            <button
+              onClick={() => {
+                setTypeFilter("");
+                setOwnerFilter("");
+                setTeamFilter("");
+              }}
+              className="text-sm text-muted-foreground underline hover:text-foreground"
+            >
+              Limpiar filtros
+            </button>
+          )}
           <button
             onClick={() => setShowSegmentBuilder(!showSegmentBuilder)}
             className={cn(
@@ -186,6 +263,15 @@ export function ContactsView({
                   Nombre
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+                  Tipo
+                </th>
+                <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+                  Responsable
+                </th>
+                <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+                  Equipo
+                </th>
+                <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
                   Correo electrónico
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
@@ -231,6 +317,36 @@ export function ContactsView({
                           {contact.display_name ?? "Desconocido"}
                         </span>
                       </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      {contact.contact_type_id && typeById.get(contact.contact_type_id) ? (
+                        <span
+                          className="inline-flex rounded-full border border-border px-2 py-0.5 text-xs font-medium"
+                          style={
+                            typeById.get(contact.contact_type_id)?.color
+                              ? {
+                                  backgroundColor: `${typeById.get(contact.contact_type_id)?.color}20`,
+                                  borderColor: `${typeById.get(contact.contact_type_id)?.color}40`,
+                                  color: typeById.get(contact.contact_type_id)?.color ?? undefined,
+                                }
+                              : undefined
+                          }
+                        >
+                          {typeById.get(contact.contact_type_id)?.name}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/50">Sin tipo</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {contact.owner_id ? (
+                        (memberName.get(contact.owner_id) ?? "Alguien")
+                      ) : (
+                        <span className="text-xs text-muted-foreground/50">Sin responsable</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {contact.team_id ? (teamName.get(contact.team_id) ?? "—") : "—"}
                     </td>
                     <td className="px-4 py-3">
                       {contact.email ? (

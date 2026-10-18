@@ -1,45 +1,203 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { MessageSquare, RefreshCw, User } from "lucide-react";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactPanel } from "@/components/inbox/contact-panel";
+import { CaseCard } from "@/components/inbox/case-card";
+import { useInboxData } from "@/components/inbox/use-inbox-data";
+import { useContactCases } from "@/components/inbox/use-contact-cases";
+import { useCaseNotes } from "@/components/inbox/use-case-notes";
+import type { InboxCase, InboxConversation, InboxMeta, InboxRow } from "@/components/inbox/inbox-model";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { Database } from "@/lib/types/database";
 
-type Conversation = Database["public"]["Tables"]["conversations"]["Row"] & {
-  contacts: Database["public"]["Tables"]["contacts"]["Row"] | null;
-};
 type Message = Database["public"]["Tables"]["messages"]["Row"];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** El chat más reciente del contacto. */
+function latestConversation(list: InboxConversation[]): InboxConversation | null {
+  return (
+    [...list].sort(
+      (a, b) =>
+        new Date(b.last_message_at ?? b.created_at).getTime() - new Date(a.last_message_at ?? a.created_at).getTime(),
+    )[0] ?? null
+  );
+}
+
 export function InboxView({
-  conversations,
+  conversations: initialConversations,
+  cases: initialCases,
   workspaceId,
+  meta,
 }: {
-  conversations: Conversation[];
+  conversations: InboxConversation[];
+  cases: InboxCase[];
   workspaceId: string;
+  meta: InboxMeta;
 }) {
   const router = useRouter();
-  const [selected, setSelected] = useState<Conversation | null>(null);
+  const searchParams = useSearchParams();
+  const data = useInboxData({ workspaceId, initialConversations, initialCases });
+  const { conversations, casesByContact, ensureContactConversations, refreshContactCases, markConversationRead } = data;
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [showContactPanel, setShowContactPanel] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; contactId?: string } | null>(null);
+
+  const selected = conversations.find((c) => c.id === selectedId) ?? null;
+  const contactId = selected?.contact_id ?? null;
+  const contactCases = useContactCases(contactId);
+  const { notes, addLocal: addLocalNote } = useCaseNotes(contactId, selectedId);
+  const casesData = contactCases.data;
+
+  // Gestión activa: la elegida (URL o selector) si sigue en la vista; si no, la que sugiere el servidor.
+  const allCases = casesData ? [...casesData.cases, ...casesData.recentClosed] : [];
+  const activeCase =
+    allCases.find((c) => c.id === activeCaseId) ??
+    allCases.find((c) => c.id === casesData?.activeCaseId) ??
+    null;
+
+  // Guarda contacto y gestión en la URL sin volver a pedir la página al servidor.
+  const syncUrl = useCallback((contact: string | null, caseId: string | null) => {
+    const params = new URLSearchParams(window.location.search);
+    if (contact) params.set("contact", contact);
+    else params.delete("contact");
+    if (caseId) params.set("case", caseId);
+    else params.delete("case");
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, []);
+
+  // ?contact=<id>&case=<id> (p. ej. desde una notificación) abre ese chat y esa gestión.
+  const paramContact = searchParams.get("contact");
+  const paramCase = searchParams.get("case");
+  const lastParams = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${paramContact ?? ""}|${paramCase ?? ""}`;
+    if (lastParams.current === key) return;
+    lastParams.current = key;
+    if (!paramContact || !UUID_RE.test(paramContact)) return;
+    const wantedCase = paramCase && UUID_RE.test(paramCase) ? paramCase : null;
+
+    const current = conversations.find((c) => c.id === selectedId);
+    if (current?.contact_id === paramContact) {
+      if (wantedCase) setActiveCaseId(wantedCase);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      let list = conversations.filter((c) => c.contact_id === paramContact);
+      if (list.length === 0) list = await ensureContactConversations(paramContact, true);
+      if (cancelled) return;
+      const target = latestConversation(list);
+      if (!target) {
+        setNotice({ text: "Este contacto no tiene un chat que puedas ver.", contactId: paramContact });
+        return;
+      }
+      setNotice(null);
+      setSelectedId(target.id);
+      setActiveCaseId(wantedCase);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [paramContact, paramCase, conversations, selectedId, ensureContactConversations]);
+
+  const handleSelect = useCallback(
+    (row: InboxRow) => {
+      setNotice(null);
+      setSelectedId(row.conversation.id);
+      setActiveCaseId(row.case?.id ?? null);
+      lastParams.current = `${row.conversation.contact_id}|${row.case?.id ?? ""}`;
+      syncUrl(row.conversation.contact_id, row.case?.id ?? null);
+    },
+    [syncUrl],
+  );
+
+  const handleSelectCase = useCallback(
+    (caseId: string) => {
+      setActiveCaseId(caseId);
+      if (contactId) {
+        lastParams.current = `${contactId}|${caseId}`;
+        syncUrl(contactId, caseId);
+      }
+    },
+    [contactId, syncUrl],
+  );
+
+  // Después de una acción: vuelve a leer la tarjeta y las gestiones del contacto en la lista.
+  const reloadContactCases = contactCases.reload;
+  const handleCaseChanged = useCallback(async () => {
+    if (!contactId) return;
+    await Promise.all([reloadContactCases(), refreshContactCases(contactId)]);
+  }, [contactId, reloadContactCases, refreshContactCases]);
+
+  // Load messages when a conversation is selected
+  const unread = selected?.unread_count ?? 0;
+  const unreadRef = useRef(unread);
+  unreadRef.current = unread;
+  useEffect(() => {
+    if (!selectedId) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadMessages(id: string) {
+      setLoadingMessages(true);
+      setMessages([]);
+      try {
+        const res = await fetch(`/api/v1/messages?conversationId=${id}`);
+        if (cancelled) return;
+        if (res.ok) {
+          const json = await res.json();
+          if (!cancelled) setMessages(json ?? []);
+        } else {
+          console.error("Failed to load messages:", res.status);
+          setMessages([]);
+        }
+      } catch (err) {
+        console.error("Failed to load messages:", err);
+        if (!cancelled) setMessages([]);
+      } finally {
+        if (!cancelled) setLoadingMessages(false);
+      }
+
+      // Mark as read
+      if (unreadRef.current > 0) {
+        markConversationRead(id);
+        await createClient().from("conversations").update({ unread_count: 0 }).eq("id", id);
+      }
+    }
+
+    void loadMessages(selectedId);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, markConversationRead]);
 
   // Imports conversations that already exist in Zernio (e.g. from before the
   // webhook was registered), then refreshes the server-rendered list.
+  // Solo administradores: la ruta responde 403 a los demás.
   async function handleSyncConversations() {
     setSyncing(true);
     setSyncError(null);
     try {
       const res = await fetch("/api/v1/channels/sync", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setSyncError(data.error || "No se pudo sincronizar");
+      const json = await res.json();
+      if (!res.ok || json.error) {
+        setSyncError(json.error || "No se pudo sincronizar");
         return;
       }
       router.refresh();
@@ -50,50 +208,9 @@ export function InboxView({
     }
   }
 
-  // Keep selected conversation in sync when conversation list updates
-  const handleSelect = useCallback((c: Conversation) => {
-    setSelected(c);
-  }, []);
-
-  // Load messages when a conversation is selected
-  useEffect(() => {
-    if (!selected) {
-      setMessages([]);
-      return;
-    }
-
-    async function loadMessages() {
-      setLoadingMessages(true);
-      try {
-        const res = await fetch(
-          `/api/v1/messages?conversationId=${selected!.id}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          setMessages(data ?? []);
-        } else {
-          console.error("Failed to load messages:", res.status);
-          setMessages([]);
-        }
-      } catch (err) {
-        console.error("Failed to load messages:", err);
-        setMessages([]);
-      } finally {
-        setLoadingMessages(false);
-      }
-
-      // Mark as read
-      if (selected!.unread_count > 0) {
-        const supabase = createClient();
-        await supabase
-          .from("conversations")
-          .update({ unread_count: 0 })
-          .eq("id", selected!.id);
-      }
-    }
-
-    loadMessages();
-  }, [selected?.id]);
+  const me = meta.members.find((m) => m.userId === meta.userId);
+  const meInfo = { userId: meta.userId, name: me?.name ?? "" };
+  const teamName = activeCase?.teamId ? meta.teams.find((t) => t.id === activeCase.teamId)?.name ?? null : null;
 
   return (
     <div className="flex h-full">
@@ -101,9 +218,13 @@ export function InboxView({
       <div className="w-80 flex-shrink-0">
         <ConversationList
           conversations={conversations}
-          workspaceId={workspaceId}
-          selectedId={selected?.id ?? null}
+          casesByContact={casesByContact}
+          meta={meta}
+          selectedId={selectedId}
           onSelect={handleSelect}
+          onSync={meta.isAdmin ? handleSyncConversations : undefined}
+          syncing={syncing}
+          syncError={conversations.length > 0 ? syncError : null}
         />
       </div>
 
@@ -122,6 +243,16 @@ export function InboxView({
             </button>
           </div>
         )}
+        {notice && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+            <span>{notice.text}</span>
+            {notice.contactId && (
+              <Link href={`/dashboard/contacts/${notice.contactId}`} className="font-medium text-primary hover:underline">
+                Ver ficha completa
+              </Link>
+            )}
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           {conversations.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center px-6 text-center">
@@ -129,30 +260,62 @@ export function InboxView({
               <p className="mt-3 text-sm font-medium text-muted-foreground">
                 Aún no hay conversaciones
               </p>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground/70">
-                Si ya tienes conversaciones en Zernio, sincronízalas para
-                traerlas a tu bandeja.
-              </p>
-              <button
-                onClick={handleSyncConversations}
-                disabled={syncing}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"
-              >
-                <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
-                {syncing ? "Sincronizando..." : "Sincronizar conversaciones"}
-              </button>
-              {syncError && (
-                <p className="mt-2 text-xs text-destructive">{syncError}</p>
+              {meta.isAdmin ? (
+                <>
+                  <p className="mt-1 max-w-xs text-xs text-muted-foreground/70">
+                    Si ya tienes conversaciones en Zernio, sincronízalas para
+                    traerlas a tu bandeja.
+                  </p>
+                  <button
+                    onClick={handleSyncConversations}
+                    disabled={syncing}
+                    className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                  >
+                    <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+                    {syncing ? "Sincronizando..." : "Sincronizar conversaciones"}
+                  </button>
+                  {syncError && (
+                    <p className="mt-2 text-xs text-destructive">{syncError}</p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-1 max-w-xs text-xs text-muted-foreground/70">
+                  Aquí verás los chats de las gestiones que te asignen.
+                </p>
               )}
-            </div>
-          ) : loadingMessages && selected ? (
-            <div className="flex h-full items-center justify-center">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
             </div>
           ) : (
             <MessageThread
               conversation={selected}
               messages={messages}
+              loading={loadingMessages}
+              caseSlot={
+                selected ? (
+                  casesData ? (
+                    <CaseCard
+                      data={casesData}
+                      activeCaseId={activeCase?.id ?? null}
+                      members={meta.members}
+                      onSelectCase={handleSelectCase}
+                      onChanged={handleCaseChanged}
+                    />
+                  ) : contactCases.error ? (
+                    <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-destructive">
+                      {contactCases.error}
+                    </div>
+                  ) : (
+                    <div className="h-[41px] shrink-0 border-b border-border bg-muted/30" />
+                  )
+                ) : null
+              }
+              notes={notes}
+              members={meta.members}
+              noteCase={activeCase}
+              me={meInfo}
+              teamName={teamName}
+              workspaceName={meta.workspaceName}
+              onNoteAdded={addLocalNote}
+              onCaseActivity={() => void handleCaseChanged()}
             />
           )}
         </div>
@@ -161,9 +324,13 @@ export function InboxView({
       {/* Right panel: Contact info */}
       {showContactPanel && selected?.contact_id && (
         <ContactPanel
+          key={selected.contact_id}
           contactId={selected.contact_id}
           workspaceId={workspaceId}
           onClose={() => setShowContactPanel(false)}
+          cases={casesData}
+          members={meta.members}
+          onContactChanged={() => void handleCaseChanged()}
         />
       )}
     </div>
