@@ -22,6 +22,7 @@ import {
   type InboxRow,
   type InboxViewKey,
 } from "./inbox-model";
+import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
 
@@ -63,6 +64,7 @@ export function ConversationList({
   }, [conversations, casesByContact, filters, meta, nowDate]);
 
   const rows = rowsByView.get(view) ?? [];
+  const demoChannelIds = useMemo(() => new Set(meta.demoChannelIds ?? []), [meta.demoChannelIds]);
   const typeById = useMemo(() => new Map(meta.caseTypes.map((t) => [t.id, t])), [meta.caseTypes]);
   const platforms = useMemo(
     () => [...new Set(conversations.map((c) => c.platform))].sort() as Platform[],
@@ -302,8 +304,9 @@ export function ConversationList({
                 {/* Content */}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm font-medium">
-                      {conversation.contacts?.display_name ?? "Desconocido"}
+                    <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+                      <span className="truncate">{conversation.contacts?.display_name ?? "Desconocido"}</span>
+                      {demoChannelIds.has(conversation.channel_id) && <DemoBadge />}
                     </p>
                     <span
                       suppressHydrationWarning

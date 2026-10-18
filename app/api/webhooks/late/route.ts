@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { executeFlow } from "@/lib/flow-engine/engine";
-import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webhook";
 import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
 import { messagePreview } from "@/lib/message-preview";
-import { handleInbound } from "@/lib/cases";
+import { runInboundPipeline } from "@/lib/inbound-pipeline";
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -267,69 +265,23 @@ async function processMessageEvent(
 
   // Messages are stored by Zernio (source of truth) — no local insert needed.
 
-  // ── Gestiones (docs/FASE-1-TECNICO.md 3.1) ───────────────────────────────
-  // Abre o retoma la gestión del contacto y la reparte. Un fallo aquí no debe
-  // impedir que corran los flujos.
-  try {
-    await handleInbound(supabase, {
-      workspaceId: channel.workspace_id,
-      contactId,
-      conversationId: conversation.id,
-      at: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("Case engine (handleInbound) error:", err);
-  }
-
-  // ── Flow engine ───────────────────────────────────────────────────────────
-
-  if (!conversation.is_automation_paused) {
-    const incomingMessage = {
-      text: msg.text || undefined,
-      postbackPayload: metadata?.postbackPayload || undefined,
-      quickReplyPayload: metadata?.quickReplyPayload || undefined,
-      callbackData: metadata?.callbackData || undefined,
-      sender: {
-        id: msg.sender.id,
-        name: msg.sender.name,
-        username: msg.sender.username || undefined,
-      },
-    };
-
-    const handled = await handleGlobalKeywords(
-      supabase,
-      channel.workspace_id,
-      contactId,
-      msg.text || undefined
-    );
-
-    if (!handled) {
-      const trigger = await matchTrigger(supabase, {
-        channelId: channel.id,
-        workspaceId: channel.workspace_id,
-        conversationId: conversation.id,
-        message: incomingMessage,
-        isFirstMessage: !contact.existed,
-      });
-      if (trigger) {
-        try {
-          await executeFlow(supabase, {
-            triggerId: trigger.id,
-            flowId: trigger.flow_id,
-            channelId: channel.id,
-            contactId,
-            conversationId: conversation.id,
-            workspaceId: channel.workspace_id,
-            incomingMessage,
-            lateConversationId: conv.id,
-            lateAccountId: account.id,
-          });
-        } catch (err) {
-          console.error("Flow execution error:", err);
-        }
-      }
-    }
-  }
+  // Gestiones y flujos (lib/inbound-pipeline.ts, compartido con la simulación
+  // de mensajes de los canales de prueba).
+  await runInboundPipeline(supabase, {
+    channel,
+    contactId,
+    conversation,
+    isFirstMessage: !contact.existed,
+    message: {
+      text: msg.text,
+      postbackPayload: metadata?.postbackPayload,
+      quickReplyPayload: metadata?.quickReplyPayload,
+      callbackData: metadata?.callbackData,
+      sender: { id: msg.sender.id, name: msg.sender.name, username: msg.sender.username },
+    },
+    lateConversationId: conv.id,
+    lateAccountId: account.id,
+  });
 }
 
 // ── Comment webhook ─────────────────────────────────────────────────────────
@@ -395,53 +347,4 @@ async function handleCommentWebhook(
   });
 
   return NextResponse.json({ ok: true, queued: true });
-}
-
-// ── Global keywords ─────────────────────────────────────────────────────────
-
-async function handleGlobalKeywords(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  workspaceId: string,
-  contactId: string,
-  text: string | undefined
-): Promise<boolean> {
-  if (!text) return false;
-
-  const { data: workspace } = await supabase
-    .from("workspaces")
-    .select("global_keywords")
-    .eq("id", workspaceId)
-    .single();
-
-  if (!workspace?.global_keywords) return false;
-
-  const keywords = workspace.global_keywords as Array<{
-    keyword: string;
-    action?: string;
-    flowId?: string;
-  }>;
-
-  const normalizedText = text.toLowerCase().trim();
-
-  for (const kw of keywords) {
-    if (normalizedText === kw.keyword.toLowerCase()) {
-      if (kw.action === "unsubscribe") {
-        await supabase
-          .from("contacts")
-          .update({ is_subscribed: false })
-          .eq("id", contactId);
-        return true;
-      }
-      if (kw.action === "subscribe") {
-        await supabase
-          .from("contacts")
-          .update({ is_subscribed: true })
-          .eq("id", contactId);
-        return true;
-      }
-      return false;
-    }
-  }
-
-  return false;
 }

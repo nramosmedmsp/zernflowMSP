@@ -40,6 +40,8 @@ export interface InboxMeta {
   caseTypes: InboxCaseType[];
   teams: { id: string; name: string }[];
   members: InboxMember[];
+  /** Canales de prueba del espacio (lib/demo.ts): etiqueta "Prueba". */
+  demoChannelIds?: string[];
 }
 
 export type InboxViewKey = "mine" | "today" | "unassigned" | "team" | "all";

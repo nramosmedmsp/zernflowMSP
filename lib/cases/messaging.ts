@@ -2,6 +2,8 @@
 // plantilla de las proactivas) por Zernio. Se inyecta como dependencia para
 // probar el motor sin red.
 
+import { demoTemplateText, isDemoChannel } from "@/lib/demo";
+import { demoConversationByLateId, demoConversationByPhone, storeDemoMessage } from "@/lib/demo-messages";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { zernioErrorMessage, zernioFailed } from "@/lib/zernio-error";
 import type { Db } from "./io";
@@ -44,8 +46,21 @@ function messageIdOf(data: unknown): string | null {
   return typeof inner?.messageId === "string" ? inner.messageId : null;
 }
 
-/** Envíos reales por Zernio con la clave del espacio (cliente de servicio). */
-export function zernioMessenger(db: Db): CaseMessenger {
+export interface MessengerOptions {
+  /**
+   * Canales de prueba (lib/demo.ts): guardar el mensaje en `messages` (por
+   * defecto sí). El nodo de plantilla de los flujos ya guarda el suyo y pasa
+   * false para no duplicarlo.
+   */
+  storeDemoMessages?: boolean;
+}
+
+/**
+ * Envíos reales por Zernio con la clave del espacio (cliente de servicio). En
+ * canales de prueba no se llama a Zernio: el mensaje se guarda localmente.
+ */
+export function zernioMessenger(db: Db, options: MessengerOptions = {}): CaseMessenger {
+  const storeDemo = options.storeDemoMessages !== false;
   async function client(workspaceId: string) {
     const apiKey = await getLateApiKey(workspaceId, db);
     if (!apiKey) return null;
@@ -55,6 +70,13 @@ export function zernioMessenger(db: Db): CaseMessenger {
 
   return {
     async sendText(input) {
+      if (isDemoChannel(input.lateAccountId)) {
+        if (!storeDemo) return { ok: true, messageId: null };
+        const conversationId = await demoConversationByLateId(db, input.workspaceId, input.lateConversationId);
+        if (!conversationId) return { ok: false, error: "No se encontró la conversación de prueba." };
+        const stored = await storeDemoMessage(db, { conversationId, direction: "outbound", text: input.text });
+        return stored.ok ? { ok: true, messageId: stored.messageId } : { ok: false, error: stored.error };
+      }
       try {
         const zernio = await client(input.workspaceId);
         if (!zernio) return { ok: false, error: NO_KEY };
@@ -72,6 +94,21 @@ export function zernioMessenger(db: Db): CaseMessenger {
     },
 
     async sendTemplate(input) {
+      if (isDemoChannel(input.lateAccountId)) {
+        if (!storeDemo) return { ok: true, messageId: null };
+        const conversationId = await demoConversationByPhone(db, {
+          workspaceId: input.workspaceId,
+          lateAccountId: input.lateAccountId,
+          phone: input.phone,
+        });
+        if (!conversationId) return { ok: false, error: "No se encontró la conversación de prueba de ese teléfono." };
+        const stored = await storeDemoMessage(db, {
+          conversationId,
+          direction: "outbound",
+          text: demoTemplateText(input.templateName, input.params),
+        });
+        return stored.ok ? { ok: true, messageId: stored.messageId } : { ok: false, error: stored.error };
+      }
       try {
         const zernio = await client(input.workspaceId);
         if (!zernio) return { ok: false, error: NO_KEY };

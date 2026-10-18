@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createZernioClient } from "@/lib/zernio-client";
 import { requireApiAdmin } from "@/lib/api-auth";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { isDemoChannel } from "@/lib/demo";
 
 /**
  * DELETE /api/v1/channels/[channelId]
@@ -31,7 +32,8 @@ export async function DELETE(
   if (!channel)
     return NextResponse.json({ error: "No se encontró el canal" }, { status: 404 });
 
-  const lateApiKey = await getLateApiKey(workspace.id);
+  // Un canal de prueba (lib/demo.ts) no existe en Zernio: solo se borra la fila local.
+  const lateApiKey = isDemoChannel(channel) ? null : await getLateApiKey(workspace.id);
   if (lateApiKey) {
     const zernio = createZernioClient(lateApiKey);
     try {

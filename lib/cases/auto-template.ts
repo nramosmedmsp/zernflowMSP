@@ -8,6 +8,7 @@
 // - si falla, queda en la primera etapa, se registra y se avisa al
 //   responsable (o a supervisores/administradores si no tiene).
 
+import { isDemoChannel } from "@/lib/demo";
 import { displayName } from "@/lib/team-rules";
 import { applyReplyVariables } from "@/lib/saved-replies";
 import type { CaseTypeAutoTemplate } from "@/lib/types/database";
@@ -123,7 +124,9 @@ async function whatsappTarget(db: Db, workspaceId: string, contactId: string, co
     const phone = phoneDigits(link.platform_sender_id);
     if (channel && phone) return { channelId: channel.id, lateAccountId: channel.late_account_id, phone };
   }
-  return { channelId: list[0].id, lateAccountId: list[0].late_account_id, phone: phoneDigits(contactPhone) };
+  // Sin vínculo: el primer canal real (los de prueba solo sirven a sus contactos).
+  const fallback = list.find((c) => !isDemoChannel(c.late_account_id)) ?? list[0];
+  return { channelId: fallback.id, lateAccountId: fallback.late_account_id, phone: phoneDigits(contactPhone) };
 }
 
 export async function customFieldsOf(db: Db, workspaceId: string, contactId: string): Promise<Record<string, string>> {

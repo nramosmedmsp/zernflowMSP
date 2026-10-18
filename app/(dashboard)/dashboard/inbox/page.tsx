@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { getWorkspace } from "@/lib/workspace";
 import { listCaseMembers } from "@/lib/actions/cases";
+import { isDemoChannel } from "@/lib/demo";
 import { agentVisibilityFromSettings, isAdminRole } from "@/lib/permissions";
 import type { InboxCase, InboxConversation, InboxMeta } from "@/components/inbox/inbox-model";
 import { InboxView } from "./inbox-view";
@@ -20,7 +21,7 @@ function chunks<T>(list: T[], size: number): T[][] {
 export default async function InboxPage() {
   const { user, workspace, role, supabase } = await getWorkspace();
 
-  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult] =
+  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult, { data: channels }] =
     await Promise.all([
       supabase
         .from("conversations")
@@ -47,6 +48,7 @@ export default async function InboxPage() {
         .is("archived_at", null)
         .order("name", { ascending: true }),
       listCaseMembers(),
+      supabase.from("channels").select("id, late_account_id").eq("workspace_id", workspace.id),
     ]);
 
   const typeIds = (types ?? []).map((t) => t.id);
@@ -91,6 +93,7 @@ export default async function InboxPage() {
         .map((s) => ({ id: s.id, name: s.name, color: s.color, kind: s.kind, archived: s.archived_at !== null })),
     })),
     teams: teams ?? [],
+    demoChannelIds: (channels ?? []).filter((c) => isDemoChannel(c)).map((c) => c.id),
     members: members.map((m) => ({
       userId: m.userId,
       name: m.name,

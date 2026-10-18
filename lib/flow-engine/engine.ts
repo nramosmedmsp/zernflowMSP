@@ -22,6 +22,7 @@ import { adaptMessage } from "./platform-adapter";
 import { createZernioClient } from "@/lib/zernio-client";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { stampBotOutbound } from "@/lib/cases/inbound";
+import { demoTemplateText, isDemoChannel } from "@/lib/demo";
 import { messagePreview } from "@/lib/message-preview";
 import { CASE_ACTION_TYPES, type CaseActionType } from "./types";
 import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
@@ -556,8 +557,10 @@ async function sendTemplateFromNode(
   template: NonNullable<ReturnType<typeof parseNodeTemplate>>,
   lateAccountId: string
 ) {
-  const text = `Plantilla: ${template.template_name}`;
+  let text = `Plantilla: ${template.template_name}`;
   const result = await sendFlowTemplate(supabase, context, template, lateAccountId);
+  // Canal de prueba (lib/demo.ts): se guarda el texto de la plantilla con sus variables.
+  if (result.ok && isDemoChannel(lateAccountId)) text = demoTemplateText(template.template_name, result.params);
   if (!result.ok) {
     console.error("Failed to send template:", result.error);
     await supabase.from("messages").insert({
@@ -604,12 +607,6 @@ async function executeSendMessage(
   data: SendMessageNodeData,
   context: FlowExecutionContext
 ) {
-  // Get workspace for API key
-  const lateApiKey = await getLateApiKey(context.workspaceId, supabase);
-  if (!lateApiKey) return;
-
-  const zernio = createZernioClient(lateApiKey);
-
   // Resolve late_account_id from channel if not in context
   let lateAccountId = context.lateAccountId;
   if (!lateAccountId) {
@@ -626,6 +623,18 @@ async function executeSendMessage(
     }
   }
 
+  // Canal de prueba (lib/demo.ts): no se llama a Zernio (el mensaje se guarda
+  // abajo en `messages`, como siempre), así que tampoco hace falta la clave.
+  const demo = isDemoChannel(lateAccountId);
+
+  // Get workspace for API key
+  let zernio: ReturnType<typeof createZernioClient> | null = null;
+  if (!demo) {
+    const lateApiKey = await getLateApiKey(context.workspaceId, supabase);
+    if (!lateApiKey) return;
+    zernio = createZernioClient(lateApiKey);
+  }
+
   // Resolve late_conversation_id from conversation if not in context
   let lateConversationId = context.lateConversationId;
   if (!lateConversationId) {
@@ -640,7 +649,7 @@ async function executeSendMessage(
       // exactly one private reply per comment, so deliver the first message via
       // the private-reply endpoint instead of silently dropping the whole node
       // (users build comment flows with plain Send Message nodes, not Private Reply).
-      if (context.variables?.comment_id && context.variables?.post_id && lateAccountId) {
+      if (zernio && context.variables?.comment_id && context.variables?.post_id && lateAccountId) {
         await sendFirstMessageAsPrivateReply(supabase, zernio, data, context, lateAccountId);
         return;
       }
@@ -718,10 +727,12 @@ async function executeSendMessage(
         body.replyMarkup = adapted.replyMarkup;
       }
 
-      const response = await zernio.messages.sendInboxMessage({
-        path: { conversationId: lateConversationId },
-        body: body as Parameters<typeof zernio.messages.sendInboxMessage>[0]["body"],
-      });
+      const response = zernio
+        ? await zernio.messages.sendInboxMessage({
+            path: { conversationId: lateConversationId },
+            body: body as Parameters<typeof zernio.messages.sendInboxMessage>[0]["body"],
+          })
+        : null;
 
       // Store outbound message
       await supabase.from("messages").insert({
@@ -731,9 +742,15 @@ async function executeSendMessage(
         attachments: attachments || null,
         sent_by_flow_id: context.flowId,
         sent_by_node_id: null,
-        platform_message_id: response.data?.data?.messageId || null,
+        platform_message_id: response?.data?.data?.messageId || (demo ? `demo-${crypto.randomUUID()}` : null),
         status: "sent",
       });
+      if (demo) {
+        await supabase
+          .from("conversations")
+          .update({ last_message_at: new Date().toISOString(), last_message_preview: messagePreview(text) })
+          .eq("id", context.conversationId);
+      }
 
       // Gestiones: el bot solo sella la salida (no cuenta como respuesta humana).
       await stampFlowOutbound(supabase, context);

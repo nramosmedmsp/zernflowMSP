@@ -316,6 +316,8 @@ export function InboxView({
               workspaceName={meta.workspaceName}
               onNoteAdded={addLocalNote}
               onCaseActivity={() => void handleCaseChanged()}
+              isDemo={!!selected && (meta.demoChannelIds ?? []).includes(selected.channel_id)}
+              canSimulate={meta.isAdmin}
             />
           )}
         </div>

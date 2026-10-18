@@ -5,6 +5,8 @@ import { handleHumanOutboundForConversation } from "@/lib/cases";
 import { createZernioClient } from "@/lib/zernio-client";
 import { messagePreview } from "@/lib/message-preview";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { demoTemplateText, isDemoChannel } from "@/lib/demo";
+import { storeDemoMessage } from "@/lib/demo-messages";
 import {
   TEMPLATE_PARAM_MAX,
   fillPlaceholders,
@@ -83,6 +85,49 @@ export async function POST(request: NextRequest) {
   }
   if (conversation.platform !== "whatsapp" || channel.platform !== "whatsapp") {
     return NextResponse.json({ error: "Las plantillas solo se pueden enviar por WhatsApp" }, { status: 400 });
+  }
+
+  // Canal de prueba (lib/demo.ts): se guarda el texto de la plantilla con sus
+  // variables en lugar de enviarlo.
+  if (isDemoChannel(channel)) {
+    const service = await createServiceClient();
+    const sentAt = new Date().toISOString();
+    const text = demoTemplateText(templateName, params);
+    const stored = await storeDemoMessage(service, {
+      conversationId,
+      direction: "outbound",
+      text,
+      at: sentAt,
+      sentByUserId: user.id,
+    });
+    if (!stored.ok) {
+      console.error("[templates/send] demo store:", stored.error);
+      return NextResponse.json({ error: "No se pudo guardar la plantilla de prueba" }, { status: 500 });
+    }
+    try {
+      await handleHumanOutboundForConversation(service, { conversationId, userId: user.id, at: sentAt });
+    } catch (err) {
+      console.error("Case engine (handleHumanOutbound) error:", err);
+    }
+    return NextResponse.json(
+      {
+        id: stored.messageId,
+        conversation_id: conversationId,
+        direction: "outbound",
+        text,
+        attachments: null,
+        quick_reply_payload: null,
+        postback_payload: null,
+        callback_data: null,
+        platform_message_id: null,
+        sent_by_flow_id: null,
+        sent_by_node_id: null,
+        sent_by_user_id: user.id,
+        status: "sent",
+        created_at: sentAt,
+      },
+      { status: 201 },
+    );
   }
 
   // La clave se lee en el servidor con el cliente de servicio, solo después de

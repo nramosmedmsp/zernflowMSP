@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Paperclip, Bot, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote } from "lucide-react";
+import { Paperclip, Bot, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -10,6 +10,8 @@ import { formatDate, formatTime } from "@/lib/format";
 import type { CaseView } from "@/lib/actions/cases";
 import type { Database, ConversationStatus } from "@/lib/types/database";
 import { Composer } from "./composer";
+import { DemoBadge } from "./demo-badge";
+import { SimulateInboundDialog } from "./simulate-inbound-dialog";
 import { latestIso, memberName, type InboxConversation, type InboxMember } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
 
@@ -159,6 +161,8 @@ export function MessageThread({
   workspaceName = "",
   onNoteAdded,
   onCaseActivity,
+  isDemo = false,
+  canSimulate = false,
 }: {
   conversation: InboxConversation | null;
   messages: Message[];
@@ -175,8 +179,13 @@ export function MessageThread({
   onNoteAdded?: (note: CaseNote) => void;
   /** Se envió algo al cliente: la gestión cambia (sellos, espera). */
   onCaseActivity?: () => void;
+  /** Conversación de un canal de prueba (lib/demo.ts): etiqueta "Prueba". */
+  isDemo?: boolean;
+  /** Administrador: botón "Simular mensaje del cliente" (solo con isDemo). */
+  canSimulate?: boolean;
 }) {
   const router = useRouter();
+  const [simulateOpen, setSimulateOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -363,14 +372,24 @@ export function MessageThread({
               />
             </div>
           </div>
-          <div>
+          <div className="flex items-center gap-2">
             <p className="text-sm font-medium">
               {conversation.contacts?.display_name ?? "Desconocido"}
             </p>
+            {isDemo && <DemoBadge />}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {isDemo && canSimulate && (
+            <button
+              onClick={() => setSimulateOpen(true)}
+              className="inline-flex items-center gap-1 rounded-md border border-violet-200 px-2 py-1 text-[11px] font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-900/60 dark:text-violet-300 dark:hover:bg-violet-950/40"
+            >
+              <FlaskConical className="h-3 w-3" />
+              Simular mensaje del cliente
+            </button>
+          )}
           <span
             className={cn(
               "rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
@@ -462,6 +481,19 @@ export function MessageThread({
           </div>
         )}
       </div>
+
+      {isDemo && canSimulate && (
+        <SimulateInboundDialog
+          open={simulateOpen}
+          conversationId={conversation.id}
+          contactName={conversation.contacts?.display_name ?? null}
+          onClose={() => setSimulateOpen(false)}
+          onSent={() => {
+            void refetchMessages();
+            onCaseActivity?.();
+          }}
+        />
+      )}
 
       {/* Composer */}
       <Composer

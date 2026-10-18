@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
+import { isDemoChannel } from "@/lib/demo";
 import {
   ensureWebhookRegistered,
   getOrCreateWorkspaceWebhookSecret,
@@ -110,6 +111,8 @@ export async function POST() {
     // Deactivate channels whose Zernio accounts no longer exist
     let deactivated = 0;
     for (const channel of existingChannels ?? []) {
+      // Los canales de prueba (lib/demo.ts) no existen en Zernio: no se desactivan.
+      if (isDemoChannel(channel)) continue;
       if (!lateAccountIds.has(channel.late_account_id) && channel.is_active) {
         await supabase
           .from("channels")

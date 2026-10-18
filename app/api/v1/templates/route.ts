@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin, requireApiMember, type ApiContext } from "@/lib/api-auth";
 import { createZernioClient } from "@/lib/zernio-client";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { demoTemplates, isDemoChannel } from "@/lib/demo";
 import {
   buildCreateComponents,
   summarizeTemplate,
@@ -12,7 +13,9 @@ import { zernioErrorMessage, zernioFailed } from "./zernio-error";
 const NO_CHANNEL = "Conecta un canal de WhatsApp para usar plantillas.";
 
 type Resolved =
-  | { ok: true; accountId: string; apiKey: string }
+  | { ok: true; accountId: string; apiKey: string; demo: false }
+  /** Canal de prueba (lib/demo.ts): sin Zernio ni clave. */
+  | { ok: true; accountId: string; apiKey: null; demo: true }
   | { ok: false; response: NextResponse };
 
 /**
@@ -55,6 +58,10 @@ async function resolveWhatsAppChannel(
     return { ok: false, response: NextResponse.json({ error: NO_CHANNEL }, { status: 400 }) };
   }
 
+  if (isDemoChannel(channel)) {
+    return { ok: true, accountId: channel.late_account_id, apiKey: null, demo: true };
+  }
+
   const apiKey = await getLateApiKey(channel.workspace_id);
   if (!apiKey) {
     return {
@@ -62,7 +69,7 @@ async function resolveWhatsAppChannel(
       response: NextResponse.json({ error: "La clave de API no está configurada" }, { status: 400 }),
     };
   }
-  return { ok: true, accountId: channel.late_account_id, apiKey };
+  return { ok: true, accountId: channel.late_account_id, apiKey, demo: false };
 }
 
 /**
@@ -81,6 +88,7 @@ export async function GET(request: NextRequest) {
     conversationId: params.get("conversationId"),
   });
   if (!resolved.ok) return resolved.response;
+  if (resolved.demo) return NextResponse.json({ templates: demoTemplates() });
 
   try {
     const zernio = createZernioClient(resolved.apiKey);
@@ -136,6 +144,9 @@ export async function POST(request: NextRequest) {
     channelId: typeof payload.channelId === "string" ? payload.channelId : null,
   });
   if (!resolved.ok) return resolved.response;
+  if (resolved.demo) {
+    return NextResponse.json({ error: "En un canal de prueba no se pueden crear plantillas." }, { status: 400 });
+  }
 
   try {
     const zernio = createZernioClient(resolved.apiKey);

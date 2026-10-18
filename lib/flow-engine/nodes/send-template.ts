@@ -26,7 +26,8 @@ export async function sendFlowTemplate(
   context: FlowExecutionContext,
   template: NodeTemplate,
   lateAccountId: string,
-  messenger: CaseMessenger = zernioMessenger(db),
+  // En canales de prueba el motor del flujo ya guarda el mensaje: sin duplicarlo.
+  messenger: CaseMessenger = zernioMessenger(db, { storeDemoMessages: false }),
 ): Promise<FlowTemplateResult> {
   const [{ data: contact }, { data: link }, { data: workspace }] = await Promise.all([
     db.from("contacts").select("display_name, phone, key_date").eq("id", context.contactId).maybeSingle(),

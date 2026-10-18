@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PlatformIcon } from "@/components/platform-icon";
+import { DemoBadge } from "@/components/inbox/demo-badge";
+import { isDemoChannel } from "@/lib/demo";
 import { APP_NAME } from "@/lib/brand";
 import { formatDate } from "@/lib/format";
 import type { Database } from "@/lib/types/database";
@@ -324,10 +326,11 @@ export function ChannelsView({
                       </div>
 
                       <div>
-                        <p className="text-sm font-medium">
+                        <p className="flex items-center gap-1.5 text-sm font-medium">
                           {channel.display_name ??
                             channel.username ??
                             label}
+                          {isDemoChannel(channel) && <DemoBadge />}
                         </p>
                         {channel.username && (
                           <p className="text-xs text-muted-foreground">
