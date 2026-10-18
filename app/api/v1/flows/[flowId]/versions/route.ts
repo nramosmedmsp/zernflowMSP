@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiAdmin } from "@/lib/api-auth";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ flowId: string }> }
 ) {
   const { flowId } = await params;
-  const supabase = await createClient();
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase, workspaceId } = guard.ctx;
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  // El flujo tiene que ser del espacio activo.
+  const { data: flow } = await supabase
+    .from("flows")
+    .select("id")
+    .eq("id", flowId)
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
+  if (!flow)
+    return NextResponse.json({ error: "No se encontró el flujo" }, { status: 404 });
 
   const { data: versions, error } = await supabase
     .from("flow_versions")

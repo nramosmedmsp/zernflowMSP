@@ -1,31 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiAdmin } from "@/lib/api-auth";
 
-async function getWorkspaceId(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  return membership?.workspace_id || null;
-}
+// Flujos: solo Dueño o Administrador (docs/FASE-1-TECNICO.md 2.3).
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ flowId: string }> }
 ) {
   const { flowId } = await params;
-  const supabase = await createClient();
-  const workspaceId = await getWorkspaceId(supabase);
-  if (!workspaceId)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase, workspaceId } = guard.ctx;
 
   const { data: flow, error } = await supabase
     .from("flows")
@@ -45,10 +30,9 @@ export async function PUT(
   { params }: { params: Promise<{ flowId: string }> }
 ) {
   const { flowId } = await params;
-  const supabase = await createClient();
-  const workspaceId = await getWorkspaceId(supabase);
-  if (!workspaceId)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase, workspaceId } = guard.ctx;
 
   const body = await request.json();
 
@@ -78,10 +62,9 @@ export async function DELETE(
   { params }: { params: Promise<{ flowId: string }> }
 ) {
   const { flowId } = await params;
-  const supabase = await createClient();
-  const workspaceId = await getWorkspaceId(supabase);
-  if (!workspaceId)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase, workspaceId } = guard.ctx;
 
   const { error } = await supabase
     .from("flows")

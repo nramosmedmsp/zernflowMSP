@@ -1,29 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiAdmin } from "@/lib/api-auth";
 
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ flowId: string; versionId: string }> }
 ) {
   const { flowId, versionId } = await params;
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-
-  // Verify user has access
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  if (!membership)
-    return NextResponse.json({ error: "No hay un espacio de trabajo" }, { status: 404 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase } = guard.ctx;
+  const membership = { workspace_id: guard.ctx.workspaceId };
 
   // Get the version
   const { data: version, error: vErr } = await supabase

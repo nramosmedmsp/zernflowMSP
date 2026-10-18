@@ -15,6 +15,7 @@ interface CapturedUpdate {
   patch: Record<string, unknown>;
 }
 
+/** Fake service client over `workspace_secrets` (see lib/workspace-secrets.ts). */
 function makeFakeSupabase(seed: { webhook_secret?: string | null }) {
   const updates: CapturedUpdate[] = [];
   const client = {
@@ -26,16 +27,15 @@ function makeFakeSupabase(seed: { webhook_secret?: string | null }) {
         eq() {
           return this;
         },
-        single() {
-          return Promise.resolve({ data: { webhook_secret: seed.webhook_secret ?? null }, error: null });
+        maybeSingle() {
+          return Promise.resolve({
+            data: { late_api_key: null, ai_api_key: null, webhook_secret: seed.webhook_secret ?? null },
+            error: null,
+          });
         },
-        update(patch: Record<string, unknown>) {
-          return {
-            eq() {
-              updates.push({ table, patch });
-              return Promise.resolve({ data: null, error: null });
-            },
-          };
+        upsert(patch: Record<string, unknown>) {
+          updates.push({ table, patch });
+          return Promise.resolve({ data: null, error: null });
         },
       };
     },
@@ -279,9 +279,12 @@ describe("getOrCreateWorkspaceWebhookSecret", () => {
     expect(secret).toMatch(/^[0-9a-f]{64}$/);
     expect(fake.updates).toHaveLength(1);
     expect(fake.updates[0]).toMatchObject({
-      table: "workspaces",
-      patch: { webhook_secret: secret },
+      table: "workspace_secrets",
+      patch: { workspace_id: "ws-1", webhook_secret: secret },
     });
+    // Only the webhook secret is written; the API keys are left untouched.
+    expect(fake.updates[0].patch).not.toHaveProperty("late_api_key");
+    expect(fake.updates[0].patch).not.toHaveProperty("ai_api_key");
   });
 });
 

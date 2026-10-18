@@ -1,23 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
-
-async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, workspaces(*)")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  if (!membership?.workspaces) return null;
-  return membership.workspaces;
-}
+import { requireApiAdmin } from "@/lib/api-auth";
+import { getLateApiKey } from "@/lib/workspace-secrets";
 
 /**
  * DELETE /api/v1/channels/[channelId]
@@ -25,16 +9,17 @@ async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) 
  * Permanently deletes a channel: disconnects the account on Zernio first
  * (otherwise /api/v1/channels/sync would re-create it from listAccounts),
  * then deletes the local row (cascades conversations, contact links, etc.).
+ * Solo Dueño o Administrador.
  */
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ channelId: string }> }
 ) {
   const { channelId } = await params;
-  const supabase = await createClient();
-  const workspace = await getWorkspace(supabase);
-  if (!workspace)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase } = guard.ctx;
+  const workspace = { id: guard.ctx.workspaceId };
 
   const { data: channel } = await supabase
     .from("channels")
@@ -46,8 +31,9 @@ export async function DELETE(
   if (!channel)
     return NextResponse.json({ error: "No se encontró el canal" }, { status: 404 });
 
-  if (workspace.late_api_key_encrypted) {
-    const zernio = createZernioClient(workspace.late_api_key_encrypted);
+  const lateApiKey = await getLateApiKey(workspace.id);
+  if (lateApiKey) {
+    const zernio = createZernioClient(lateApiKey);
     try {
       const res = await zernio.accounts.deleteAccount({
         path: { accountId: channel.late_account_id },

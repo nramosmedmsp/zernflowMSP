@@ -1,24 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
 import { PLATFORMS, isSupportedPlatform } from "@/lib/platforms";
-
-async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, workspaces(*)")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  if (!membership?.workspaces) return null;
-  return membership.workspaces;
-}
+import { requireApiAdmin } from "@/lib/api-auth";
+import { getLateApiKey } from "@/lib/workspace-secrets";
 
 /**
  * POST /api/v1/channels/connect
@@ -26,14 +10,15 @@ async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) 
  * Returns Zernio's OAuth/connect URL for the given platform.
  * Zernio handles the entire connection flow (OAuth, page selection, etc.)
  * and redirects back to our callback URL when done.
+ * Solo Dueño o Administrador.
  */
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const workspace = await getWorkspace(supabase);
-  if (!workspace)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
 
-  if (!workspace.late_api_key_encrypted) {
+  // La clave se lee en el servidor con el cliente de servicio; nunca llega al navegador.
+  const lateApiKey = await getLateApiKey(guard.ctx.workspaceId);
+  if (!lateApiKey) {
     return NextResponse.json(
       { error: "La clave de API de Zernio no está configurada. Ve primero a Configuración." },
       { status: 400 }
@@ -49,7 +34,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const zernio = createZernioClient(workspace.late_api_key_encrypted);
+  const zernio = createZernioClient(lateApiKey);
 
   try {
     // Get profile ID (required by Zernio's connect endpoint)

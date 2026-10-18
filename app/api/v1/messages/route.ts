@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
 import { messagePreview } from "@/lib/message-preview";
+import { getLateApiKey } from "@/lib/workspace-secrets";
 
 /**
  * GET /api/v1/messages?conversationId=...
@@ -20,7 +21,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Falta el ID de la conversación" }, { status: 400 });
   }
 
-  // Look up the Zernio conversation ID and workspace API key
+  // Look up the Zernio conversation ID. Con el cliente del usuario: RLS
+  // (can_see_contact) decide si puede ver esta conversación.
   const { data: conversation } = await supabase
     .from("conversations")
     .select("late_conversation_id, workspace_id, channels(late_account_id)")
@@ -31,13 +33,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "No se encontró la conversación o le falta el ID de Zernio" }, { status: 404 });
   }
 
-  const { data: workspace } = await supabase
-    .from("workspaces")
-    .select("late_api_key_encrypted")
-    .eq("id", conversation.workspace_id)
-    .single();
-
-  if (!workspace?.late_api_key_encrypted) {
+  // La clave se lee en el servidor con el cliente de servicio, solo después de
+  // comprobar (vía RLS) que el usuario ve la conversación.
+  const lateApiKey = await getLateApiKey(conversation.workspace_id);
+  if (!lateApiKey) {
     return NextResponse.json({ error: "La clave de API no está configurada" }, { status: 400 });
   }
 
@@ -48,7 +47,7 @@ export async function GET(request: NextRequest) {
 
   // Fetch messages from Zernio API
   try {
-    const zernio = createZernioClient(workspace.late_api_key_encrypted);
+    const zernio = createZernioClient(lateApiKey);
     const res = await zernio.messages.getInboxConversationMessages({
       path: { conversationId: conversation.late_conversation_id },
       query: { accountId: channel.late_account_id },
@@ -133,19 +132,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se encontró el canal o le falta el ID de cuenta de Zernio" }, { status: 404 });
   }
 
-  const { data: workspace } = await supabase
-    .from("workspaces")
-    .select("late_api_key_encrypted")
-    .eq("id", conversation.workspace_id)
-    .single();
-
-  if (!workspace?.late_api_key_encrypted) {
+  // La clave se lee en el servidor con el cliente de servicio, solo después de
+  // comprobar (vía RLS) que el usuario ve la conversación.
+  const lateApiKey = await getLateApiKey(conversation.workspace_id);
+  if (!lateApiKey) {
     return NextResponse.json({ error: "La clave de API no está configurada" }, { status: 400 });
   }
 
   // Send via Zernio SDK — Zernio stores the message, no local insert needed
   try {
-    const zernio = createZernioClient(workspace.late_api_key_encrypted);
+    const zernio = createZernioClient(lateApiKey);
     const res = await zernio.messages.sendInboxMessage({
       path: { conversationId: conversation.late_conversation_id },
       body: { accountId: channel.late_account_id, message: text },

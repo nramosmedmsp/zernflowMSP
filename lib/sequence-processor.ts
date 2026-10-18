@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
+import { getLateApiKey } from "@/lib/workspace-secrets";
 import type { SequenceStep } from "@/lib/types/database";
 
 /**
@@ -141,19 +142,14 @@ async function sendSequenceMessage(
   channelId: string,
   text: string
 ) {
-  // Get workspace API key
-  const { data: workspace } = await supabase
-    .from("workspaces")
-    .select("late_api_key_encrypted")
-    .eq("id", workspaceId)
-    .single();
-
-  if (!workspace?.late_api_key_encrypted) {
+  // Get workspace API key (workspace_secrets, service client)
+  const lateApiKey = await getLateApiKey(workspaceId, supabase);
+  if (!lateApiKey) {
     console.error("No Zernio API key for workspace:", workspaceId);
     return;
   }
 
-  const zernio = createZernioClient(workspace.late_api_key_encrypted);
+  const zernio = createZernioClient(lateApiKey);
 
   // Get channel's late_account_id
   const { data: channel } = await supabase

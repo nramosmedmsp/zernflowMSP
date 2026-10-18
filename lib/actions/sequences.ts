@@ -1,11 +1,16 @@
 "use server";
 
+// Secuencias: solo Dueño o Administrador (docs/FASE-1-TECNICO.md 2.3); RLS
+// (00019) lo exige también.
+
 import { getWorkspace } from "@/lib/workspace";
 import { revalidatePath } from "next/cache";
+import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import type { SequenceStep } from "@/lib/types/database";
 
 export async function createSequence(name: string) {
-  const { workspace, supabase } = await getWorkspace();
+  const { workspace, supabase, role } = await getWorkspace();
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   const trimmed = name.trim();
   if (!trimmed) return { error: "El nombre es obligatorio" };
@@ -31,7 +36,8 @@ export async function updateSequence(
     status?: "draft" | "active" | "paused";
   }
 ) {
-  const { workspace, supabase } = await getWorkspace();
+  const { workspace, supabase, role } = await getWorkspace();
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: existing } = await supabase
@@ -62,7 +68,8 @@ export async function updateSequence(
 }
 
 export async function deleteSequence(sequenceId: string) {
-  const { workspace, supabase } = await getWorkspace();
+  const { workspace, supabase, role } = await getWorkspace();
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   const { error } = await supabase
     .from("sequences")
@@ -81,7 +88,8 @@ export async function enrollContact(
   contactId: string,
   channelId: string
 ) {
-  const { workspace, supabase } = await getWorkspace();
+  const { workspace, supabase, role } = await getWorkspace();
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: sequence } = await supabase
@@ -93,6 +101,14 @@ export async function enrollContact(
 
   if (!sequence) return { error: "No se encontró la secuencia" };
   if (sequence.status !== "active") return { error: "La secuencia no está activa" };
+
+  // El contacto y el canal tienen que ser de este espacio de trabajo.
+  const [{ data: contact }, { data: channel }] = await Promise.all([
+    supabase.from("contacts").select("id").eq("id", contactId).eq("workspace_id", workspace.id).maybeSingle(),
+    supabase.from("channels").select("id").eq("id", channelId).eq("workspace_id", workspace.id).maybeSingle(),
+  ]);
+  if (!contact) return { error: "No se encontró el contacto" };
+  if (!channel) return { error: "No se encontró el canal" };
 
   const steps = (sequence.steps as unknown as SequenceStep[]) || [];
   if (steps.length === 0) return { error: "La secuencia no tiene pasos" };
@@ -132,7 +148,8 @@ export async function enrollContact(
 }
 
 export async function cancelEnrollment(enrollmentId: string) {
-  const { workspace, supabase } = await getWorkspace();
+  const { workspace, supabase, role } = await getWorkspace();
+  if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   // Verificar que la inscripción pertenece a una secuencia de este espacio de trabajo
   const { data: enrollment } = await supabase

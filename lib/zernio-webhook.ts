@@ -4,12 +4,14 @@
  * Zernflow must register its own `/api/webhooks/late` endpoint in Zernio so that
  * inbound events (DMs, comments) are delivered to the Inbox. Zernio exposes a
  * single webhook per profile/API key, so this is idempotent and operates at the
- * workspace level (the secret lives on `workspaces.webhook_secret`).
+ * workspace level (the secret lives on `workspace_secrets.webhook_secret` since
+ * migration 00019; before it was `workspaces.webhook_secret`).
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Zernio } from "./zernio-client";
+import { getWorkspaceSecrets, saveWorkspaceSecrets } from "./workspace-secrets";
 
 /** Name used to identify Zernflow's webhook among a profile's webhooks. */
 export const WEBHOOK_NAME = "Zernflow";
@@ -116,22 +118,20 @@ export function generateWebhookSecret(): string {
  * Returns the workspace's webhook secret, generating and persisting one the first
  * time it is needed. The same secret is used both to register the webhook in Zernio
  * and to verify inbound signatures, so it must be stable per workspace.
+ *
+ * `supabase` must be the service-role client (workspace_secrets has no RLS
+ * policies). Callers must validate the user's permissions first.
  */
 export async function getOrCreateWorkspaceWebhookSecret(
   supabase: SupabaseClient,
   workspaceId: string,
 ): Promise<string> {
-  const { data } = await supabase
-    .from("workspaces")
-    .select("webhook_secret")
-    .eq("id", workspaceId)
-    .single();
-
-  const existing = (data as { webhook_secret?: string | null } | null)?.webhook_secret;
-  if (existing) return existing;
+  const { webhookSecret } = await getWorkspaceSecrets(workspaceId, supabase);
+  if (webhookSecret) return webhookSecret;
 
   const secret = generateWebhookSecret();
-  await supabase.from("workspaces").update({ webhook_secret: secret }).eq("id", workspaceId);
+  const { error } = await saveWorkspaceSecrets(workspaceId, { webhookSecret: secret }, supabase);
+  if (error) throw new Error(error);
   return secret;
 }
 
@@ -161,18 +161,15 @@ export interface ChannelSecretRef {
 /**
  * Resolves the secret used to verify a webhook signature, preferring the
  * workspace-level secret and falling back to the legacy per-channel secret
- * during the transition. Returns null when neither is configured.
+ * during the transition. Returns null when neither is configured. Throws if the
+ * secrets can't be read (the webhook then answers 500 and Zernio retries,
+ * instead of accepting an unverified delivery). `supabase` must be the
+ * service-role client.
  */
 export async function resolveWebhookSecret(
   supabase: SupabaseClient,
   channel: ChannelSecretRef,
 ): Promise<string | null> {
-  const { data } = await supabase
-    .from("workspaces")
-    .select("webhook_secret")
-    .eq("id", channel.workspace_id)
-    .single();
-
-  const workspaceSecret = (data as { webhook_secret?: string | null } | null)?.webhook_secret;
-  return workspaceSecret || channel.webhook_secret || null;
+  const { webhookSecret } = await getWorkspaceSecrets(channel.workspace_id, supabase);
+  return webhookSecret || channel.webhook_secret || null;
 }

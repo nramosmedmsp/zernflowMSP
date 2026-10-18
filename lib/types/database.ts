@@ -64,6 +64,98 @@ export interface SequenceStep {
   delayMinutes?: number;
 }
 
+// ── Fase 1 (00019): roles, equipos y gestiones ───────────────────────────
+
+/** Rol en el espacio (workspace_members.role). */
+export type WorkspaceRole = "owner" | "admin" | "member";
+/** workspace_members.availability */
+export type MemberAvailability = "available" | "away";
+/** Rol dentro de un equipo (team_members.role). */
+export type TeamRole = "supervisor" | "agent";
+/** Qué ve un asesor (workspaces.settings.agent_visibility). */
+export type AgentVisibility = "own" | "own_and_unassigned" | "team";
+/** Modo de reparto (teams.assignment_mode y workspaces.settings.assignment_mode). */
+export type AssignmentMode = "round_robin" | "least_load" | "manual";
+export type BusinessTemplate = "ecommerce" | "gym" | "general" | "blank";
+
+/** Contenido de workspaces.settings (todas las claves son opcionales). */
+export interface WorkspaceSettings {
+  /** Por defecto 'own'. */
+  agent_visibility?: AgentVisibility;
+  /** Solo si el espacio no tiene equipos. Por defecto 'round_robin'. */
+  assignment_mode?: AssignmentMode;
+  business_template?: BusinessTemplate;
+  /** "Última compra", "Vencimiento de membresía"... */
+  key_date_label?: string;
+}
+
+/** case_types.routing */
+export type CaseRouting = "contact_owner" | "contact_team" | "fixed_team";
+/** case_stages.kind */
+export type StageKind = "open" | "won" | "lost" | "resolved";
+/** case_outcome_reasons.kind (y clase de una etapa final). */
+export type OutcomeKind = "won" | "lost" | "resolved";
+/** cases.status */
+export type CaseStatus = "scheduled" | "open" | "won" | "lost" | "resolved" | "cancelled";
+/** Estados no cerrados de una gestión. */
+export type ActiveCaseStatus = Extract<CaseStatus, "scheduled" | "open">;
+/** Estados cerrados de una gestión. */
+export type ClosedCaseStatus = Exclude<CaseStatus, ActiveCaseStatus>;
+/** cases.origin */
+export type CaseOrigin = "inbound" | "proactive" | "manual";
+/** cases.priority */
+export type CasePriority = "low" | "normal" | "high" | "urgent";
+/** case_rules.trigger */
+export type CaseRuleTrigger = "on_open" | "on_stage" | "on_won" | "on_lost" | "on_resolved";
+/** case_rules.action */
+export type CaseRuleAction = "set_contact_type" | "schedule_case" | "ask_key_date";
+
+/** case_rules.condition */
+export interface CaseRuleCondition {
+  category_id?: string;
+  outcome_reason_id?: string;
+  contact_type_id?: string;
+}
+
+/** case_rules.params según la acción (docs/FASE-1-TECNICO.md 3.4). */
+export interface SetContactTypeParams {
+  contact_type_id: string;
+  /** Desde la N-ésima gestión ganada del contacto (Cliente frecuente). */
+  from_nth_win?: number;
+}
+export interface ScheduleCaseParams {
+  case_type_id: string;
+  days_after?: number;
+  days_before_key_date?: number;
+}
+export interface AskKeyDateParams {
+  label: string;
+}
+export type CaseRuleParams = SetContactTypeParams | ScheduleCaseParams | AskKeyDateParams;
+
+/** saved_replies.scope */
+export type SavedReplyScope = "workspace" | "team" | "personal";
+
+/** activity.type */
+export type ActivityType =
+  | "case_opened"
+  | "case_scheduled"
+  | "case_activated"
+  | "case_classified"
+  | "stage_changed"
+  | "assigned"
+  | "unassigned"
+  | "transferred"
+  | "case_closed"
+  | "case_reopened"
+  | "contact_type_changed"
+  | "owner_changed"
+  | "team_changed"
+  | "note_added"
+  | "first_response"
+  | "next_action_set"
+  | "config_changed";
+
 export interface Database {
   public: {
     Tables: {
@@ -72,10 +164,16 @@ export interface Database {
           id: string;
           name: string;
           slug: string;
+          /** Obsoleta: vacía desde 00019 (constraint). Usa lib/workspace-secrets.ts. */
           late_api_key_encrypted: string | null;
+          /** Obsoleta: vacía desde 00019 (constraint). Usa lib/workspace-secrets.ts. */
           ai_api_key: string | null;
+          /** Obsoleta: vacía desde 00019 (constraint). Usa lib/workspace-secrets.ts. */
+          webhook_secret: string | null;
           ai_provider: string;
           global_keywords: Json | null;
+          /** Ver WorkspaceSettings. */
+          settings: Json;
           created_at: string;
           updated_at: string;
         };
@@ -83,10 +181,12 @@ export interface Database {
           id?: string;
           name: string;
           slug: string;
-          late_api_key_encrypted?: string | null;
-          ai_api_key?: string | null;
+          late_api_key_encrypted?: null;
+          ai_api_key?: null;
+          webhook_secret?: null;
           ai_provider?: string;
           global_keywords?: Json | null;
+          settings?: Json;
           created_at?: string;
           updated_at?: string;
         };
@@ -94,29 +194,68 @@ export interface Database {
           id?: string;
           name?: string;
           slug?: string;
-          late_api_key_encrypted?: string | null;
-          ai_api_key?: string | null;
+          late_api_key_encrypted?: null;
+          ai_api_key?: null;
+          webhook_secret?: null;
           ai_provider?: string;
           global_keywords?: Json | null;
+          settings?: Json;
           updated_at?: string;
         };
         Relationships: [];
+      };
+      workspace_secrets: {
+        Row: {
+          workspace_id: string;
+          late_api_key: string | null;
+          ai_api_key: string | null;
+          webhook_secret: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          late_api_key?: string | null;
+          ai_api_key?: string | null;
+          webhook_secret?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          late_api_key?: string | null;
+          ai_api_key?: string | null;
+          webhook_secret?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "workspace_secrets_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: true;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       workspace_members: {
         Row: {
           workspace_id: string;
           user_id: string;
-          role: string;
+          role: WorkspaceRole;
+          availability: MemberAvailability;
+          last_assigned_at: string | null;
           created_at: string;
         };
         Insert: {
           workspace_id: string;
           user_id: string;
-          role?: string;
+          role?: WorkspaceRole;
+          availability?: MemberAvailability;
+          last_assigned_at?: string | null;
           created_at?: string;
         };
         Update: {
-          role?: string;
+          role?: WorkspaceRole;
+          availability?: MemberAvailability;
+          last_assigned_at?: string | null;
         };
         Relationships: [
           {
@@ -194,6 +333,13 @@ export interface Database {
           is_subscribed: boolean;
           last_interaction_at: string | null;
           metadata: Json | null;
+          contact_type_id: string | null;
+          team_id: string | null;
+          owner_id: string | null;
+          source: Json;
+          phone: string | null;
+          /** Fecha clave (YYYY-MM-DD): última compra, vencimiento de membresía... */
+          key_date: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -206,6 +352,12 @@ export interface Database {
           is_subscribed?: boolean;
           last_interaction_at?: string | null;
           metadata?: Json | null;
+          contact_type_id?: string | null;
+          team_id?: string | null;
+          owner_id?: string | null;
+          source?: Json;
+          phone?: string | null;
+          key_date?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -216,6 +368,12 @@ export interface Database {
           is_subscribed?: boolean;
           last_interaction_at?: string | null;
           metadata?: Json | null;
+          contact_type_id?: string | null;
+          team_id?: string | null;
+          owner_id?: string | null;
+          source?: Json;
+          phone?: string | null;
+          key_date?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -224,6 +382,20 @@ export interface Database {
             columns: ["workspace_id"];
             isOneToOne: false;
             referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "contacts_contact_type_id_fkey";
+            columns: ["contact_type_id"];
+            isOneToOne: false;
+            referencedRelation: "contact_types";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "contacts_team_id_fkey";
+            columns: ["team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
             referencedColumns: ["id"];
           },
         ];
@@ -1073,6 +1245,689 @@ export interface Database {
           },
         ];
       };
+      // ── Fase 1 (00019): equipos ─────────────────────────────────────────
+      teams: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          is_default: boolean;
+          assignment_mode: AssignmentMode;
+          archived_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          name: string;
+          is_default?: boolean;
+          assignment_mode?: AssignmentMode;
+          archived_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          is_default?: boolean;
+          assignment_mode?: AssignmentMode;
+          archived_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "teams_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      team_members: {
+        Row: {
+          team_id: string;
+          user_id: string;
+          role: TeamRole;
+          /** null = atiende todos los tipos de gestión */
+          case_type_ids: string[] | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          team_id: string;
+          user_id: string;
+          role?: TeamRole;
+          case_type_ids?: string[] | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          role?: TeamRole;
+          case_type_ids?: string[] | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "team_members_team_id_fkey";
+            columns: ["team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      // ── Fase 1 (00019): configuración de gestiones ──────────────────────
+      contact_types: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          color: string | null;
+          position: number;
+          is_default: boolean;
+          archived_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          name: string;
+          color?: string | null;
+          position?: number;
+          is_default?: boolean;
+          archived_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          color?: string | null;
+          position?: number;
+          is_default?: boolean;
+          archived_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "contact_types_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      case_types: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          color: string | null;
+          icon: string | null;
+          position: number;
+          is_proactive: boolean;
+          suggested_for_contact_type_ids: string[];
+          routing: CaseRouting;
+          fixed_team_id: string | null;
+          sla_first_response_minutes: number | null;
+          sla_resolution_hours: number | null;
+          require_category: boolean;
+          require_outcome_reason: boolean;
+          archived_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          name: string;
+          color?: string | null;
+          icon?: string | null;
+          position?: number;
+          is_proactive?: boolean;
+          suggested_for_contact_type_ids?: string[];
+          routing?: CaseRouting;
+          fixed_team_id?: string | null;
+          sla_first_response_minutes?: number | null;
+          sla_resolution_hours?: number | null;
+          require_category?: boolean;
+          require_outcome_reason?: boolean;
+          archived_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          color?: string | null;
+          icon?: string | null;
+          position?: number;
+          is_proactive?: boolean;
+          suggested_for_contact_type_ids?: string[];
+          routing?: CaseRouting;
+          fixed_team_id?: string | null;
+          sla_first_response_minutes?: number | null;
+          sla_resolution_hours?: number | null;
+          require_category?: boolean;
+          require_outcome_reason?: boolean;
+          archived_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "case_types_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "case_types_fixed_team_id_fkey";
+            columns: ["fixed_team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      case_stages: {
+        Row: {
+          id: string;
+          case_type_id: string;
+          name: string;
+          color: string | null;
+          position: number;
+          kind: StageKind;
+          archived_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          case_type_id: string;
+          name: string;
+          color?: string | null;
+          position?: number;
+          kind?: StageKind;
+          archived_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          color?: string | null;
+          position?: number;
+          kind?: StageKind;
+          archived_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "case_stages_case_type_id_fkey";
+            columns: ["case_type_id"];
+            isOneToOne: false;
+            referencedRelation: "case_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      case_categories: {
+        Row: {
+          id: string;
+          case_type_id: string;
+          name: string;
+          position: number;
+          is_high_priority: boolean;
+          archived_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          case_type_id: string;
+          name: string;
+          position?: number;
+          is_high_priority?: boolean;
+          archived_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          position?: number;
+          is_high_priority?: boolean;
+          archived_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "case_categories_case_type_id_fkey";
+            columns: ["case_type_id"];
+            isOneToOne: false;
+            referencedRelation: "case_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      case_outcome_reasons: {
+        Row: {
+          id: string;
+          case_type_id: string;
+          name: string;
+          kind: OutcomeKind;
+          position: number;
+          archived_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          case_type_id: string;
+          name: string;
+          kind: OutcomeKind;
+          position?: number;
+          archived_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          kind?: OutcomeKind;
+          position?: number;
+          archived_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "case_outcome_reasons_case_type_id_fkey";
+            columns: ["case_type_id"];
+            isOneToOne: false;
+            referencedRelation: "case_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      case_rules: {
+        Row: {
+          id: string;
+          case_type_id: string;
+          position: number;
+          enabled: boolean;
+          trigger: CaseRuleTrigger;
+          trigger_stage_id: string | null;
+          /** Ver CaseRuleCondition. */
+          condition: Json;
+          action: CaseRuleAction;
+          /** Ver CaseRuleParams. */
+          params: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          case_type_id: string;
+          position?: number;
+          enabled?: boolean;
+          trigger: CaseRuleTrigger;
+          trigger_stage_id?: string | null;
+          condition?: Json;
+          action: CaseRuleAction;
+          params?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          position?: number;
+          enabled?: boolean;
+          trigger?: CaseRuleTrigger;
+          trigger_stage_id?: string | null;
+          condition?: Json;
+          action?: CaseRuleAction;
+          params?: Json;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "case_rules_case_type_id_fkey";
+            columns: ["case_type_id"];
+            isOneToOne: false;
+            referencedRelation: "case_types";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "case_rules_trigger_stage_id_fkey";
+            columns: ["trigger_stage_id"];
+            isOneToOne: false;
+            referencedRelation: "case_stages";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      // ── Fase 1 (00019): gestiones y registro ────────────────────────────
+      cases: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          contact_id: string;
+          /** null = "Sin clasificar" */
+          case_type_id: string | null;
+          stage_id: string | null;
+          category_id: string | null;
+          status: CaseStatus;
+          team_id: string | null;
+          assignee_id: string | null;
+          origin: CaseOrigin;
+          scheduled_for: string | null;
+          opened_at: string | null;
+          last_inbound_at: string | null;
+          last_outbound_at: string | null;
+          waiting_since: string | null;
+          first_response_at: string | null;
+          next_action_at: string | null;
+          next_action_note: string | null;
+          closed_at: string | null;
+          closed_by: string | null;
+          outcome_reason_id: string | null;
+          outcome_note: string | null;
+          legal_due_at: string | null;
+          priority: CasePriority;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          contact_id: string;
+          case_type_id?: string | null;
+          stage_id?: string | null;
+          category_id?: string | null;
+          status?: CaseStatus;
+          team_id?: string | null;
+          assignee_id?: string | null;
+          origin?: CaseOrigin;
+          scheduled_for?: string | null;
+          opened_at?: string | null;
+          last_inbound_at?: string | null;
+          last_outbound_at?: string | null;
+          waiting_since?: string | null;
+          first_response_at?: string | null;
+          next_action_at?: string | null;
+          next_action_note?: string | null;
+          closed_at?: string | null;
+          closed_by?: string | null;
+          outcome_reason_id?: string | null;
+          outcome_note?: string | null;
+          legal_due_at?: string | null;
+          priority?: CasePriority;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          case_type_id?: string | null;
+          stage_id?: string | null;
+          category_id?: string | null;
+          status?: CaseStatus;
+          team_id?: string | null;
+          assignee_id?: string | null;
+          origin?: CaseOrigin;
+          scheduled_for?: string | null;
+          opened_at?: string | null;
+          last_inbound_at?: string | null;
+          last_outbound_at?: string | null;
+          waiting_since?: string | null;
+          first_response_at?: string | null;
+          next_action_at?: string | null;
+          next_action_note?: string | null;
+          closed_at?: string | null;
+          closed_by?: string | null;
+          outcome_reason_id?: string | null;
+          outcome_note?: string | null;
+          legal_due_at?: string | null;
+          priority?: CasePriority;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "cases_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cases_contact_id_fkey";
+            columns: ["contact_id"];
+            isOneToOne: false;
+            referencedRelation: "contacts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cases_case_type_id_fkey";
+            columns: ["case_type_id"];
+            isOneToOne: false;
+            referencedRelation: "case_types";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cases_stage_id_fkey";
+            columns: ["stage_id"];
+            isOneToOne: false;
+            referencedRelation: "case_stages";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cases_category_id_fkey";
+            columns: ["category_id"];
+            isOneToOne: false;
+            referencedRelation: "case_categories";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cases_team_id_fkey";
+            columns: ["team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "cases_outcome_reason_id_fkey";
+            columns: ["outcome_reason_id"];
+            isOneToOne: false;
+            referencedRelation: "case_outcome_reasons";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      case_notes: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          case_id: string;
+          contact_id: string;
+          conversation_id: string | null;
+          author_id: string | null;
+          body: string;
+          mentions: string[];
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          case_id: string;
+          contact_id: string;
+          conversation_id?: string | null;
+          author_id?: string | null;
+          body: string;
+          mentions?: string[];
+          created_at?: string;
+        };
+        Update: {
+          body?: string;
+          mentions?: string[];
+        };
+        Relationships: [
+          {
+            foreignKeyName: "case_notes_case_id_fkey";
+            columns: ["case_id"];
+            isOneToOne: false;
+            referencedRelation: "cases";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "case_notes_contact_id_fkey";
+            columns: ["contact_id"];
+            isOneToOne: false;
+            referencedRelation: "contacts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "case_notes_conversation_id_fkey";
+            columns: ["conversation_id"];
+            isOneToOne: false;
+            referencedRelation: "conversations";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      activity: {
+        Row: {
+          id: number;
+          workspace_id: string;
+          contact_id: string | null;
+          case_id: string | null;
+          conversation_id: string | null;
+          /** Ver ActivityType. */
+          type: string;
+          /** null = sistema o bot */
+          actor_id: string | null;
+          from_value: string | null;
+          to_value: string | null;
+          meta: Json;
+          created_at: string;
+        };
+        Insert: {
+          workspace_id: string;
+          contact_id?: string | null;
+          case_id?: string | null;
+          conversation_id?: string | null;
+          type: string;
+          actor_id?: string | null;
+          from_value?: string | null;
+          to_value?: string | null;
+          meta?: Json;
+          created_at?: string;
+        };
+        Update: {
+          meta?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "activity_contact_id_fkey";
+            columns: ["contact_id"];
+            isOneToOne: false;
+            referencedRelation: "contacts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "activity_case_id_fkey";
+            columns: ["case_id"];
+            isOneToOne: false;
+            referencedRelation: "cases";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      notifications: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          user_id: string;
+          type: string;
+          title: string;
+          body: string | null;
+          link: string | null;
+          read_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          user_id: string;
+          type: string;
+          title: string;
+          body?: string | null;
+          link?: string | null;
+          read_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          /** Con el cliente del usuario solo se puede cambiar read_at. */
+          read_at?: string | null;
+        };
+        Relationships: [];
+      };
+      saved_replies: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          scope: SavedReplyScope;
+          team_id: string | null;
+          user_id: string | null;
+          case_type_id: string | null;
+          title: string;
+          shortcut: string | null;
+          body: string;
+          attachment_url: string | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          scope: SavedReplyScope;
+          team_id?: string | null;
+          user_id?: string | null;
+          case_type_id?: string | null;
+          title: string;
+          shortcut?: string | null;
+          body: string;
+          attachment_url?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          scope?: SavedReplyScope;
+          team_id?: string | null;
+          user_id?: string | null;
+          case_type_id?: string | null;
+          title?: string;
+          shortcut?: string | null;
+          body?: string;
+          attachment_url?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "saved_replies_team_id_fkey";
+            columns: ["team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "saved_replies_case_type_id_fkey";
+            columns: ["case_type_id"];
+            isOneToOne: false;
+            referencedRelation: "case_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: {
       [_ in never]: never;
@@ -1096,6 +1951,58 @@ export interface Database {
           b_id: string;
         };
         Returns: undefined;
+      };
+      // ── Fase 1 (00019): permisos ────────────────────────────────────────
+      is_workspace_member: {
+        Args: {
+          ws_id: string;
+        };
+        Returns: boolean;
+      };
+      ws_role: {
+        Args: {
+          ws: string;
+        };
+        Returns: string | null;
+      };
+      is_ws_admin: {
+        Args: {
+          ws: string;
+        };
+        Returns: boolean;
+      };
+      ws_has_teams: {
+        Args: {
+          ws: string;
+        };
+        Returns: boolean;
+      };
+      is_team_member: {
+        Args: {
+          team: string;
+        };
+        Returns: boolean;
+      };
+      is_team_supervisor: {
+        Args: {
+          team: string;
+        };
+        Returns: boolean;
+      };
+      can_see_contact: {
+        Args: {
+          contact_id: string;
+        };
+        Returns: boolean;
+      };
+      can_see_contact_row: {
+        Args: {
+          p_workspace_id: string;
+          p_contact_id: string;
+          p_owner_id: string | null;
+          p_team_id: string | null;
+        };
+        Returns: boolean;
       };
     };
     Enums: {

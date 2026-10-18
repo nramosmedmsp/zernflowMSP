@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiAdmin } from "@/lib/api-auth";
 import { BUILDER_TRIGGER_TYPES, buildDesiredTriggers } from "@/lib/flow-triggers";
 
 export async function POST(
@@ -7,23 +7,10 @@ export async function POST(
   { params }: { params: Promise<{ flowId: string }> }
 ) {
   const { flowId } = await params;
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  if (!membership)
-    return NextResponse.json({ error: "No hay un espacio de trabajo" }, { status: 404 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase, user } = guard.ctx;
+  const membership = { workspace_id: guard.ctx.workspaceId };
 
   // Get current flow
   const { data: flow, error } = await supabase

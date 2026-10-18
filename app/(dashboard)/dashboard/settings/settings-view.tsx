@@ -20,7 +20,7 @@ import {
   Mail,
 } from "lucide-react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { saveWorkspaceSettings } from "@/lib/actions/settings";
 
 interface WorkspaceSettings {
   id: string;
@@ -39,9 +39,12 @@ interface TestResult {
 export function SettingsView({
   workspace,
   canManageTeam = false,
+  canManageSecrets = false,
 }: {
   workspace: WorkspaceSettings;
   canManageTeam?: boolean;
+  /** Solo el Dueño cambia las claves; el resto ve si están configuradas. */
+  canManageSecrets?: boolean;
 }) {
   const [name, setName] = useState(workspace.name);
   const [apiKey, setApiKey] = useState("");
@@ -120,31 +123,18 @@ export function SettingsView({
     setSaved(false);
 
     try {
-      const supabase = createClient();
-
-      const update: Record<string, unknown> = {
+      // Las claves se guardan en el servidor (workspace_secrets) y nunca vuelven
+      // al navegador; solo se envían si se escribió una nueva.
+      const result = await saveWorkspaceSettings({
+        workspaceId: workspace.id,
         name: name.trim(),
-        global_keywords: keywords,
-      };
+        globalKeywords: keywords,
+        lateApiKey: canManageSecrets ? apiKey.trim() || undefined : undefined,
+        aiApiKey: canManageSecrets ? aiKey.trim() || undefined : undefined,
+      });
 
-      // Only update keys if user entered new ones
-      if (apiKey.trim()) {
-        update.late_api_key_encrypted = apiKey.trim();
-      }
-      if (aiKey.trim()) {
-        update.ai_api_key = aiKey.trim();
-      }
-
-      const { error: updateError } = await supabase
-        .from("workspaces")
-        .update(update)
-        .eq("id", workspace.id)
-        .select("id")
-        .single();
-
-      if (updateError) {
-        console.error("Settings save error:", updateError);
-        throw new Error(updateError.message);
+      if ("error" in result) {
+        throw new Error(result.error);
       }
 
       setSaved(true);
@@ -204,6 +194,11 @@ export function SettingsView({
               Tu clave de API de Zernio se usa para conectar con las redes sociales.
               {workspace.hasApiKey && " Ya hay una clave configurada."}
             </p>
+            {!canManageSecrets && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Solo el Dueño puede cambiar las claves de API.
+              </p>
+            )}
             <p className="mt-1.5 text-xs text-muted-foreground">
               Puedes obtener tu clave de API en tu{" "}
               <a
@@ -231,6 +226,7 @@ export function SettingsView({
               <input
                 type={showApiKey ? "text" : "password"}
                 value={apiKey}
+                disabled={!canManageSecrets}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   // Clear test result when key changes
@@ -260,7 +256,7 @@ export function SettingsView({
             <div className="mt-3 flex items-center gap-3">
               <button
                 onClick={handleTestConnection}
-                disabled={!apiKey.trim() || testing}
+                disabled={!canManageSecrets || !apiKey.trim() || testing}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {testing ? (
@@ -321,6 +317,7 @@ export function SettingsView({
               <input
                 type={showAiKey ? "text" : "password"}
                 value={aiKey}
+                disabled={!canManageSecrets}
                 onChange={(e) => setAiKey(e.target.value)}
                 placeholder={
                   workspace.hasAiKey

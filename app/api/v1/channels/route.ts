@@ -1,33 +1,20 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiMember } from "@/lib/api-auth";
 
-async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, workspaces(*)")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  if (!membership?.workspaces) return null;
-  return membership.workspaces;
-}
+// Columnas públicas del canal: channels.webhook_secret (secreto heredado por
+// canal) no se envía al navegador.
+const CHANNEL_COLUMNS =
+  "id, workspace_id, platform, late_account_id, username, display_name, profile_picture, webhook_id, is_active, last_comment_cursor, comment_rules, created_at, updated_at";
 
 export async function GET() {
-  const supabase = await createClient();
-  const workspace = await getWorkspace(supabase);
-  if (!workspace)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiMember();
+  if (!guard.ok) return guard.response;
+  const { supabase, workspaceId } = guard.ctx;
 
   const { data: channels, error } = await supabase
     .from("channels")
-    .select("*")
-    .eq("workspace_id", workspace.id)
+    .select(CHANNEL_COLUMNS)
+    .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
 
   if (error)

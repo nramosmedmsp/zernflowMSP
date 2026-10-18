@@ -6,6 +6,16 @@ import { redirect } from "next/navigation";
 export const WORKSPACE_COOKIE = "zernflow_workspace_id";
 
 /**
+ * El espacio llega a componentes de cliente (p. ej. el menú lateral): nunca
+ * con secretos. Desde 00019 estas columnas están vacías (los secretos viven en
+ * workspace_secrets); esto evita filtrarlos si el código se despliega antes
+ * de aplicar la migración.
+ */
+function withoutLegacySecrets<T extends object>(workspace: T): T {
+  return { ...workspace, late_api_key_encrypted: null, ai_api_key: null, webhook_secret: null };
+}
+
+/**
  * Cached per-request: deduplicates across layout + page in the same render.
  * Reads workspace ID from cookie if set; falls back to first workspace.
  */
@@ -32,7 +42,7 @@ export const getWorkspace = cache(async () => {
     if (membership?.workspaces) {
       return {
         user,
-        workspace: membership.workspaces,
+        workspace: withoutLegacySecrets(membership.workspaces),
         role: membership.role,
         supabase,
       };
@@ -52,7 +62,7 @@ export const getWorkspace = cache(async () => {
 
   return {
     user,
-    workspace: membership.workspaces,
+    workspace: withoutLegacySecrets(membership.workspaces),
     role: membership.role,
     supabase,
   };

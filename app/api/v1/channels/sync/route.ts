@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
 import {
   ensureWebhookRegistered,
@@ -7,23 +7,8 @@ import {
 } from "@/lib/zernio-webhook";
 import { backfillInboxConversations } from "@/lib/inbox-sync";
 import { isSupportedPlatform } from "@/lib/platforms";
-
-async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data: membership } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, workspaces(*)")
-    .eq("user_id", user.id)
-    .limit(1)
-    .single();
-
-  if (!membership?.workspaces) return null;
-  return membership.workspaces;
-}
+import { requireApiAdmin } from "@/lib/api-auth";
+import { getLateApiKey } from "@/lib/workspace-secrets";
 
 /**
  * POST /api/v1/channels/sync
@@ -31,21 +16,24 @@ async function getWorkspace(supabase: Awaited<ReturnType<typeof createClient>>) 
  * Syncs all Zernio accounts as channels for the current workspace.
  * Creates new channels for accounts not yet in the DB.
  * Deactivates channels whose Zernio accounts no longer exist.
+ * Solo Dueño o Administrador.
  */
 export async function POST() {
-  const supabase = await createClient();
-  const workspace = await getWorkspace(supabase);
-  if (!workspace)
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase } = guard.ctx;
+  const workspace = { id: guard.ctx.workspaceId };
 
-  if (!workspace.late_api_key_encrypted) {
+  // La clave se lee en el servidor con el cliente de servicio.
+  const lateApiKey = await getLateApiKey(workspace.id);
+  if (!lateApiKey) {
     return NextResponse.json(
       { error: "La clave de API de Zernio no está configurada. Ve primero a Configuración." },
       { status: 400 }
     );
   }
 
-  const zernio = createZernioClient(workspace.late_api_key_encrypted);
+  const zernio = createZernioClient(lateApiKey);
 
   try {
     const res = await zernio.accounts.listAccounts();
@@ -136,7 +124,9 @@ export async function POST() {
     // registration only happened in the Settings test-key flow (#12).
     // Best-effort: a failure must not block the channel sync.
     try {
-      const secret = await getOrCreateWorkspaceWebhookSecret(supabase, workspace.id);
+      // workspace_secrets solo se lee con el cliente de servicio (ya se validó el rol).
+      const service = await createServiceClient();
+      const secret = await getOrCreateWorkspaceWebhookSecret(service, workspace.id);
       await ensureWebhookRegistered(zernio, {
         appUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
         secret,

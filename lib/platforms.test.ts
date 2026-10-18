@@ -35,10 +35,12 @@ describe("platform allowlist", () => {
 
   it("keeps ALL_MIGRATIONS.sql a faithful in-order copy of every migration", () => {
     const dir = migrationsDir();
-    const bundle = readFileSync(join(dir, "ALL_MIGRATIONS.sql"), "utf8");
+    // Normalise CRLF -> LF: with core.autocrlf the .sql files can mix line endings on Windows.
+    const normalise = (s: string) => s.replace(/\r\n/g, "\n");
+    const bundle = normalise(readFileSync(join(dir, "ALL_MIGRATIONS.sql"), "utf8"));
     let cursor = 0;
     for (const file of migrationFiles()) {
-      const body = readFileSync(join(dir, file), "utf8").trim();
+      const body = normalise(readFileSync(join(dir, file), "utf8")).trim();
       const at = bundle.indexOf(body, cursor);
       expect(at, `${file} missing from ALL_MIGRATIONS.sql or out of order`).toBeGreaterThan(-1);
       cursor = at + body.length;

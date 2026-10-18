@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
 import {
   ensureWebhookRegistered,
@@ -7,13 +7,20 @@ import {
 } from "@/lib/zernio-webhook";
 import { backfillInboxConversations } from "@/lib/inbox-sync";
 import { isSupportedPlatform } from "@/lib/platforms";
+import { WORKSPACE_CHANGED_MESSAGE, requireApiAdmin } from "@/lib/api-auth";
+import { OWNER_ONLY_SECRETS_MESSAGE, canManageSecrets } from "@/lib/permissions";
+import { saveWorkspaceSecrets } from "@/lib/workspace-secrets";
 
 /**
  * POST /api/v1/channels/test-key
  *
  * Tests a Zernio API key, saves it to the workspace, and auto-syncs channels.
+ * Probar: Dueño o Administrador. Guardar (con workspaceId): solo el Dueño.
  */
 export async function POST(request: NextRequest) {
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+
   const body = await request.json();
   const { apiKey, workspaceId } = body;
 
@@ -22,6 +29,15 @@ export async function POST(request: NextRequest) {
       { error: "La clave de API es obligatoria" },
       { status: 400 }
     );
+  }
+
+  if (workspaceId) {
+    if (workspaceId !== guard.ctx.workspaceId) {
+      return NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE }, { status: 409 });
+    }
+    if (!canManageSecrets(guard.ctx.role)) {
+      return NextResponse.json({ error: OWNER_ONLY_SECRETS_MESSAGE }, { status: 403 });
+    }
   }
 
   // Validate the key by listing accounts
@@ -38,19 +54,20 @@ export async function POST(request: NextRequest) {
 
   // If workspaceId provided, save the key and sync channels
   if (workspaceId) {
-    const supabase = await createClient();
+    const { supabase } = guard.ctx;
+    // workspace_secrets solo se escribe con el cliente de servicio (rol ya validado).
+    const service = await createServiceClient();
 
     // Save the API key
-    const { error: saveErr } = await supabase
-      .from("workspaces")
-      .update({ late_api_key_encrypted: apiKey.trim() })
-      .eq("id", workspaceId)
-      .select("id")
-      .single();
+    const { error: saveErr } = await saveWorkspaceSecrets(
+      workspaceId,
+      { lateApiKey: apiKey.trim() },
+      service
+    );
 
     if (saveErr) {
       return NextResponse.json(
-        { error: `La clave es válida, pero no se pudo guardar: ${saveErr.message}` },
+        { error: `La clave es válida, pero no se pudo guardar: ${saveErr}` },
         { status: 500 }
       );
     }
@@ -59,7 +76,7 @@ export async function POST(request: NextRequest) {
     // messages/comments reach the Inbox. Best-effort: a failure here must not
     // block saving the key or syncing channels.
     try {
-      const secret = await getOrCreateWorkspaceWebhookSecret(supabase, workspaceId);
+      const secret = await getOrCreateWorkspaceWebhookSecret(service, workspaceId);
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
       const zernio = createZernioClient(apiKey.trim());
       await ensureWebhookRegistered(zernio, {
