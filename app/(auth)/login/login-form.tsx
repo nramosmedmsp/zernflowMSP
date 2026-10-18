@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { BrandLogo } from "@/lib/brand-logo";
 import { APP_NAME } from "@/lib/brand";
+import { requestPasswordReset } from "@/lib/actions/auth";
 
 function translateAuthError(message: string): string {
   const text = message.toLowerCase();
@@ -12,10 +13,10 @@ function translateAuthError(message: string): string {
     return "Correo o contraseña incorrectos.";
   }
   if (text.includes("email not confirmed")) {
-    return "Tu correo aún no está confirmado. Revisa tu bandeja o pide un enlace de acceso.";
+    return "Tu cuenta aún no está activada. Abre el enlace de activación o pide a un administrador que te lo reenvíe.";
   }
   if (text.includes("signups not allowed") || text.includes("user not found")) {
-    return "No hay una cuenta con ese correo. Pide a un administrador tu enlace de invitación.";
+    return "No hay una cuenta con ese correo. Pide a un administrador que te cree un usuario.";
   }
   if (text.includes("rate limit") || text.includes("security purposes")) {
     return "Hiciste demasiados intentos. Espera unos minutos y vuelve a intentarlo.";
@@ -28,8 +29,8 @@ export function LoginForm({ next, notice }: { next: string; notice: string | nul
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [magicSent, setMagicSent] = useState(false);
-  const [magicLoading, setMagicLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [resetLoading, setResetLoading] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -53,30 +54,24 @@ export function LoginForm({ next, notice }: { next: string; notice: string | nul
     router.refresh();
   }
 
-  // Passwordless sign-in. Must start in the browser: the client uses the PKCE
-  // flow, so the code verifier cookie is set here and /auth/callback can
-  // exchange the code from the emailed link. Links sent from the Supabase
-  // dashboard use the implicit flow and are rejected by this client.
-  async function handleMagicLink() {
+  // "¿Olvidaste tu contraseña?": el enlace lo arma y lo envía el servidor con
+  // el correo de la app (Configuración → Correo) y lleva a /auth/confirm →
+  // /cuenta/contrasena. La respuesta no revela si el correo existe.
+  async function handleForgotPassword() {
     setError(null);
-    if (!email) {
+    if (!email.trim()) {
       setError("Primero escribe tu correo.");
       return;
     }
-    setMagicLoading(true);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
-      },
-    });
-    setMagicLoading(false);
-    if (error) {
-      setError(translateAuthError(error.message));
-      return;
+    setResetLoading(true);
+    try {
+      const { message } = await requestPasswordReset(email);
+      setResetMessage(message);
+    } catch {
+      setError("No se pudo procesar el pedido. Inténtalo de nuevo.");
+    } finally {
+      setResetLoading(false);
     }
-    setMagicSent(true);
   }
 
   return (
@@ -137,27 +132,23 @@ export function LoginForm({ next, notice }: { next: string; notice: string | nul
             {loading ? "Iniciando sesión..." : "Iniciar sesión"}
           </button>
 
-          {magicSent ? (
-            <p className="text-center text-sm text-muted-foreground">
-              Revisa tu correo: te enviamos un enlace de acceso.
-            </p>
+          {resetMessage ? (
+            <p className="text-center text-sm text-muted-foreground">{resetMessage}</p>
           ) : (
             <button
               type="button"
-              onClick={handleMagicLink}
-              disabled={magicLoading}
+              onClick={handleForgotPassword}
+              disabled={resetLoading}
               className="w-full text-center text-sm font-medium text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
             >
-              {magicLoading
-                ? "Enviando enlace..."
-                : "¿Olvidaste tu contraseña? Envíame un enlace de acceso"}
+              {resetLoading ? "Enviando..." : "¿Olvidaste tu contraseña?"}
             </button>
           )}
         </form>
 
         <p className="text-center text-xs text-muted-foreground">
-          ¿Aún no tienes cuenta? El acceso es solo por invitación: pide a un administrador tu
-          enlace.
+          ¿Aún no tienes cuenta? El acceso es solo por invitación: pide a un administrador que
+          te cree un usuario.
         </p>
       </div>
     </div>

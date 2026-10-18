@@ -19,7 +19,7 @@ export default function SinEspacioPage() {
 
         <p className="rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm text-muted-foreground">
           Tu cuenta no pertenece a ningún espacio de trabajo. Pide a un administrador que te
-          comparta un enlace de invitación.
+          agregue desde Configuración → Equipo.
         </p>
 
         <SignOutButton />

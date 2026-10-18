@@ -2,50 +2,53 @@ import type { Metadata } from "next";
 import { getWorkspace } from "@/lib/workspace";
 import { TeamView } from "@/components/settings/team-view";
 import { createServiceClient } from "@/lib/supabase/server";
+import { isMailConfigured } from "@/lib/mail/settings";
+import { canManageTeam, memberViewFromUser } from "@/lib/team-rules";
 
 export const metadata: Metadata = { title: "Equipo" };
 
 export default async function TeamPage() {
-  const { workspace, user, role, supabase } = await getWorkspace();
+  const { workspace, user, role } = await getWorkspace();
 
-  // Fetch workspace members with user details
-  // We need service client to read auth.users for email/name
+  // El cliente de servicio hace falta para ver a todos los miembros (la política
+  // SELECT de workspace_members solo devuelve las filas propias) y para leer
+  // auth.users (correo, nombre y último inicio de sesión).
   const serviceClient = await createServiceClient();
 
-  // Use service client to bypass RLS (workspace_members SELECT policy only returns own rows)
   const { data: members } = await serviceClient
     .from("workspace_members")
     .select("workspace_id, user_id, role, created_at")
-    .eq("workspace_id", workspace.id);
+    .eq("workspace_id", workspace.id)
+    .order("created_at", { ascending: true });
 
-  // Fetch user details for each member via service client (auth.users is not accessible via RLS)
   const memberDetails = await Promise.all(
     (members ?? []).map(async (member) => {
       const {
         data: { user: memberUser },
       } = await serviceClient.auth.admin.getUserById(member.user_id);
 
-      return {
+      return memberViewFromUser(memberUser, {
         userId: member.user_id,
         role: member.role,
         joinedAt: member.created_at,
-        email: memberUser?.email ?? "Sin correo",
-        name:
-          memberUser?.user_metadata?.full_name ??
-          memberUser?.user_metadata?.name ??
-          memberUser?.email?.split("@")[0] ??
-          "Sin nombre",
-      };
+      });
     })
   );
 
-  // Fetch pending invites
-  const { data: pendingInvites } = await supabase
-    .from("workspace_invites")
-    .select("*")
-    .eq("workspace_id", workspace.id)
-    .eq("status", "pending")
-    .order("created_at", { ascending: false });
+  const isManager = canManageTeam(role);
+
+  // Invitaciones pendientes del sistema anterior de enlaces (las nuevas se
+  // marcan como aceptadas en cuanto se crea el usuario).
+  const { data: pendingInvites } = isManager
+    ? await serviceClient
+        .from("workspace_invites")
+        .select("id, email, role, created_at, expires_at")
+        .eq("workspace_id", workspace.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+    : { data: [] };
+
+  const mailConfigured = isManager ? await isMailConfigured(serviceClient) : false;
 
   return (
     <TeamView
@@ -54,7 +57,8 @@ export default async function TeamPage() {
       currentUserId={user.id}
       currentUserRole={role}
       members={memberDetails}
-      pendingInvites={pendingInvites ?? []}
+      legacyInvites={pendingInvites ?? []}
+      mailConfigured={mailConfigured}
     />
   );
 }

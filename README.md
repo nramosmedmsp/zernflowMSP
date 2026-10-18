@@ -144,9 +144,9 @@ Recv.  Engine     Chat           Processor
 ```
 zernflow/
 ├── app/
-│   ├── (auth)/             # Login, register pages
+│   ├── (auth)/             # Login page
 │   ├── (dashboard)/        # Flows, inbox, contacts, sequences, settings
-│   ├── invite/             # Team invite acceptance page
+│   ├── invite/             # Legacy invite links (points to login)
 │   └── api/
 │       ├── webhooks/late/   # Webhook receiver
 │       ├── cron/jobs/       # Job scheduler

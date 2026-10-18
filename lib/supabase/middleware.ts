@@ -32,13 +32,20 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
-  const isAuthPage = pathname === "/login" || pathname === "/register";
-  const isAuthCallback = pathname === "/auth/callback";
+  const isAuthPage = pathname === "/login";
+  // /auth/confirm (página con el botón Continuar) y /auth/confirm/verificar
+  // (verifica el token_hash y crea la sesión) deben pasar sin sesión: la persona
+  // todavía no la tiene.
+  const isAuthCallback =
+    pathname === "/auth/callback" ||
+    pathname === "/auth/confirm" ||
+    pathname === "/auth/confirm/verificar";
+  const isAccount = pathname === "/cuenta" || pathname.startsWith("/cuenta/");
   const isDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
   const isApiRoute = pathname.startsWith("/api/");
   const isNoWorkspace = pathname === "/sin-espacio";
-  // /invite/<id> is public on purpose: it works with or without a session
-  // (create account, sign in, or accept), so it falls through untouched.
+  // /invite/<id> is public: it only explains that invitations now arrive by
+  // email, so it falls through untouched.
 
   // Auth callback and API routes (including webhooks) always pass through
   if (isAuthCallback || isApiRoute) {
@@ -64,15 +71,15 @@ export async function updateSession(request: NextRequest) {
     return redirectTo(user ? "/dashboard" : "/login");
   }
 
-  // Logged-in users on /login or /register go to ?next= (internal paths only)
-  // or to the dashboard.
+  // Logged-in users on /login go to ?next= (internal paths only) or to the
+  // dashboard.
   if (user && isAuthPage) {
     return redirectTo(safeNextPath(request.nextUrl.searchParams.get("next")));
   }
 
   // Unauthenticated users trying to access the dashboard go to login,
   // remembering where they were headed.
-  if (!user && isDashboard) {
+  if (!user && (isDashboard || isAccount)) {
     const target = `${pathname}${request.nextUrl.search}`;
     const next = target === "/dashboard" ? "" : `?next=${encodeURIComponent(target)}`;
     return redirectTo(`/login${next}`);

@@ -1,51 +1,56 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
+import Link from "next/link";
 import {
-  Users,
-  Mail,
-  Crown,
-  Shield,
-  User,
-  Trash2,
-  X,
-  Clock,
-  Plus,
-  Loader2,
   ArrowLeft,
-  Copy,
   Check,
+  Clock,
+  Copy,
+  Crown,
+  KeyRound,
   Link2,
+  Loader2,
+  Mail,
+  Send,
+  Shield,
+  Trash2,
+  User,
+  UserPlus,
+  Users,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  inviteTeamMember,
+  copyAccessLink,
+  createTeamUser,
   removeTeamMember,
   revokeInvite,
+  sendAccessEmail,
 } from "@/lib/actions/team";
-import Link from "next/link";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { formatDate } from "@/lib/format";
-import { inviteUrl, roleLabel } from "@/lib/auth-helpers";
+import { roleLabel } from "@/lib/auth-helpers";
+import {
+  COPY_LINK_WARNING,
+  MAIL_NOT_CONFIGURED_MESSAGE,
+  MEMBER_STATUS_LABELS,
+  canManageTeam,
+  copyAccessLinkError,
+  removeMemberError,
+  sendAccessEmailError,
+  type TeamMemberView,
+} from "@/lib/team-rules";
 
-interface MemberDetail {
-  userId: string;
-  role: string;
-  joinedAt: string;
-  email: string;
-  name: string;
-}
-
-interface PendingInvite {
+interface LegacyInvite {
   id: string;
-  workspace_id: string;
   email: string;
   role: string;
-  invited_by: string;
-  status: string;
-  created_at: string;
-  expires_at: string;
+  created_at: string | null;
+  expires_at: string | null;
 }
+
+type Notice = { kind: "ok" | "warn" | "error"; text: string; offerCopy?: boolean };
 
 const roleIcons: Record<string, React.ReactNode> = {
   owner: <Crown className="h-3 w-3" />,
@@ -59,16 +64,17 @@ const roleStyles: Record<string, string> = {
   member: "bg-gray-100 text-gray-600",
 };
 
-const noopSubscribe = () => () => {};
+const noticeStyles: Record<Notice["kind"], string> = {
+  ok: "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200",
+  warn: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200",
+  error: "border-destructive/30 bg-destructive/10 text-destructive",
+};
 
-/** Origen de la página; vacío durante el render del servidor. */
-function useOrigin() {
-  return useSyncExternalStore(
-    noopSubscribe,
-    () => window.location.origin,
-    () => ""
-  );
-}
+const inputClass =
+  "rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+
+const smallButtonClass =
+  "inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-muted disabled:opacity-50";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -93,45 +99,88 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function CopyLinkButton({
-  url,
-  compact = false,
-}: {
-  url: string;
-  compact?: boolean;
-}) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-
-  async function handleCopy() {
-    if (!url) return;
-    const ok = await copyText(url);
-    setState(ok ? "copied" : "failed");
-    setTimeout(() => setState("idle"), 2000);
-  }
-
-  const label =
-    state === "copied" ? "Copiado" : state === "failed" ? "No se pudo copiar" : "Copiar enlace";
-
+function NoticeBox({ notice }: { notice: Notice }) {
   return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      disabled={!url}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border font-medium transition-colors hover:bg-muted disabled:opacity-50",
-        compact ? "px-2 py-1 text-[11px]" : "px-3 py-2 text-xs"
-      )}
-      title="Copiar enlace de invitación"
-    >
-      {state === "copied" ? (
-        <Check className="h-3.5 w-3.5 text-green-600" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-      {label}
-    </button>
+    <p className={cn("rounded-lg border px-3 py-2 text-xs", noticeStyles[notice.kind])}>
+      {notice.text}
+    </p>
   );
 }
+
+/**
+ * Botón que genera un enlace de acceso nuevo (cada clic invalida el anterior),
+ * lo copia y lo deja visible con la advertencia de compartirlo en privado.
+ */
+function AccessLinkButton({
+  workspaceId,
+  userId,
+  label,
+  warning,
+}: {
+  workspaceId: string;
+  userId: string;
+  label: string;
+  warning: string;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleGenerate() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    setCopied(null);
+    const result = await copyAccessLink(workspaceId, userId);
+    if ("error" in result) {
+      setError(result.error);
+      setUrl(null);
+    } else {
+      setUrl(result.url);
+      setCopied(await copyText(result.url));
+    }
+    setLoading(false);
+  }
+
+  async function handleCopyAgain() {
+    if (url) setCopied(await copyText(url));
+  }
+
+  return (
+    <div className="w-full space-y-2">
+      <button type="button" onClick={handleGenerate} disabled={loading} className={smallButtonClass}>
+        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+        {loading ? "Generando..." : label}
+      </button>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {url && (
+        <div className="space-y-1.5 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              readOnly
+              value={url}
+              onFocus={(e) => e.currentTarget.select()}
+              className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 font-mono text-[11px]"
+              aria-label="Enlace de acceso"
+            />
+            <button type="button" onClick={handleCopyAgain} className={smallButtonClass}>
+              {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copiado" : copied === false ? "Cópialo a mano" : "Copiar"}
+            </button>
+          </div>
+          <p className="text-[11px] text-amber-900 dark:text-amber-200">{warning}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const RECOVERY_LINK_WARNING =
+  "Compártelo solo por un canal privado; quien lo abra podrá entrar a la cuenta. Vence en 24 horas.";
 
 export function TeamView({
   workspaceId,
@@ -139,90 +188,117 @@ export function TeamView({
   currentUserId,
   currentUserRole,
   members: initialMembers,
-  pendingInvites: initialInvites,
+  legacyInvites: initialLegacyInvites,
+  mailConfigured,
 }: {
   workspaceId: string;
   workspaceName: string;
   currentUserId: string;
   currentUserRole: string;
-  members: MemberDetail[];
-  pendingInvites: PendingInvite[];
+  members: TeamMemberView[];
+  legacyInvites: LegacyInvite[];
+  mailConfigured: boolean;
 }) {
-  const isOwner = currentUserRole === "owner";
-  const origin = useOrigin();
+  const isManager = canManageTeam(currentUserRole);
 
   const [members, setMembers] = useState(initialMembers);
-  const [invites, setInvites] = useState(initialInvites);
+  const [legacyInvites, setLegacyInvites] = useState(initialLegacyInvites);
 
-  // Invite form
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("member");
-  const [inviting, setInviting] = useState(false);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const [createdInvite, setCreatedInvite] = useState<PendingInvite | null>(null);
+  // Crear usuario
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ userId: string; notice: Notice } | null>(null);
+
+  // Acciones por fila
+  const [busy, setBusy] = useState<Record<string, string | undefined>>({});
+  const [rowNotices, setRowNotices] = useState<Record<string, Notice | undefined>>({});
   const [actionError, setActionError] = useState<string | null>(null);
-
-  // Remove member
-  const [removingId, setRemovingId] = useState<string | null>(null);
-  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<{ userId: string; name: string } | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
 
-  async function handleInvite(e: React.FormEvent) {
+  function setRowBusy(id: string, action: string | undefined) {
+    setBusy((prev) => ({ ...prev, [id]: action }));
+  }
+
+  async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!inviteEmail.trim() || inviting) return;
+    if (creating) return;
+    setCreating(true);
+    setCreateError(null);
+    setCreated(null);
 
-    setInviting(true);
-    setInviteError(null);
-    setCreatedInvite(null);
+    const result = await createTeamUser(workspaceId, { fullName, email, role });
 
-    const result = await inviteTeamMember(workspaceId, inviteEmail, inviteRole);
-
-    if (result.error) {
-      setInviteError(result.error);
-    } else if (result.invite) {
-      const invite = result.invite as PendingInvite;
-      setInvites((prev) => [invite, ...prev]);
-      setInviteEmail("");
-      setInviteRole("member");
-      setCreatedInvite(invite);
+    if ("error" in result) {
+      setCreateError(result.error);
+    } else {
+      setMembers((prev) => [...prev, result.member]);
+      setFullName("");
+      setEmail("");
+      setRole("member");
+      if (result.outcome === "existing") {
+        setCreated({ userId: result.member.userId, notice: { kind: "ok", text: result.message } });
+      } else if (result.delivery.sent) {
+        setCreated({
+          userId: result.member.userId,
+          notice: { kind: "ok", text: result.delivery.message },
+        });
+      } else {
+        setCreated({
+          userId: result.member.userId,
+          notice: { kind: "warn", text: result.delivery.message, offerCopy: true },
+        });
+      }
     }
+    setCreating(false);
+  }
 
-    setInviting(false);
+  async function handleSendAccess(member: TeamMemberView) {
+    setRowBusy(member.userId, "send");
+    setRowNotices((prev) => ({ ...prev, [member.userId]: undefined }));
+
+    const result = await sendAccessEmail(workspaceId, member.userId);
+    let notice: Notice;
+    if ("error" in result) {
+      notice = { kind: "error", text: result.error };
+    } else if (result.delivery.sent) {
+      notice = { kind: "ok", text: result.delivery.message };
+    } else {
+      notice = { kind: "warn", text: result.delivery.message, offerCopy: true };
+    }
+    setRowNotices((prev) => ({ ...prev, [member.userId]: notice }));
+    setRowBusy(member.userId, undefined);
   }
 
   async function handleRemove(userId: string) {
-    setRemovingId(userId);
+    setRowBusy(userId, "remove");
     setActionError(null);
 
     const result = await removeTeamMember(workspaceId, userId);
-
     if (result.error) {
       setActionError(result.error);
     } else {
       setMembers((prev) => prev.filter((m) => m.userId !== userId));
+      setCreated((prev) => (prev?.userId === userId ? null : prev));
     }
-
-    setRemovingId(null);
+    setRowBusy(userId, undefined);
   }
 
   async function handleRevoke(inviteId: string) {
-    setRevokingId(inviteId);
+    setRowBusy(inviteId, "revoke");
     setActionError(null);
 
-    const result = await revokeInvite(inviteId);
-
+    const result = await revokeInvite(workspaceId, inviteId);
     if (result.error) {
       setActionError(result.error);
     } else {
-      setInvites((prev) => prev.filter((i) => i.id !== inviteId));
-      setCreatedInvite((prev) => (prev?.id === inviteId ? null : prev));
+      setLegacyInvites((prev) => prev.filter((i) => i.id !== inviteId));
     }
-
-    setRevokingId(null);
+    setRowBusy(inviteId, undefined);
   }
-
-  const createdInviteUrl = createdInvite && origin ? inviteUrl(origin, createdInvite.id) : "";
 
   return (
     <div className="flex h-full flex-col">
@@ -239,7 +315,7 @@ export function TeamView({
           <div>
             <h1 className="text-2xl font-bold">Equipo</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Administra los miembros e invitaciones de {workspaceName}
+              Administra los miembros de {workspaceName}
             </p>
           </div>
         </div>
@@ -253,159 +329,261 @@ export function TeamView({
             </p>
           )}
 
-          {/* Members list */}
-          <section>
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">
-                Miembros ({members.length})
-              </h2>
-            </div>
+          {/* Crear usuario (Dueño y Administradores) */}
+          {isManager && (
+            <section>
+              <div className="flex items-center gap-2">
+                <UserPlus className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-sm font-semibold">Crear usuario</h2>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {mailConfigured
+                  ? "Le llegará un correo para activar su cuenta y crear su contraseña."
+                  : "El correo aún no está configurado: podrás copiar el enlace de activación y compartirlo por un canal privado."}
+              </p>
 
-            <div className="mt-4 space-y-2">
-              {members.map((member) => (
-                <div
-                  key={member.userId}
-                  className="flex items-center justify-between rounded-xl border border-border bg-card p-4"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-muted-foreground">
-                      {member.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-medium truncate">
-                          {member.name}
-                        </p>
-                        {member.userId === currentUserId && (
-                          <span className="shrink-0 text-[10px] text-muted-foreground">
-                            (tú)
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {member.email}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0 ml-4">
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                        roleStyles[member.role] ?? roleStyles.member
-                      )}
-                    >
-                      {roleIcons[member.role] ?? roleIcons.member}
-                      {roleLabel(member.role)}
-                    </span>
-
-                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                      Desde el {formatDate(member.joinedAt)}
-                    </span>
-
-                    {isOwner && member.userId !== currentUserId && (
-                      <button
-                        onClick={() =>
-                          setConfirmRemove({ userId: member.userId, name: member.name })
-                        }
-                        disabled={removingId === member.userId}
-                        className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                        title="Quitar miembro"
-                      >
-                        {removingId === member.userId ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Invite section (owners only) */}
-          {isOwner && (
-            <>
-              <hr className="border-border" />
-
-              <section>
-                <div className="flex items-center gap-2">
-                  <Mail className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold">Invitar a un miembro</h2>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Se genera un enlace personal para ese correo. Vence en 7 días.
-                </p>
-
-                <form onSubmit={handleInvite} className="mt-4 flex flex-wrap gap-2">
+              <form onSubmit={handleCreate} className="mt-4 space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => {
+                      setFullName(e.target.value);
+                      setCreateError(null);
+                    }}
+                    placeholder="Nombre y apellido"
+                    required
+                    maxLength={100}
+                    autoComplete="off"
+                    className={cn(inputClass, "min-w-0 flex-1 basis-48")}
+                    aria-label="Nombre"
+                  />
                   <input
                     type="email"
-                    value={inviteEmail}
+                    value={email}
                     onChange={(e) => {
-                      setInviteEmail(e.target.value);
-                      setInviteError(null);
+                      setEmail(e.target.value);
+                      setCreateError(null);
                     }}
                     placeholder="correo@ejemplo.com"
                     required
-                    className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    autoComplete="off"
+                    className={cn(inputClass, "min-w-0 flex-1 basis-48")}
+                    aria-label="Correo"
                   />
+                </div>
+                <div className="flex flex-wrap gap-2">
                   <select
-                    value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value)}
-                    className="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                    className={inputClass}
+                    aria-label="Rol"
                   >
                     <option value="member">{roleLabel("member")}</option>
                     <option value="admin">{roleLabel("admin")}</option>
                   </select>
                   <button
                     type="submit"
-                    disabled={!inviteEmail.trim() || inviting}
+                    disabled={!fullName.trim() || !email.trim() || creating}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                   >
-                    {inviting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Plus className="h-4 w-4" />
-                    )}
-                    {inviting ? "Creando..." : "Crear invitación"}
+                    {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                    {creating ? "Creando..." : "Crear usuario"}
                   </button>
-                </form>
+                </div>
+              </form>
 
-                {inviteError && (
-                  <p className="mt-2 text-xs text-destructive">{inviteError}</p>
-                )}
+              {createError && <p className="mt-2 text-xs text-destructive">{createError}</p>}
 
-                {createdInvite && (
-                  <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-4 dark:border-green-900 dark:bg-green-950/40">
-                    <div className="flex items-center gap-2 text-sm font-medium text-green-800 dark:text-green-200">
-                      <Link2 className="h-4 w-4" />
-                      Invitación creada para {createdInvite.email}
-                    </div>
-                    <p className="mt-1 text-xs text-green-700 dark:text-green-300">
-                      Comparte este enlace con la persona invitada. Vence en 7 días.
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <input
-                        type="text"
-                        readOnly
-                        value={createdInviteUrl}
-                        onFocus={(e) => e.currentTarget.select()}
-                        className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs"
-                        aria-label="Enlace de invitación"
-                      />
-                      <CopyLinkButton url={createdInviteUrl} />
-                    </div>
-                  </div>
-                )}
-              </section>
-            </>
+              {created && (
+                <div className="mt-4 space-y-2">
+                  <NoticeBox notice={created.notice} />
+                  {created.notice.offerCopy && (
+                    <AccessLinkButton
+                      workspaceId={workspaceId}
+                      userId={created.userId}
+                      label="Copiar enlace de activación"
+                      warning={COPY_LINK_WARNING}
+                    />
+                  )}
+                </div>
+              )}
+            </section>
           )}
 
-          {/* Pending invites */}
-          {invites.length > 0 && (
+          {isManager && <hr className="border-border" />}
+
+          {/* Miembros */}
+          <section>
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Miembros ({members.length})</h2>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {members.map((member) => {
+                const isSelf = member.userId === currentUserId;
+                const pending = member.status === "pending";
+                const actor = {
+                  actorId: currentUserId,
+                  actorRole: currentUserRole,
+                  targetId: member.userId,
+                  targetRole: member.role,
+                };
+                const canSend = isManager && sendAccessEmailError(actor) === null;
+                const copyError = isManager
+                  ? copyAccessLinkError({ ...actor, targetActive: !pending })
+                  : null;
+                const canCopy = isManager && copyError === null;
+                // Solo la regla de "cuenta activa" bloquea con motivo visible;
+                // para uno mismo o el Dueño el botón simplemente no aparece.
+                const copyBlockedByActive =
+                  isManager &&
+                  copyError !== null &&
+                  copyAccessLinkError({ ...actor, targetActive: false }) === null;
+                const canRemove = isManager && removeMemberError(actor) === null;
+                const notice = rowNotices[member.userId];
+                const rowBusy = busy[member.userId];
+
+                // Activos: con correo, se envía el enlace; sin correo, se copia.
+                const showSendButton = canSend && (pending || mailConfigured);
+                const showCopyButton =
+                  canCopy && (pending || !mailConfigured || !!notice?.offerCopy);
+                const showBlockedCopyButton =
+                  copyBlockedByActive && (!mailConfigured || !!notice?.offerCopy);
+
+                return (
+                  <div
+                    key={member.userId}
+                    className="space-y-3 rounded-xl border border-border bg-card p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-muted-foreground">
+                          {member.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-medium">{member.name}</p>
+                            {isSelf && (
+                              <span className="shrink-0 text-[10px] text-muted-foreground">(tú)</span>
+                            )}
+                          </div>
+                          <p className="truncate text-xs text-muted-foreground">{member.email}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                            roleStyles[member.role] ?? roleStyles.member
+                          )}
+                        >
+                          {roleIcons[member.role] ?? roleIcons.member}
+                          {roleLabel(member.role)}
+                        </span>
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                            pending
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-green-100 text-green-800"
+                          )}
+                        >
+                          {pending && <Clock className="h-3 w-3" />}
+                          {MEMBER_STATUS_LABELS[member.status]}
+                        </span>
+                        <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+                          {pending ? "Creado el" : "Desde el"} {formatDate(member.joinedAt)}
+                        </span>
+
+                        {canRemove && (
+                          <button
+                            onClick={() => setConfirmRemove({ userId: member.userId, name: member.name })}
+                            disabled={!!rowBusy}
+                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                            title="Quitar miembro"
+                          >
+                            {rowBusy === "remove" ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {(showSendButton || showCopyButton || showBlockedCopyButton) && (
+                      <div className="flex flex-wrap items-start gap-2 border-t border-border pt-3">
+                        {showSendButton && (
+                          <button
+                            type="button"
+                            onClick={() => handleSendAccess(member)}
+                            disabled={!!rowBusy}
+                            className={smallButtonClass}
+                          >
+                            {rowBusy === "send" ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : pending ? (
+                              <Send className="h-3.5 w-3.5" />
+                            ) : (
+                              <KeyRound className="h-3.5 w-3.5" />
+                            )}
+                            {pending ? "Reenviar invitación" : "Enviar enlace para restablecer contraseña"}
+                          </button>
+                        )}
+                        {showCopyButton && (
+                          <AccessLinkButton
+                            workspaceId={workspaceId}
+                            userId={member.userId}
+                            label={
+                              pending
+                                ? "Copiar enlace de activación"
+                                : "Copiar enlace para restablecer contraseña"
+                            }
+                            warning={pending ? COPY_LINK_WARNING : RECOVERY_LINK_WARNING}
+                          />
+                        )}
+                        {showBlockedCopyButton && (
+                          <button
+                            type="button"
+                            disabled
+                            title={copyError ?? undefined}
+                            className={smallButtonClass}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            Copiar enlace para restablecer contraseña
+                          </button>
+                        )}
+                        {notice && (
+                          <div className="w-full">
+                            <NoticeBox notice={notice} />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {isManager && !mailConfigured && (
+              <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+                <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {MAIL_NOT_CONFIGURED_MESSAGE}{" "}
+                  <Link href="/dashboard/settings/correo" className="font-medium text-foreground hover:underline">
+                    Ir a Correo
+                  </Link>
+                </span>
+              </p>
+            )}
+          </section>
+
+          {/* Invitaciones del sistema anterior */}
+          {isManager && legacyInvites.length > 0 && (
             <>
               <hr className="border-border" />
 
@@ -413,79 +591,42 @@ export function TeamView({
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-muted-foreground" />
                   <h2 className="text-sm font-semibold">
-                    Invitaciones pendientes ({invites.length})
+                    Invitaciones antiguas sin usar ({legacyInvites.length})
                   </h2>
                 </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Son del sistema anterior de enlaces y ya no sirven para entrar. Elimínalas; si esa
+                  persona necesita acceso, créala arriba como usuario.
+                </p>
 
                 <div className="mt-4 space-y-2">
-                  {invites.map((invite) => {
-                    const isExpired =
-                      new Date(invite.expires_at) < new Date();
-                    return (
-                      <div
-                        key={invite.id}
-                        className={cn(
-                          "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4",
-                          isExpired && "opacity-60"
-                        )}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                            <Mail className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {invite.email}
-                            </p>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span
-                                className={cn(
-                                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                                  roleStyles[invite.role] ?? roleStyles.member
-                                )}
-                              >
-                                {roleIcons[invite.role] ?? roleIcons.member}
-                                {roleLabel(invite.role)}
-                              </span>
-                              {isExpired ? (
-                                <span className="text-[10px] text-destructive">
-                                  Venció el {formatDate(invite.expires_at)}
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-muted-foreground">
-                                  Vence el {formatDate(invite.expires_at)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {isOwner && (
-                          <div className="flex shrink-0 items-center gap-1.5">
-                            {!isExpired && (
-                              <CopyLinkButton
-                                url={origin ? inviteUrl(origin, invite.id) : ""}
-                                compact
-                              />
-                            )}
-                            <button
-                              onClick={() => setConfirmRevoke(invite.id)}
-                              disabled={revokingId === invite.id}
-                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                              title="Revocar invitación"
-                            >
-                              {revokingId === invite.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <X className="h-3.5 w-3.5" />
-                              )}
-                              Revocar
-                            </button>
-                          </div>
-                        )}
+                  {legacyInvites.map((invite) => (
+                    <div
+                      key={invite.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{invite.email}</p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                          {roleLabel(invite.role)}
+                          {invite.created_at && ` · creada el ${formatDate(invite.created_at)}`}
+                        </p>
                       </div>
-                    );
-                  })}
+                      <button
+                        onClick={() => setConfirmRevoke(invite.id)}
+                        disabled={!!busy[invite.id]}
+                        className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                        title="Eliminar invitación"
+                      >
+                        {busy[invite.id] ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <X className="h-3.5 w-3.5" />
+                        )}
+                        Eliminar
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </section>
             </>
@@ -507,9 +648,9 @@ export function TeamView({
       />
       <ConfirmDialog
         open={!!confirmRevoke}
-        title="Revocar invitación"
-        message="¿Seguro que quieres revocar esta invitación? El enlace dejará de funcionar."
-        confirmLabel="Revocar"
+        title="Eliminar invitación"
+        message="¿Seguro que quieres eliminar esta invitación antigua?"
+        confirmLabel="Eliminar"
         cancelLabel="Cancelar"
         destructive
         onConfirm={() => {

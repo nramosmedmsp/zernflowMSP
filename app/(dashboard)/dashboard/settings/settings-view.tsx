@@ -17,6 +17,7 @@ import {
   Users,
   ChevronRight,
   Sparkles,
+  Mail,
 } from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -37,8 +38,10 @@ interface TestResult {
 
 export function SettingsView({
   workspace,
+  canManageTeam = false,
 }: {
   workspace: WorkspaceSettings;
+  canManageTeam?: boolean;
 }) {
   const [name, setName] = useState(workspace.name);
   const [apiKey, setApiKey] = useState("");
@@ -417,7 +420,7 @@ export function SettingsView({
               <h2 className="text-sm font-semibold">Equipo</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Administra los miembros y las invitaciones del espacio de trabajo.
+              Crea usuarios, reenvía invitaciones y administra los miembros del espacio de trabajo.
             </p>
             <Link
               href="/dashboard/settings/team"
@@ -428,6 +431,31 @@ export function SettingsView({
               <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
             </Link>
           </section>
+
+          {canManageTeam && (
+            <>
+              <hr className="border-border" />
+
+              {/* Correo */}
+              <section>
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold">Correo</h2>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Servidor SMTP para enviar invitaciones y enlaces para restablecer contraseñas.
+                </p>
+                <Link
+                  href="/dashboard/settings/correo"
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+                >
+                  <Mail className="h-4 w-4" />
+                  Configurar correo
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                </Link>
+              </section>
+            </>
+          )}
 
           <hr className="border-border" />
 

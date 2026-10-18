@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
-  inviteUrl,
-  isInviteUsable,
+  SET_PASSWORD_PATH,
+  confirmNextPath,
   isSignupRequiresInviteError,
+  parseEmailOtpType,
   roleLabel,
   safeNextPath,
   sameEmail,
+  translatePasswordUpdateError,
   validateNewPassword,
 } from "./auth-helpers";
 
@@ -62,21 +64,6 @@ describe("isSignupRequiresInviteError", () => {
   });
 });
 
-describe("isInviteUsable", () => {
-  const now = new Date("2026-10-18T12:00:00Z");
-
-  it("acepta una invitación pendiente y vigente", () => {
-    expect(isInviteUsable({ status: "pending", expires_at: "2026-10-20T00:00:00Z" }, now)).toBe(true);
-  });
-
-  it("rechaza vencidas, aceptadas o sin fecha", () => {
-    expect(isInviteUsable({ status: "pending", expires_at: "2026-10-18T11:59:59Z" }, now)).toBe(false);
-    expect(isInviteUsable({ status: "accepted", expires_at: "2026-10-20T00:00:00Z" }, now)).toBe(false);
-    expect(isInviteUsable({ status: "pending", expires_at: null }, now)).toBe(false);
-    expect(isInviteUsable({ status: "pending", expires_at: "no es fecha" }, now)).toBe(false);
-  });
-});
-
 describe("sameEmail", () => {
   it("ignora mayúsculas y espacios", () => {
     expect(sameEmail(" Ana@Tienda.pe", "ana@tienda.pe ")).toBe(true);
@@ -94,9 +81,46 @@ describe("roleLabel", () => {
   });
 });
 
-describe("inviteUrl", () => {
-  it("arma el enlace sin barras dobles", () => {
-    expect(inviteUrl("https://crm.example.pe/", "abc")).toBe("https://crm.example.pe/invite/abc");
-    expect(inviteUrl("http://localhost:3000", "abc")).toBe("http://localhost:3000/invite/abc");
+describe("parseEmailOtpType", () => {
+  it("acepta solo los tipos de enlace conocidos", () => {
+    for (const type of ["invite", "recovery", "magiclink", "email", "signup", "email_change"]) {
+      expect(parseEmailOtpType(type)).toBe(type);
+    }
+  });
+
+  it("rechaza tipos desconocidos o vacíos", () => {
+    expect(parseEmailOtpType(null)).toBeNull();
+    expect(parseEmailOtpType("")).toBeNull();
+    expect(parseEmailOtpType("sms")).toBeNull();
+    expect(parseEmailOtpType("INVITE")).toBeNull();
+    expect(parseEmailOtpType("invite ")).toBeNull();
+  });
+});
+
+describe("confirmNextPath", () => {
+  it("respeta un next interno", () => {
+    expect(confirmNextPath("invite", "/cuenta/contrasena")).toBe("/cuenta/contrasena");
+    expect(confirmNextPath("magiclink", "/dashboard/inbox")).toBe("/dashboard/inbox");
+  });
+
+  it("lleva a la contraseña por defecto en invitación y recuperación", () => {
+    expect(confirmNextPath("invite", null)).toBe(SET_PASSWORD_PATH);
+    expect(confirmNextPath("recovery", "https://evil.com")).toBe(SET_PASSWORD_PATH);
+  });
+
+  it("lleva al panel en el resto", () => {
+    expect(confirmNextPath("signup", null)).toBe("/dashboard");
+    expect(confirmNextPath(null, "//evil.com")).toBe("/dashboard");
+  });
+});
+
+describe("translatePasswordUpdateError", () => {
+  it("traduce los errores comunes", () => {
+    expect(translatePasswordUpdateError("New password should be different from the old password.")).toMatch(
+      /distinta/,
+    );
+    expect(translatePasswordUpdateError("Auth session missing!")).toMatch(/sesión venció/);
+    expect(translatePasswordUpdateError("Password should be at least 6 characters.")).toMatch(/débil/);
+    expect(translatePasswordUpdateError("algo raro")).toMatch(/No se pudo guardar/);
   });
 });
