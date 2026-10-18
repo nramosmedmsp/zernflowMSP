@@ -1,33 +1,24 @@
 import { getWorkspace } from "@/lib/workspace";
 import Link from "next/link";
 import { ListOrdered } from "lucide-react";
+import { formatDateTime, formatNumber } from "@/lib/format";
 import { CreateSequenceButton } from "@/components/sequences/create-sequence-button";
 import type { SequenceStatus, Json } from "@/lib/types/database";
 
 const statusConfig: Record<SequenceStatus, { label: string; classes: string }> = {
   draft: {
-    label: "Draft",
+    label: "Borrador",
     classes: "bg-muted text-muted-foreground",
   },
   active: {
-    label: "Active",
+    label: "Activa",
     classes: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
   },
   paused: {
-    label: "Paused",
+    label: "Pausada",
     classes: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
   },
 };
-
-function formatDate(dateString: string) {
-  return new Date(dateString).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 export default async function SequencesPage() {
   const { workspace, supabase } = await getWorkspace();
@@ -38,7 +29,7 @@ export default async function SequencesPage() {
     .eq("workspace_id", workspace.id)
     .order("updated_at", { ascending: false });
 
-  // Get enrollment counts per sequence
+  // Obtener el número de inscripciones activas por secuencia
   const sequenceIds = (sequences ?? []).map((s) => s.id);
   let enrollmentCounts: Record<string, number> = {};
 
@@ -62,9 +53,9 @@ export default async function SequencesPage() {
       <div className="border-b border-border px-8 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">Sequences</h1>
+            <h1 className="text-2xl font-bold">Secuencias</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Create drip campaigns to nurture contacts over time
+              Crea campañas automáticas para acompañar a tus contactos con el tiempo
             </p>
           </div>
           <CreateSequenceButton />
@@ -75,9 +66,9 @@ export default async function SequencesPage() {
       {!sequences || sequences.length === 0 ? (
         <div className="mt-12 rounded-xl border border-dashed border-border p-12 text-center">
           <ListOrdered className="mx-auto h-10 w-10 text-muted-foreground" />
-          <h2 className="mt-4 text-lg font-semibold">No sequences yet</h2>
+          <h2 className="mt-4 text-lg font-semibold">Aún no hay secuencias</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Create your first sequence to start nurturing contacts automatically.
+            Crea tu primera secuencia para acompañar a tus contactos de forma automática.
           </p>
           <div className="mt-4">
             <CreateSequenceButton />
@@ -116,10 +107,10 @@ export default async function SequencesPage() {
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {stepCount} {stepCount === 1 ? "step" : "steps"}
+                      {formatNumber(stepCount)} {stepCount === 1 ? "paso" : "pasos"}
                       {enrolled > 0 && (
                         <span className="ml-2">
-                          {enrolled} enrolled
+                          {formatNumber(enrolled)} {enrolled === 1 ? "inscrito" : "inscritos"}
                         </span>
                       )}
                     </p>
@@ -131,7 +122,7 @@ export default async function SequencesPage() {
                   </p>
                 )}
                 <p className="mt-4 text-xs text-muted-foreground">
-                  Updated {formatDate(sequence.updated_at)}
+                  Actualizada el {formatDateTime(sequence.updated_at)}
                 </p>
               </Link>
             );

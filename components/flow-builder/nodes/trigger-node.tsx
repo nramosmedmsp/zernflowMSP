@@ -12,18 +12,18 @@ export interface TriggerNodeProps {
 }
 
 const triggerLabels: Record<string, string> = {
-  keyword: "Keyword",
-  postback: "Button Click",
-  quick_reply: "Quick Reply",
-  welcome: "Welcome Message",
-  default: "Default Reply",
-  comment_keyword: "Comment Keyword",
+  keyword: "Palabra clave",
+  postback: "Botón (postback)",
+  quick_reply: "Respuesta rápida",
+  welcome: "Bienvenida",
+  default: "Por defecto",
+  comment_keyword: "Palabra clave en comentario",
 };
 
 export function TriggerNode({ data, selected }: NodeProps) {
   const nodeData = data as TriggerNodeProps;
   const triggerType = nodeData.triggerType || "keyword";
-  const label = nodeData.label || triggerLabels[triggerType] || "Trigger";
+  const label = nodeData.label || triggerLabels[triggerType] || "Disparador";
 
   return (
     <div
@@ -34,25 +34,25 @@ export function TriggerNode({ data, selected }: NodeProps) {
     >
       <div className="flex items-center gap-2 rounded-t-lg bg-emerald-500 px-3 py-2 text-white">
         <Zap className="h-3.5 w-3.5" />
-        <span className="text-xs font-semibold">Trigger</span>
+        <span className="text-xs font-semibold">Disparador</span>
       </div>
       <div className="p-3">
         <div className="flex items-center gap-1.5">
           <p className="text-sm font-medium">{label}</p>
           {triggerType === "comment_keyword" && nodeData.alsoMatchInDms === true && (
             <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              Also in DMs
+              También en DM
             </span>
           )}
         </div>
         {nodeData.keywords && nodeData.keywords.length > 0 && (
           <p className="mt-1 text-xs text-muted-foreground">
-            Keywords:{" "}
+            Palabras clave:{" "}
             {nodeData.keywords
               .slice(0, 3)
               .map((k) => k.value)
               .join(", ")}
-            {nodeData.keywords.length > 3 && ` +${nodeData.keywords.length - 3} more`}
+            {nodeData.keywords.length > 3 && ` +${nodeData.keywords.length - 3} más`}
           </p>
         )}
         {!nodeData.keywords?.length && triggerType !== "keyword" && (

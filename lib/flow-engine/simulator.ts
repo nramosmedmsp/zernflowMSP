@@ -125,7 +125,7 @@ export function simulateFlow(
   // 1. Find trigger node
   const triggerNode = nodes.find((n) => n.type === "trigger");
   if (!triggerNode) {
-    errors.push("No trigger node found");
+    errors.push("No se encontró un nodo disparador");
     return { steps, errors, completed: false };
   }
 
@@ -155,7 +155,7 @@ export function simulateFlow(
   steps.push({
     nodeId: triggerNode.id,
     nodeType: "trigger",
-    nodeLabel: (triggerData.label as string) || "Trigger",
+    nodeLabel: (triggerData.label as string) || "Disparador",
     result: {
       type: "trigger",
       matched: triggerMatched,
@@ -166,7 +166,7 @@ export function simulateFlow(
 
   if (!triggerMatched) {
     errors.push(
-      `Trigger did not match. Keywords: [${keywords.join(", ")}], Message: "${config.incomingMessage}"`
+      `El disparador no coincidió. Palabras clave: [${keywords.join(", ")}], Mensaje: "${config.incomingMessage}"`
     );
     return { steps, errors, completed: false };
   }
@@ -174,7 +174,7 @@ export function simulateFlow(
   // 2. Follow edges from trigger
   const firstEdge = edges.find((e) => e.source === triggerNode.id);
   if (!firstEdge) {
-    errors.push("Trigger has no outgoing connection");
+    errors.push("El disparador no tiene conexión de salida");
     return { steps, errors, completed: false };
   }
 
@@ -187,12 +187,12 @@ export function simulateFlow(
     stepCount++;
     const node = nodes.find((n) => n.id === currentNodeId);
     if (!node) {
-      errors.push(`Node not found: ${currentNodeId}`);
+      errors.push(`Nodo no encontrado: ${currentNodeId}`);
       break;
     }
 
     const data = node.data as Record<string, unknown>;
-    const label = (data.label as string) || node.type || "Unknown";
+    const label = (data.label as string) || node.type || "Desconocido";
     let nextHandle: string | undefined;
     let shouldPause = false;
 
@@ -210,7 +210,7 @@ export function simulateFlow(
           nodeLabel: label,
           result: {
             type: "message",
-            texts: texts.length > 0 ? texts : ["(empty message)"],
+            texts: texts.length > 0 ? texts : ["(mensaje vacío)"],
             buttons: buttons.length > 0 ? buttons : undefined,
             quickReplies: quickReplies.length > 0 ? quickReplies : undefined,
           },
@@ -287,7 +287,7 @@ export function simulateFlow(
 
       case "addTag":
       case "removeTag": {
-        const tagName = (data.tagName as string) || "unknown";
+        const tagName = (data.tagName as string) || "desconocida";
         const actionType =
           node.type === "addTag"
             ? "addTag"
@@ -301,8 +301,8 @@ export function simulateFlow(
             actionType,
             detail:
               actionType === "addTag" || actionType === "add"
-                ? `Add tag: ${tagName}`
-                : `Remove tag: ${tagName}`,
+                ? `Agregar etiqueta: ${tagName}`
+                : `Quitar etiqueta: ${tagName}`,
           },
         });
         break;
@@ -314,10 +314,10 @@ export function simulateFlow(
         const fieldSlug = (data.fieldSlug as string) || "";
         const fieldValue = (data.value as string) || "";
         let detail = actionType;
-        if (actionType === "addTag") detail = `Add tag: ${tagName}`;
-        else if (actionType === "removeTag") detail = `Remove tag: ${tagName}`;
+        if (actionType === "addTag") detail = `Agregar etiqueta: ${tagName}`;
+        else if (actionType === "removeTag") detail = `Quitar etiqueta: ${tagName}`;
         else if (actionType === "setCustomField")
-          detail = `Set ${fieldSlug} = ${fieldValue}`;
+          detail = `Asignar ${fieldSlug} = ${fieldValue}`;
         steps.push({
           nodeId: node.id,
           nodeType: "action",
@@ -328,7 +328,7 @@ export function simulateFlow(
       }
 
       case "setCustomField": {
-        const slug = (data.fieldSlug as string) || "unknown";
+        const slug = (data.fieldSlug as string) || "desconocido";
         const value = interpolate((data.value as string) || "", variables);
         steps.push({
           nodeId: node.id,
@@ -337,7 +337,7 @@ export function simulateFlow(
           result: {
             type: "action",
             actionType: "setCustomField",
-            detail: `Set ${slug} = ${value}`,
+            detail: `Asignar ${slug} = ${value}`,
           },
         });
         break;
@@ -345,7 +345,7 @@ export function simulateFlow(
 
       case "aiResponse": {
         // Placeholder so downstream {{ai_response}} interpolates in the dry run
-        variables.ai_response = "[AI response]";
+        variables.ai_response = "[Respuesta de IA]";
         steps.push({
           nodeId: node.id,
           nodeType: "aiResponse",
@@ -482,7 +482,7 @@ export function simulateFlow(
           nodeLabel: label,
           result: {
             type: "error",
-            message: `Unknown node type: ${node.type}`,
+            message: `Tipo de nodo desconocido: ${node.type}`,
           },
         });
       }
@@ -511,7 +511,7 @@ export function simulateFlow(
       steps.push({
         nodeId: node.id,
         nodeType: "end",
-        nodeLabel: "End",
+        nodeLabel: "Fin",
         result: { type: "flow_end" },
       });
       return { steps, errors, completed: true };
@@ -521,7 +521,7 @@ export function simulateFlow(
   }
 
   if (stepCount >= maxSteps) {
-    errors.push("Simulation stopped: exceeded 50 steps (possible loop)");
+    errors.push("Simulación detenida: se superaron los 50 pasos (posible bucle)");
   }
 
   return { steps, errors, completed: stepCount < maxSteps };

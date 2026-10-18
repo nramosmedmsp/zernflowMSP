@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { safeNextPath } from "@/lib/auth-helpers";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -33,36 +34,55 @@ export async function updateSession(request: NextRequest) {
 
   const isAuthPage = pathname === "/login" || pathname === "/register";
   const isAuthCallback = pathname === "/auth/callback";
-  const isDashboard = pathname.startsWith("/dashboard");
+  const isDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
   const isApiRoute = pathname.startsWith("/api/");
+  const isNoWorkspace = pathname === "/sin-espacio";
+  // /invite/<id> is public on purpose: it works with or without a session
+  // (create account, sign in, or accept), so it falls through untouched.
 
   // Auth callback and API routes (including webhooks) always pass through
   if (isAuthCallback || isApiRoute) {
     return supabaseResponse;
   }
 
-  // Redirect logged-in users away from auth pages to dashboard
-  if (user && isAuthPage) {
+  // Redirect while keeping any refreshed session cookies (with their options).
+  function redirectTo(path: string) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    const q = path.indexOf("?");
+    url.pathname = q < 0 ? path : path.slice(0, q);
+    url.search = q < 0 ? "" : path.slice(q);
+    url.hash = "";
     const redirectResponse = NextResponse.redirect(url);
-    // Forward any refreshed session cookies
     supabaseResponse.cookies.getAll().forEach((cookie) => {
-      redirectResponse.cookies.set(cookie.name, cookie.value);
+      redirectResponse.cookies.set(cookie);
     });
     return redirectResponse;
   }
 
-  // Redirect unauthenticated users trying to access dashboard to login
+  // No public landing page: the root goes to the dashboard or to login.
+  if (pathname === "/") {
+    return redirectTo(user ? "/dashboard" : "/login");
+  }
+
+  // Logged-in users on /login or /register go to ?next= (internal paths only)
+  // or to the dashboard.
+  if (user && isAuthPage) {
+    return redirectTo(safeNextPath(request.nextUrl.searchParams.get("next")));
+  }
+
+  // Unauthenticated users trying to access the dashboard go to login,
+  // remembering where they were headed.
   if (!user && isDashboard) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    const redirectResponse = NextResponse.redirect(url);
-    // Forward any refreshed session cookies
-    supabaseResponse.cookies.getAll().forEach((cookie) => {
-      redirectResponse.cookies.set(cookie.name, cookie.value);
-    });
-    return redirectResponse;
+    const target = `${pathname}${request.nextUrl.search}`;
+    const next = target === "/dashboard" ? "" : `?next=${encodeURIComponent(target)}`;
+    return redirectTo(`/login${next}`);
+  }
+
+  // /sin-espacio is for signed-in users without a workspace: with a session it
+  // falls through (sending it to /dashboard would loop); without one it is
+  // pointless, so it goes to login.
+  if (!user && isNoWorkspace) {
+    return redirectTo("/login");
   }
 
   return supabaseResponse;

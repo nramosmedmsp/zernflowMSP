@@ -14,8 +14,15 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { formatNumber } from "@/lib/format";
+import {
+  formatDayKey,
+  limaDayKey,
+  limaDayKeys,
+  limaRangeFromDays,
+} from "./day-buckets";
 
-// --- Types ---
+// --- Tipos ---
 
 type TimeRange = "7d" | "30d" | "90d" | "custom";
 
@@ -52,7 +59,7 @@ interface AnalyticsData {
   messageVolume: DailyMessages[];
 }
 
-// --- Helpers ---
+// --- Utilidades ---
 
 function getDateRange(range: TimeRange): { start: string; end: string } {
   const end = new Date();
@@ -78,14 +85,7 @@ function getDateRange(range: TimeRange): { start: string; end: string } {
   };
 }
 
-function formatShortDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// --- Simple bar chart with tooltip ---
+// --- Gráfico de barras simple con tooltip ---
 
 function MiniBarChart({
   data,
@@ -119,7 +119,7 @@ function MiniBarChart({
           />
           {hovered === i && (
             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-10 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-xs text-background shadow-lg pointer-events-none">
-              <p className="font-medium">{val}</p>
+              <p className="font-medium">{formatNumber(val)}</p>
               {labels?.[i] && <p className="text-background/70">{labels[i]}</p>}
             </div>
           )}
@@ -129,7 +129,7 @@ function MiniBarChart({
   );
 }
 
-// --- Stacked bar chart for message volume ---
+// --- Gráfico de barras apiladas del volumen de mensajes ---
 
 function MessageVolumeChart({
   data,
@@ -175,8 +175,8 @@ function MessageVolumeChart({
               )}
               {hovered === i && (
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-10 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-xs text-background shadow-lg pointer-events-none">
-                  <p className="font-medium">{d.sent} sent{d.failed > 0 ? `, ${d.failed} failed` : ""}</p>
-                  <p className="text-background/70">{formatShortDate(d.date)}</p>
+                  <p className="font-medium">{formatNumber(d.sent)} {d.sent === 1 ? "enviado" : "enviados"}{d.failed > 0 ? `, ${formatNumber(d.failed)} ${d.failed === 1 ? "fallido" : "fallidos"}` : ""}</p>
+                  <p className="text-background/70">{formatDayKey(d.date)}</p>
                 </div>
               )}
             </div>
@@ -184,14 +184,14 @@ function MessageVolumeChart({
         })}
       </div>
       <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
-        <span>{formatShortDate(data[0].date)}</span>
-        <span>{formatShortDate(data[data.length - 1].date)}</span>
+        <span>{formatDayKey(data[0].date)}</span>
+        <span>{formatDayKey(data[data.length - 1].date)}</span>
       </div>
     </>
   );
 }
 
-// --- Main component ---
+// --- Componente principal ---
 
 export function AnalyticsView({
   workspaceId,
@@ -210,10 +210,10 @@ export function AnalyticsView({
   const [contactGrowth, setContactGrowth] = useState<DailyCount[]>(initialData.contactGrowth);
   const [messageVolume, setMessageVolume] = useState<DailyMessages[]>(initialData.messageVolume);
 
-  // Only refetch when user changes time range away from the default 30d
+  // Solo se vuelve a consultar cuando el rango cambia respecto al predeterminado de 30 días
   useEffect(() => {
     if (timeRange === "30d") {
-      // Reset to server-provided data
+      // Volver a los datos que entregó el servidor
       setStats(initialData.stats);
       setFlowPerformance(initialData.flowPerformance);
       setContactGrowth(initialData.contactGrowth);
@@ -229,7 +229,7 @@ export function AnalyticsView({
 
     const range =
       timeRange === "custom" && customStart && customEnd
-        ? { start: new Date(customStart).toISOString(), end: new Date(customEnd).toISOString() }
+        ? limaRangeFromDays(customStart, customEnd)
         : getDateRange(timeRange);
 
     try {
@@ -300,7 +300,7 @@ export function AnalyticsView({
         messagesFailed: failedRes.count ?? 0,
       });
 
-      // Flow performance
+      // Rendimiento de los flujos
       const flowNames = new Map(
         (flowsListRes.data ?? []).map((f) => [f.id, f.name])
       );
@@ -318,43 +318,41 @@ export function AnalyticsView({
           const starts = startCounts.get(fid) ?? 0;
           const completions = completionCounts.get(fid) ?? 0;
           const dropOffRate = starts > 0 ? Math.round(((starts - completions) / starts) * 100) : 0;
-          return { id: fid, name: flowNames.get(fid) ?? "Unknown Flow", starts, completions, dropOffRate };
+          return { id: fid, name: flowNames.get(fid) ?? "Flujo desconocido", starts, completions, dropOffRate };
         })
         .sort((a, b) => b.starts - a.starts)
         .slice(0, 10);
       setFlowPerformance(perfData);
 
-      // Contact growth by day
+      // Crecimiento de contactos por día
       const growthByDay = new Map<string, number>();
       (contactEvents.data ?? []).forEach((e) => {
-        const day = e.created_at.split("T")[0];
+        const day = limaDayKey(e.created_at);
         growthByDay.set(day, (growthByDay.get(day) ?? 0) + 1);
       });
-      const startDate = new Date(range.start);
-      const endDate = new Date(range.end);
-      const growthData: DailyCount[] = [];
-      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-        const dayStr = d.toISOString().split("T")[0];
-        growthData.push({ date: dayStr, count: growthByDay.get(dayStr) ?? 0 });
-      }
+      const dayKeys = limaDayKeys(range.start, range.end);
+      const growthData: DailyCount[] = dayKeys.map((dayStr) => ({
+        date: dayStr,
+        count: growthByDay.get(dayStr) ?? 0,
+      }));
       setContactGrowth(growthData);
 
-      // Message volume by day
+      // Volumen de mensajes por día
       const sentByDay = new Map<string, number>();
       const failedByDay = new Map<string, number>();
       (msgEvents.data ?? []).forEach((e) => {
-        const day = e.created_at.split("T")[0];
+        const day = limaDayKey(e.created_at);
         if (e.event_type === "message_sent") {
           sentByDay.set(day, (sentByDay.get(day) ?? 0) + 1);
         } else {
           failedByDay.set(day, (failedByDay.get(day) ?? 0) + 1);
         }
       });
-      const msgData: DailyMessages[] = [];
-      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-        const dayStr = d.toISOString().split("T")[0];
-        msgData.push({ date: dayStr, sent: sentByDay.get(dayStr) ?? 0, failed: failedByDay.get(dayStr) ?? 0 });
-      }
+      const msgData: DailyMessages[] = dayKeys.map((dayStr) => ({
+        date: dayStr,
+        sent: sentByDay.get(dayStr) ?? 0,
+        failed: failedByDay.get(dayStr) ?? 0,
+      }));
       setMessageVolume(msgData);
     } catch (err) {
       console.error("Failed to fetch analytics:", err);
@@ -364,36 +362,36 @@ export function AnalyticsView({
   }
 
   const timeRangeOptions: { value: TimeRange; label: string }[] = [
-    { value: "7d", label: "Last 7 days" },
-    { value: "30d", label: "Last 30 days" },
-    { value: "90d", label: "Last 90 days" },
-    { value: "custom", label: "Custom" },
+    { value: "7d", label: "Últimos 7 días" },
+    { value: "30d", label: "Últimos 30 días" },
+    { value: "90d", label: "Últimos 90 días" },
+    { value: "custom", label: "Personalizado" },
   ];
 
   const statCards = [
     {
-      label: "Total Flows",
+      label: "Total de flujos",
       value: stats.totalFlows,
       icon: GitBranch,
       color: "text-blue-600",
       bg: "bg-blue-100",
     },
     {
-      label: "Total Contacts",
+      label: "Total de contactos",
       value: stats.totalContacts,
       icon: Users,
       color: "text-purple-600",
       bg: "bg-purple-100",
     },
     {
-      label: "Messages Sent",
+      label: "Mensajes enviados",
       value: stats.messagesSent,
       icon: Send,
       color: "text-green-600",
       bg: "bg-green-100",
     },
     {
-      label: "Messages Failed",
+      label: "Mensajes fallidos",
       value: stats.messagesFailed,
       icon: AlertTriangle,
       color: "text-red-600",
@@ -409,17 +407,17 @@ export function AnalyticsView({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
+      {/* Encabezado */}
       <div className="border-b border-border px-8 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">Analytics</h1>
+            <h1 className="text-2xl font-bold">Analítica</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Monitor your workspace performance
+              Revisa el rendimiento de tu espacio de trabajo
             </p>
           </div>
 
-          {/* Time range selector */}
+          {/* Selector de rango de tiempo */}
           <div className="flex items-center gap-2">
             {timeRangeOptions.map((option) => (
               <button
@@ -438,7 +436,7 @@ export function AnalyticsView({
           </div>
         </div>
 
-        {/* Custom date range */}
+        {/* Rango de fechas personalizado */}
         {timeRange === "custom" && (
           <div className="mt-4 flex items-center gap-3">
             <div className="flex items-center gap-2">
@@ -450,7 +448,7 @@ export function AnalyticsView({
                 className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
-            <span className="text-sm text-muted-foreground">to</span>
+            <span className="text-sm text-muted-foreground">hasta</span>
             <input
               type="date"
               value={customEnd}
@@ -462,13 +460,13 @@ export function AnalyticsView({
               disabled={!customStart || !customEnd}
               className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
-              Apply
+              Aplicar
             </button>
           </div>
         )}
       </div>
 
-      {/* Content */}
+      {/* Contenido */}
       <div className="flex-1 overflow-auto p-8">
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -476,7 +474,7 @@ export function AnalyticsView({
           </div>
         ) : (
           <div className="space-y-8">
-            {/* Stats cards */}
+            {/* Tarjetas de estadísticas */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {statCards.map((card) => (
                 <div
@@ -496,35 +494,35 @@ export function AnalyticsView({
                       <p className="text-sm text-muted-foreground">
                         {card.label}
                       </p>
-                      <p className="text-2xl font-bold">{card.value}</p>
+                      <p className="text-2xl font-bold">{formatNumber(card.value)}</p>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
 
-            {/* Charts row */}
+            {/* Fila de gráficos */}
             <div className="grid gap-6 lg:grid-cols-2">
-              {/* Contact growth */}
+              {/* Crecimiento de contactos */}
               <div className="rounded-xl border border-border bg-card p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold">Contact Growth</h3>
+                  <h3 className="text-sm font-semibold">Crecimiento de contactos</h3>
                   <span className="text-xs text-muted-foreground">
-                    New contacts per day
+                    Contactos nuevos por día
                   </span>
                 </div>
                 {contactGrowth.length > 0 ? (
                   <>
                     <MiniBarChart
                       data={contactGrowth.map((d) => d.count)}
-                      labels={contactGrowth.map((d) => formatShortDate(d.date))}
+                      labels={contactGrowth.map((d) => formatDayKey(d.date))}
                       maxVal={maxContactGrowth}
                       color="bg-purple-500"
                     />
                     <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
-                      <span>{formatShortDate(contactGrowth[0].date)}</span>
+                      <span>{formatDayKey(contactGrowth[0].date)}</span>
                       <span>
-                        {formatShortDate(
+                        {formatDayKey(
                           contactGrowth[contactGrowth.length - 1].date
                         )}
                       </span>
@@ -532,23 +530,23 @@ export function AnalyticsView({
                   </>
                 ) : (
                   <p className="text-sm text-muted-foreground py-8 text-center">
-                    No data for this period
+                    No hay datos para este período
                   </p>
                 )}
               </div>
 
-              {/* Message volume */}
+              {/* Volumen de mensajes */}
               <div className="rounded-xl border border-border bg-card p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold">Message Volume</h3>
+                  <h3 className="text-sm font-semibold">Volumen de mensajes</h3>
                   <div className="flex items-center gap-3">
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                       <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
-                      Sent
+                      Enviados
                     </span>
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                       <span className="inline-block h-2 w-2 rounded-full bg-red-500" />
-                      Failed
+                      Fallidos
                     </span>
                   </div>
                 </div>
@@ -556,22 +554,22 @@ export function AnalyticsView({
                   <MessageVolumeChart data={messageVolume} maxVal={maxMessageVolume} />
                 ) : (
                   <p className="text-sm text-muted-foreground py-8 text-center">
-                    No data for this period
+                    No hay datos para este período
                   </p>
                 )}
               </div>
             </div>
 
-            {/* Flow performance table */}
+            {/* Tabla de rendimiento de flujos */}
             <div className="rounded-xl border border-border bg-card">
               <div className="border-b border-border px-6 py-4">
-                <h3 className="text-sm font-semibold">Flow Performance</h3>
+                <h3 className="text-sm font-semibold">Rendimiento de flujos</h3>
               </div>
               {flowPerformance.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12">
                   <GitBranch className="h-8 w-8 text-muted-foreground/40" />
                   <p className="mt-2 text-sm text-muted-foreground">
-                    No flow activity in this period
+                    No hay actividad de flujos en este período
                   </p>
                 </div>
               ) : (
@@ -579,16 +577,16 @@ export function AnalyticsView({
                   <thead>
                     <tr className="border-b border-border bg-muted/50 text-left">
                       <th className="px-6 py-3 text-xs font-medium uppercase text-muted-foreground">
-                        Flow Name
+                        Nombre del flujo
                       </th>
                       <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground text-right">
-                        Starts
+                        Inicios
                       </th>
                       <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground text-right">
-                        Completions
+                        Finalizaciones
                       </th>
                       <th className="px-6 py-3 text-xs font-medium uppercase text-muted-foreground text-right">
-                        Drop-off Rate
+                        Tasa de abandono
                       </th>
                     </tr>
                   </thead>
@@ -605,12 +603,12 @@ export function AnalyticsView({
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span className="text-sm text-muted-foreground">
-                            {flow.starts}
+                            {formatNumber(flow.starts)}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span className="text-sm text-muted-foreground">
-                            {flow.completions}
+                            {formatNumber(flow.completions)}
                           </span>
                         </td>
                         <td className="px-6 py-3 text-right">
@@ -629,7 +627,7 @@ export function AnalyticsView({
                             ) : (
                               <TrendingUp className="h-3.5 w-3.5" />
                             )}
-                            {flow.dropOffRate}%
+                            {formatNumber(flow.dropOffRate)}%
                           </span>
                         </td>
                       </tr>

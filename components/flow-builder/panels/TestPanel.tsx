@@ -27,6 +27,11 @@ import {
   type SimulationStep,
   type SimulationResult,
 } from "@/lib/flow-engine/simulator";
+import {
+  simulatorNodeLabel,
+  triggerTypeLabel,
+  unitLabel,
+} from "../labels";
 
 interface TestPanelProps {
   nodes: Node[];
@@ -91,7 +96,7 @@ export function TestPanel({
   onClose,
   onHighlightNode,
 }: TestPanelProps) {
-  const [message, setMessage] = useState("help");
+  const [message, setMessage] = useState("ayuda");
   const [tags, setTags] = useState("");
   const [result, setResult] = useState<SimulationResult | null>(null);
 
@@ -120,17 +125,17 @@ export function TestPanel({
         return (
           <div>
             <span className="text-xs text-muted-foreground">
-              Type: {r.triggerType}
-              {r.keywords && ` | Keywords: ${r.keywords.join(", ")}`}
+              Tipo: {triggerTypeLabel(r.triggerType)}
+              {r.keywords && ` | Palabras clave: ${r.keywords.join(", ")}`}
             </span>
             <div className="mt-1">
               {r.matched ? (
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
-                  <CheckCircle2 className="h-3 w-3" /> Matched
+                  <CheckCircle2 className="h-3 w-3" /> Coincide
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600">
-                  <XCircle className="h-3 w-3" /> Not matched
+                  <XCircle className="h-3 w-3" /> No coincide
                 </span>
               )}
             </div>
@@ -184,7 +189,8 @@ export function TestPanel({
                 ) : (
                   <XCircle className="h-3 w-3" />
                 )}
-                {r.result ? "TRUE" : "FALSE"} &rarr; {r.path} path
+                {r.result ? "VERDADERO" : "FALSO"} &rarr; rama{" "}
+                {r.path === "true" ? "Sí" : r.path === "false" ? "No" : r.path}
               </span>
             </div>
           </div>
@@ -193,21 +199,23 @@ export function TestPanel({
       case "delay":
         return (
           <p className="text-xs text-muted-foreground">
-            Would wait {r.duration} {r.unit}{" "}
-            <span className="text-amber-600">(skipped in test)</span>
+            Esperaría {r.duration} {unitLabel(r.unit)}{" "}
+            <span className="text-amber-600">(omitido en la prueba)</span>
           </p>
         );
 
       case "action":
         return (
-          <p className="text-xs text-muted-foreground">{r.detail}</p>
+          <p className="text-xs text-muted-foreground">
+            {r.detail}
+          </p>
         );
 
       case "ai_response":
         return (
           <p className="text-xs text-muted-foreground">
             {r.mode === "skipped"
-              ? "AI would generate a response here"
+              ? "Aquí la IA generaría una respuesta"
               : r.text}
           </p>
         );
@@ -215,7 +223,7 @@ export function TestPanel({
       case "split":
         return (
           <p className="text-xs text-muted-foreground">
-            Randomly selected: <strong>{r.selectedPath}</strong> (weight:{" "}
+            Elegido al azar: <strong>{r.selectedPath}</strong> (peso:{" "}
             {r.weight})
           </p>
         );
@@ -223,29 +231,29 @@ export function TestPanel({
       case "smart_delay":
         return (
           <p className="text-xs text-muted-foreground">
-            Would wait for next user message{" "}
-            <span className="text-amber-600">(paused)</span>
+            Esperaría el siguiente mensaje del cliente{" "}
+            <span className="text-amber-600">(en pausa)</span>
           </p>
         );
 
       case "human_takeover":
         return (
           <p className="text-xs text-muted-foreground">
-            Automation paused, flagged for human review
+            Automatización en pausa, marcada para atención humana
           </p>
         );
 
       case "go_to_flow":
         return (
           <p className="text-xs text-muted-foreground">
-            Would jump to flow: <span className="font-mono">{r.flowId}</span>
+            Saltaría al flujo: <span className="font-mono">{r.flowId}</span>
           </p>
         );
 
       case "enroll_sequence":
         return (
           <p className="text-xs text-muted-foreground">
-            Would enroll in sequence:{" "}
+            Inscribiría en la secuencia:{" "}
             <span className="font-mono">{r.sequenceId}</span>
           </p>
         );
@@ -253,28 +261,28 @@ export function TestPanel({
       case "subscribe":
         return (
           <p className="text-xs text-muted-foreground">
-            Contact would be subscribed
+            El contacto sería suscrito
           </p>
         );
 
       case "unsubscribe":
         return (
           <p className="text-xs text-muted-foreground">
-            Contact would be unsubscribed
+            El contacto sería desuscrito
           </p>
         );
 
       case "comment_reply":
         return (
           <div className="rounded-lg bg-primary/10 px-3 py-2 text-xs">
-            {r.text || "(empty)"}
+            {r.text || "(vacío)"}
           </div>
         );
 
       case "private_reply":
         return (
           <div className="rounded-lg bg-primary/10 px-3 py-2 text-xs">
-            {r.text || "(empty)"}
+            {r.text || "(vacío)"}
           </div>
         );
 
@@ -287,13 +295,15 @@ export function TestPanel({
 
       case "error":
         return (
-          <p className="text-xs text-red-600">{r.message}</p>
+          <p className="text-xs text-red-600">
+            {r.message}
+          </p>
         );
 
       case "flow_end":
         return (
           <p className="text-xs text-emerald-600 font-medium">
-            Flow completed successfully
+            Flujo completado correctamente
           </p>
         );
 
@@ -308,10 +318,12 @@ export function TestPanel({
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <Play className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Test Flow</h3>
+          <h3 className="text-sm font-semibold">Probar flujo</h3>
         </div>
         <button
           onClick={onClose}
+          aria-label="Cerrar"
+          title="Cerrar"
           className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
         >
           <X className="h-4 w-4" />
@@ -322,13 +334,13 @@ export function TestPanel({
       <div className="space-y-3 border-b border-border p-4">
         <div>
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
-            Simulated Message
+            Mensaje simulado
           </label>
           <input
             type="text"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Type a test message..."
+            placeholder="Escribe un mensaje de prueba..."
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             onKeyDown={(e) => {
               if (e.key === "Enter") runTest();
@@ -337,13 +349,13 @@ export function TestPanel({
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
-            Mock Tags (comma-separated)
+            Etiquetas de prueba (separadas por comas)
           </label>
           <input
             type="text"
             value={tags}
             onChange={(e) => setTags(e.target.value)}
-            placeholder="vip, premium"
+            placeholder="vip, mayorista"
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
@@ -352,7 +364,7 @@ export function TestPanel({
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-opacity"
         >
           <Play className="h-3.5 w-3.5" />
-          Run Test
+          Ejecutar prueba
         </button>
       </div>
 
@@ -362,11 +374,10 @@ export function TestPanel({
           <div className="py-8 text-center">
             <Play className="mx-auto h-8 w-8 text-muted-foreground/50" />
             <p className="mt-2 text-sm text-muted-foreground">
-              Run a test to see the flow path
+              Ejecuta una prueba para ver el recorrido del flujo
             </p>
             <p className="mt-1 text-xs text-muted-foreground/70">
-              The simulator traces the execution path without sending real
-              messages.
+              El simulador recorre el flujo sin enviar mensajes reales.
             </p>
           </div>
         ) : (
@@ -416,7 +427,7 @@ export function TestPanel({
                     onClick={() => onHighlightNode(step.nodeId)}
                   >
                     <p className="text-xs font-medium leading-7">
-                      {step.nodeLabel}
+                      {simulatorNodeLabel(step.nodeLabel)}
                     </p>
                     {renderStepDetail(step)}
                   </div>

@@ -1,14 +1,8 @@
 import type { MetadataRoute } from "next";
 
+// CRM interno: nada debe indexarse.
 export default function robots(): MetadataRoute.Robots {
   return {
-    rules: [
-      {
-        userAgent: "*",
-        allow: "/",
-        disallow: ["/dashboard/", "/api/", "/invite/"],
-      },
-    ],
-    sitemap: "https://zernflow.com/sitemap.xml",
+    rules: [{ userAgent: "*", disallow: "/" }],
   };
 }

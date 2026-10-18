@@ -1,5 +1,6 @@
 import { getWorkspace } from "@/lib/workspace";
 import { AnalyticsView } from "./analytics-view";
+import { limaDayKey, limaDayKeys } from "./day-buckets";
 
 export default async function AnalyticsPage() {
   const { workspace, supabase } = await getWorkspace();
@@ -10,7 +11,7 @@ export default async function AnalyticsPage() {
   ).toISOString();
   const now = nowDate.toISOString();
 
-  // Fetch ALL initial analytics data in parallel on the server
+  // Obtener en el servidor, en paralelo, todos los datos iniciales de analítica
   const [
     flowsRes,
     contactsRes,
@@ -81,7 +82,7 @@ export default async function AnalyticsPage() {
       .order("created_at"),
   ]);
 
-  // Build flow performance data
+  // Armar el rendimiento de los flujos
   const flowNames = new Map(
     (flowsListRes.data ?? []).map((f) => [f.id, f.name])
   );
@@ -99,45 +100,41 @@ export default async function AnalyticsPage() {
       const starts = startCounts.get(fid) ?? 0;
       const completions = completionCounts.get(fid) ?? 0;
       const dropOffRate = starts > 0 ? Math.round(((starts - completions) / starts) * 100) : 0;
-      return { id: fid, name: flowNames.get(fid) ?? "Unknown Flow", starts, completions, dropOffRate };
+      return { id: fid, name: flowNames.get(fid) ?? "Flujo desconocido", starts, completions, dropOffRate };
     })
     .sort((a, b) => b.starts - a.starts)
     .slice(0, 10);
 
-  // Build daily contact growth
+  // Armar el crecimiento diario de contactos
   const growthByDay = new Map<string, number>();
   (contactEvents.data ?? []).forEach((e) => {
-    const day = e.created_at.split("T")[0];
+    const day = limaDayKey(e.created_at);
     growthByDay.set(day, (growthByDay.get(day) ?? 0) + 1);
   });
-  const startDate = new Date(thirtyDaysAgo);
-  const endDate = new Date(now);
-  const contactGrowth: { date: string; count: number }[] = [];
-  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-    const dayStr = d.toISOString().split("T")[0];
-    contactGrowth.push({ date: dayStr, count: growthByDay.get(dayStr) ?? 0 });
-  }
+  const dayKeys = limaDayKeys(thirtyDaysAgo, now);
+  const contactGrowth: { date: string; count: number }[] = dayKeys.map((dayStr) => ({
+    date: dayStr,
+    count: growthByDay.get(dayStr) ?? 0,
+  }));
 
-  // Build daily message volume
+  // Armar el volumen diario de mensajes
   const sentByDay = new Map<string, number>();
   const failedByDay = new Map<string, number>();
   (msgEvents.data ?? []).forEach((e) => {
-    const day = e.created_at.split("T")[0];
+    const day = limaDayKey(e.created_at);
     if (e.event_type === "message_sent") {
       sentByDay.set(day, (sentByDay.get(day) ?? 0) + 1);
     } else {
       failedByDay.set(day, (failedByDay.get(day) ?? 0) + 1);
     }
   });
-  const messageVolume: { date: string; sent: number; failed: number }[] = [];
-  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-    const dayStr = d.toISOString().split("T")[0];
-    messageVolume.push({
+  const messageVolume: { date: string; sent: number; failed: number }[] = dayKeys.map(
+    (dayStr) => ({
       date: dayStr,
       sent: sentByDay.get(dayStr) ?? 0,
       failed: failedByDay.get(dayStr) ?? 0,
-    });
-  }
+    }),
+  );
 
   return (
     <AnalyticsView

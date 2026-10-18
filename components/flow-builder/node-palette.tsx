@@ -33,112 +33,112 @@ interface PaletteCategory {
 
 const categories: PaletteCategory[] = [
   {
-    name: "Triggers",
+    name: "Disparadores",
     items: [
-      { type: "trigger", nodeType: "trigger", label: "Keyword Trigger", icon: Zap },
+      { type: "trigger", nodeType: "trigger", label: "Disparador de palabra clave", icon: Zap },
     ],
   },
   {
-    name: "Messages",
+    name: "Mensajes",
     items: [
       {
         type: "sendMessage",
         nodeType: "sendMessage",
-        label: "Send Message",
+        label: "Enviar mensaje",
         icon: MessageSquare,
       },
       {
         type: "aiResponse",
         nodeType: "aiResponse",
-        label: "AI Response",
+        label: "Respuesta con IA",
         icon: Sparkles,
       },
     ],
   },
   {
-    name: "Logic",
+    name: "Lógica",
     items: [
-      { type: "condition", nodeType: "condition", label: "Condition", icon: GitBranch },
-      { type: "delay", nodeType: "delay", label: "Delay", icon: Clock },
+      { type: "condition", nodeType: "condition", label: "Condición", icon: GitBranch },
+      { type: "delay", nodeType: "delay", label: "Espera", icon: Clock },
       {
         type: "action",
         nodeType: "abSplit",
-        label: "A/B Split",
+        label: "Prueba A/B",
         icon: Shuffle,
         actionType: "abSplit",
       },
       {
         type: "action",
         nodeType: "smartDelay",
-        label: "Smart Delay",
+        label: "Espera inteligente",
         icon: Hourglass,
         actionType: "smartDelay",
       },
     ],
   },
   {
-    name: "Actions",
+    name: "Acciones",
     items: [
       {
         type: "action",
         nodeType: "addTag",
-        label: "Add Tag",
+        label: "Agregar etiqueta",
         icon: Tag,
         actionType: "addTag",
       },
       {
         type: "action",
         nodeType: "removeTag",
-        label: "Remove Tag",
+        label: "Quitar etiqueta",
         icon: Tag,
         actionType: "removeTag",
       },
       {
         type: "action",
         nodeType: "setCustomField",
-        label: "Set Field",
+        label: "Asignar campo",
         icon: FileText,
         actionType: "setCustomField",
       },
       {
         type: "action",
         nodeType: "httpRequest",
-        label: "HTTP Request",
+        label: "Solicitud HTTP",
         icon: Globe,
         actionType: "httpRequest",
       },
       {
         type: "action",
         nodeType: "goToFlow",
-        label: "Go To Flow",
+        label: "Ir a flujo",
         icon: ArrowRightLeft,
         actionType: "goToFlow",
       },
       {
         type: "action",
         nodeType: "humanTakeover",
-        label: "Human Takeover",
+        label: "Atención humana",
         icon: UserCheck,
         actionType: "humanTakeover",
       },
       {
         type: "action",
         nodeType: "subscribe",
-        label: "Subscribe",
+        label: "Suscribir",
         icon: Bell,
         actionType: "subscribe",
       },
       {
         type: "action",
         nodeType: "unsubscribe",
-        label: "Unsubscribe",
+        label: "Desuscribir",
         icon: Bell,
         actionType: "unsubscribe",
       },
       {
         type: "action",
         nodeType: "enrollSequence",
-        label: "Enroll in Sequence",
+        label: "Inscribir en secuencia",
         icon: ListOrdered,
         actionType: "enrollSequence",
       },
@@ -160,8 +160,8 @@ export function NodePalette() {
   return (
     <div className="flex w-56 flex-col border-r border-border bg-card">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Nodes</h2>
-        <p className="text-xs text-muted-foreground">Drag to canvas</p>
+        <h2 className="text-sm font-semibold">Nodos</h2>
+        <p className="text-xs text-muted-foreground">Arrastra al lienzo</p>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {categories.map((category) => (

@@ -12,6 +12,8 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
+import { formatDateTime } from "@/lib/format";
+import { platformLabel } from "@/lib/platforms";
 import type { Database, Platform } from "@/lib/types/database";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
@@ -32,14 +34,8 @@ interface ContactDetails {
 }
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "Never";
-  return new Date(dateStr).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  if (!dateStr) return "Nunca";
+  return formatDateTime(dateStr);
 }
 
 export function ContactPanel({
@@ -117,9 +113,10 @@ export function ContactPanel({
     <div className="flex h-full w-80 flex-col border-l border-border bg-background">
       {/* Header */}
       <div className="flex h-14 items-center justify-between border-b border-border px-4">
-        <h3 className="text-sm font-semibold">Contact Info</h3>
+        <h3 className="text-sm font-semibold">Información del contacto</h3>
         <button
           onClick={onClose}
+          aria-label="Cerrar panel"
           className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
         >
           <X className="h-4 w-4" />
@@ -146,7 +143,7 @@ export function ContactPanel({
               )}
             </div>
             <p className="mt-3 text-sm font-semibold">
-              {details.contact.display_name ?? "Unknown"}
+              {details.contact.display_name ?? "Desconocido"}
             </p>
             {details.contact.email && (
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -161,7 +158,7 @@ export function ContactPanel({
                   : "bg-muted text-muted-foreground"
               )}
             >
-              {details.contact.is_subscribed ? "Subscribed" : "Unsubscribed"}
+              {details.contact.is_subscribed ? "Suscrito" : "No suscrito"}
             </span>
           </div>
 
@@ -171,7 +168,7 @@ export function ContactPanel({
             {details.channels.length > 0 && (
               <div>
                 <h4 className="text-xs font-medium uppercase text-muted-foreground">
-                  Platforms
+                  Plataformas
                 </h4>
                 <div className="mt-2 space-y-1.5">
                   {details.channels.map((ch, i) => (
@@ -185,7 +182,7 @@ export function ContactPanel({
                         size={14}
                       />
                       <span className="capitalize text-muted-foreground">
-                        {ch.platform}
+                        {platformLabel(ch.platform)}
                       </span>
                       {ch.platform_username && (
                         <span className="truncate text-foreground">
@@ -203,7 +200,7 @@ export function ContactPanel({
               <div>
                 <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                   <Mail className="h-3 w-3" />
-                  Email
+                  Correo electrónico
                 </h4>
                 <p className="mt-1 text-sm">{details.contact.email}</p>
               </div>
@@ -213,7 +210,7 @@ export function ContactPanel({
             <div>
               <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                 <Calendar className="h-3 w-3" />
-                Last Interaction
+                Última interacción
               </h4>
               <p className="mt-1 text-sm">
                 {formatDate(details.contact.last_interaction_at)}
@@ -224,7 +221,7 @@ export function ContactPanel({
             <div>
               <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                 <User className="h-3 w-3" />
-                Created
+                Creado
               </h4>
               <p className="mt-1 text-sm">
                 {formatDate(details.contact.created_at)}
@@ -235,7 +232,7 @@ export function ContactPanel({
             <div>
               <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                 <Tag className="h-3 w-3" />
-                Tags
+                Etiquetas
               </h4>
               {details.tags.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -258,7 +255,7 @@ export function ContactPanel({
                   ))}
                 </div>
               ) : (
-                <p className="mt-1 text-xs text-muted-foreground">No tags</p>
+                <p className="mt-1 text-xs text-muted-foreground">Sin etiquetas</p>
               )}
             </div>
 
@@ -267,7 +264,7 @@ export function ContactPanel({
               <div>
                 <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                   <Hash className="h-3 w-3" />
-                  Custom Fields
+                  Campos personalizados
                 </h4>
                 <div className="mt-2 space-y-2">
                   {details.customFields.map((cf) => (
@@ -285,7 +282,7 @@ export function ContactPanel({
         </div>
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Contact not found
+          Contacto no encontrado
         </div>
       )}
     </div>

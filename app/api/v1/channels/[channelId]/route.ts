@@ -34,7 +34,7 @@ export async function DELETE(
   const supabase = await createClient();
   const workspace = await getWorkspace(supabase);
   if (!workspace)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { data: channel } = await supabase
     .from("channels")
@@ -44,7 +44,7 @@ export async function DELETE(
     .single();
 
   if (!channel)
-    return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+    return NextResponse.json({ error: "No se encontró el canal" }, { status: 404 });
 
   if (workspace.late_api_key_encrypted) {
     const zernio = createZernioClient(workspace.late_api_key_encrypted);
@@ -55,14 +55,14 @@ export async function DELETE(
       // A 404 means the account is already gone from Zernio; that's fine.
       if (res.error && res.response?.status !== 404) {
         return NextResponse.json(
-          { error: `Failed to disconnect on Zernio: ${JSON.stringify(res.error)}` },
+          { error: `No se pudo desconectar en Zernio: ${JSON.stringify(res.error)}` },
           { status: 502 }
         );
       }
     } catch (error) {
       console.error("Failed to disconnect Zernio account:", error);
       return NextResponse.json(
-        { error: `Failed to disconnect on Zernio: ${error instanceof Error ? error.message : String(error)}` },
+        { error: `No se pudo desconectar en Zernio: ${error instanceof Error ? error.message : String(error)}` },
         { status: 502 }
       );
     }

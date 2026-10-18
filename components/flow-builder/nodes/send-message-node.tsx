@@ -16,7 +16,7 @@ export interface SendMessageNodeProps {
 
 export function SendMessageNode({ data, selected }: NodeProps) {
   const nodeData = data as SendMessageNodeProps;
-  const label = nodeData.label || "Send Message";
+  const label = nodeData.label || "Enviar mensaje";
   const firstMessage = nodeData.messages?.[0];
   const messageCount = nodeData.messages?.length || 0;
   const buttonCount =
@@ -39,7 +39,7 @@ export function SendMessageNode({ data, selected }: NodeProps) {
       />
       <div className="flex items-center gap-2 rounded-t-lg bg-blue-500 px-3 py-2 text-white">
         <MessageSquare className="h-3.5 w-3.5" />
-        <span className="text-xs font-semibold">Send Message</span>
+        <span className="text-xs font-semibold">Enviar mensaje</span>
       </div>
       <div className="p-3">
         <p className="text-sm font-medium">{label}</p>
@@ -49,20 +49,20 @@ export function SendMessageNode({ data, selected }: NodeProps) {
           </p>
         )}
         {!firstMessage?.text && firstMessage?.imageUrl && (
-          <p className="mt-1 text-xs text-muted-foreground">Image message</p>
+          <p className="mt-1 text-xs text-muted-foreground">Mensaje con imagen</p>
         )}
         {!firstMessage && (
-          <p className="mt-1 text-xs text-muted-foreground italic">No message configured</p>
+          <p className="mt-1 text-xs text-muted-foreground italic">Sin mensaje configurado</p>
         )}
         <div className="mt-2 flex gap-2">
           {messageCount > 1 && (
             <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-              {messageCount} messages
+              {messageCount} mensajes
             </span>
           )}
           {buttonCount > 0 && (
             <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-              {buttonCount} {buttonCount === 1 ? "button" : "buttons"}
+              {buttonCount} {buttonCount === 1 ? "botón" : "botones"}
             </span>
           )}
         </div>

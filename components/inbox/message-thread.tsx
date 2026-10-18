@@ -6,6 +6,7 @@ import { Send, Paperclip, Bot, User, MessageSquare, CheckCircle, Clock, RotateCc
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
+import { formatDate, formatTime } from "@/lib/format";
 import type { Database, ConversationStatus } from "@/lib/types/database";
 
 type Message = Database["public"]["Tables"]["messages"]["Row"];
@@ -13,24 +14,18 @@ type Conversation = Database["public"]["Tables"]["conversations"]["Row"] & {
   contacts: Database["public"]["Tables"]["contacts"]["Row"] | null;
 };
 
-function formatMessageTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+const CONVERSATION_STATUS_LABELS: Record<ConversationStatus, string> = {
+  open: "Abierta",
+  closed: "Cerrada",
+  snoozed: "Pospuesta",
+};
 
 function formatDateSeparator(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return date.toLocaleDateString([], {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
+  const day = formatDate(dateStr);
+  const now = Date.now();
+  if (day === formatDate(now)) return "Hoy";
+  if (day === formatDate(now - 24 * 60 * 60 * 1000)) return "Ayer";
+  return day;
 }
 
 function shouldShowDateSeparator(
@@ -38,8 +33,8 @@ function shouldShowDateSeparator(
   previous: Message | undefined
 ): boolean {
   if (!previous) return true;
-  const currentDate = new Date(current.created_at).toDateString();
-  const previousDate = new Date(previous.created_at).toDateString();
+  const currentDate = formatDate(current.created_at);
+  const previousDate = formatDate(previous.created_at);
   return currentDate !== previousDate;
 }
 
@@ -73,7 +68,7 @@ function MessageBubble({ message }: { message: Message }) {
           {message.attachments && (
             <div className="mt-1">
               <Paperclip className="inline h-3 w-3" />
-              <span className="ml-1 text-xs opacity-70">Attachment</span>
+              <span className="ml-1 text-xs opacity-70">Archivo adjunto</span>
             </div>
           )}
         </div>
@@ -86,13 +81,13 @@ function MessageBubble({ message }: { message: Message }) {
           {isBot && (
             <Bot className="h-3 w-3" />
           )}
-          <span>{formatMessageTime(message.created_at)}</span>
+          <span>{formatTime(message.created_at)}</span>
           {!isInbound && message.status !== "sent" && (
             <span className="capitalize">
               {message.status === "delivered"
-                ? "Delivered"
+                ? "Entregado"
                 : message.status === "failed"
-                ? "Failed"
+                ? "Falló"
                 : ""}
             </span>
           )}
@@ -140,7 +135,7 @@ export function MessageThread({
       if (error) throw error;
       router.refresh();
     } catch {
-      alert(`Failed to update conversation status`);
+      alert("No se pudo actualizar el estado de la conversación");
     } finally {
       setStatusUpdating(null);
     }
@@ -238,7 +233,7 @@ export function MessageThread({
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Send failed (${res.status})`);
+        throw new Error(errorData.error || `No se pudo enviar (${res.status})`);
       }
 
       const confirmedMessage: Message = await res.json();
@@ -265,10 +260,10 @@ export function MessageThread({
       <div className="flex h-full flex-col items-center justify-center bg-background text-center">
         <MessageSquare className="h-12 w-12 text-muted-foreground/30" />
         <h3 className="mt-4 text-sm font-medium text-muted-foreground">
-          Select a conversation
+          Selecciona una conversación
         </h3>
         <p className="mt-1 text-xs text-muted-foreground/70">
-          Choose a conversation from the list to view messages
+          Elige una conversación de la lista para ver los mensajes
         </p>
       </div>
     );
@@ -301,7 +296,7 @@ export function MessageThread({
           </div>
           <div>
             <p className="text-sm font-medium">
-              {conversation.contacts?.display_name ?? "Unknown"}
+              {conversation.contacts?.display_name ?? "Desconocido"}
             </p>
           </div>
         </div>
@@ -317,11 +312,11 @@ export function MessageThread({
                 : "bg-muted text-muted-foreground"
             )}
           >
-            {conversation.status}
+            {CONVERSATION_STATUS_LABELS[conversation.status]}
           </span>
           {conversation.is_automation_paused && (
             <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-medium text-orange-700">
-              Bot paused
+              Bot en pausa
             </span>
           )}
           <div className="flex items-center gap-1">
@@ -329,8 +324,8 @@ export function MessageThread({
               <button
                 onClick={() => updateConversationStatus("closed")}
                 disabled={!!statusUpdating}
-                title="Close conversation"
-                aria-label="Close conversation"
+                title="Cerrar conversación"
+                aria-label="Cerrar conversación"
                 className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
               >
                 {statusUpdating === "closed" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
@@ -340,8 +335,8 @@ export function MessageThread({
               <button
                 onClick={() => updateConversationStatus("snoozed")}
                 disabled={!!statusUpdating}
-                title="Snooze conversation"
-                aria-label="Snooze conversation"
+                title="Posponer conversación"
+                aria-label="Posponer conversación"
                 className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
               >
                 {statusUpdating === "snoozed" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />}
@@ -351,8 +346,8 @@ export function MessageThread({
               <button
                 onClick={() => updateConversationStatus("open")}
                 disabled={!!statusUpdating}
-                title="Reopen conversation"
-                aria-label="Reopen conversation"
+                title="Reabrir conversación"
+                aria-label="Reabrir conversación"
                 className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
               >
                 {statusUpdating === "open" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
@@ -400,7 +395,7 @@ export function MessageThread({
                   handleSend();
                 }
               }}
-              placeholder="Type a message..."
+              placeholder="Escribe un mensaje..."
               rows={1}
               className="w-full resize-none rounded-lg border border-input bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               style={{ maxHeight: 150 }}
@@ -409,7 +404,7 @@ export function MessageThread({
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending}
-            aria-label="Send message"
+            aria-label="Enviar mensaje"
             className={cn(
               "flex h-10 w-10 items-center justify-center rounded-lg transition-colors",
               input.trim() && !sending

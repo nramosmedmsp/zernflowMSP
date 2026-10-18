@@ -1,8 +1,8 @@
 "use server";
 
-import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { WORKSPACE_COOKIE } from "@/lib/workspace";
+import { rpcCreateWorkspace } from "@/lib/supabase/extra-rpc";
+import { setWorkspaceCookie } from "@/lib/workspace-cookie";
 
 export async function switchWorkspace(workspaceId: string) {
   const supabase = await createClient();
@@ -10,7 +10,7 @@ export async function switchWorkspace(workspaceId: string) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "Tu sesión expiró. Vuelve a iniciar sesión." };
 
   // Validate user has access to this workspace
   const { data: membership } = await supabase
@@ -20,16 +20,9 @@ export async function switchWorkspace(workspaceId: string) {
     .eq("workspace_id", workspaceId)
     .single();
 
-  if (!membership) return { error: "No access to this workspace" };
+  if (!membership) return { error: "No tienes acceso a este espacio de trabajo." };
 
-  const cookieStore = await cookies();
-  cookieStore.set(WORKSPACE_COOKIE, workspaceId, {
-    path: "/",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 365,
-  });
+  await setWorkspaceCookie(workspaceId);
 
   return { ok: true };
 }
@@ -40,42 +33,25 @@ export async function createWorkspace(name: string) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { error: "Not authenticated" };
+  if (!user) return { error: "Tu sesión expiró. Vuelve a iniciar sesión." };
 
   const trimmed = name.trim();
-  if (!trimmed) return { error: "Name is required" };
-
-  const slug = trimmed
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-
-  const { data: workspace, error } = await supabase
-    .from("workspaces")
-    .insert({ name: trimmed, slug })
-    .select("id")
-    .single();
-
-  if (error || !workspace) {
-    return { error: error?.message || "Failed to create workspace" };
+  if (!trimmed) return { error: "Escribe un nombre para el espacio de trabajo." };
+  if (trimmed.length > 100) {
+    return { error: "El nombre no puede tener más de 100 caracteres." };
   }
 
-  // Add user as owner
-  await supabase.from("workspace_members").insert({
-    workspace_id: workspace.id,
-    user_id: user.id,
-    role: "owner",
-  });
+  // La función de la base (00017) crea el espacio, genera un slug único y
+  // agrega al usuario como dueño en una sola transacción, sin depender de
+  // políticas INSERT en `workspaces` ni en `workspace_members`.
+  const { id, error } = await rpcCreateWorkspace(supabase, trimmed);
 
-  // Switch to new workspace
-  const cookieStore = await cookies();
-  cookieStore.set(WORKSPACE_COOKIE, workspace.id, {
-    path: "/",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 365,
-  });
+  if (error || !id) {
+    console.error("[createWorkspace]", error);
+    return { error: "No se pudo crear el espacio de trabajo. Inténtalo de nuevo." };
+  }
 
-  return { ok: true, workspaceId: workspace.id };
+  await setWorkspaceCookie(id);
+
+  return { ok: true, workspaceId: id };
 }

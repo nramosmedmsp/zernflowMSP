@@ -22,6 +22,8 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import type { Database } from "@/lib/types/database";
+import { APP_NAME } from "@/lib/brand";
+import { BrandLogo } from "@/lib/brand-logo";
 
 type Workspace = Database["public"]["Tables"]["workspaces"]["Row"];
 
@@ -39,15 +41,15 @@ function subscribeToThemeClass(callback: () => void) {
 }
 
 const navigation = [
-  { name: "Flows", href: "/dashboard/flows", icon: GitBranch },
-  { name: "Inbox", href: "/dashboard/inbox", icon: MessageSquare },
-  { name: "Contacts", href: "/dashboard/contacts", icon: Users },
-  { name: "Broadcasts", href: "/dashboard/broadcasts", icon: Radio },
-  { name: "Sequences", href: "/dashboard/sequences", icon: ListOrdered },
-  { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
-  { name: "Growth", href: "/dashboard/growth", icon: Sprout },
-  { name: "Channels", href: "/dashboard/channels", icon: Plug },
-  { name: "Settings", href: "/dashboard/settings", icon: Settings },
+  { name: "Flujos", href: "/dashboard/flows", icon: GitBranch },
+  { name: "Bandeja", href: "/dashboard/inbox", icon: MessageSquare },
+  { name: "Contactos", href: "/dashboard/contacts", icon: Users },
+  { name: "Difusiones", href: "/dashboard/broadcasts", icon: Radio },
+  { name: "Secuencias", href: "/dashboard/sequences", icon: ListOrdered },
+  { name: "Analítica", href: "/dashboard/analytics", icon: BarChart3 },
+  { name: "Crecimiento", href: "/dashboard/growth", icon: Sprout },
+  { name: "Canales", href: "/dashboard/channels", icon: Plug },
+  { name: "Configuración", href: "/dashboard/settings", icon: Settings },
 ];
 
 export function Sidebar({
@@ -82,6 +84,13 @@ export function Sidebar({
   return (
     <div className="flex h-full w-60 flex-col border-r border-border bg-sidebar">
       <div className="border-b border-sidebar-border px-3 py-3">
+        <Link
+          href="/dashboard"
+          className="mb-2 flex items-center gap-2 px-2 text-xs font-semibold text-sidebar-foreground/70 hover:text-sidebar-foreground"
+        >
+          <BrandLogo size={20} alt="" className="rounded" />
+          <span className="truncate">{APP_NAME}</span>
+        </Link>
         <WorkspaceSwitcher current={workspace} workspaces={workspaces} />
       </div>
 
@@ -112,14 +121,14 @@ export function Sidebar({
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
         >
           {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          {dark ? "Light mode" : "Dark mode"}
+          {dark ? "Modo claro" : "Modo oscuro"}
         </button>
         <button
           onClick={handleSignOut}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
         >
           <LogOut className="h-4 w-4" />
-          Sign out
+          Cerrar sesión
         </button>
       </div>
     </div>

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeType } from "@/lib/types/database";
+import { unitLabel } from "../labels";
 
 export interface ActionNodeProps {
   label?: string;
@@ -37,62 +38,62 @@ const actionConfig: Record<
 > = {
   addTag: {
     icon: Tag,
-    label: "Add Tag",
+    label: "Agregar etiqueta",
     color: "bg-gray-500",
   },
   removeTag: {
     icon: Tag,
-    label: "Remove Tag",
+    label: "Quitar etiqueta",
     color: "bg-gray-500",
   },
   setCustomField: {
     icon: FileText,
-    label: "Set Field",
+    label: "Asignar campo",
     color: "bg-gray-500",
   },
   httpRequest: {
     icon: Globe,
-    label: "HTTP Request",
+    label: "Solicitud HTTP",
     color: "bg-gray-500",
   },
   goToFlow: {
     icon: ArrowRightLeft,
-    label: "Go To Flow",
+    label: "Ir a flujo",
     color: "bg-gray-500",
   },
   humanTakeover: {
     icon: UserCheck,
-    label: "Human Takeover",
+    label: "Atención humana",
     color: "bg-gray-500",
   },
   subscribe: {
     icon: Bell,
-    label: "Subscribe",
+    label: "Suscribir",
     color: "bg-gray-500",
   },
   unsubscribe: {
     icon: Bell,
-    label: "Unsubscribe",
+    label: "Desuscribir",
     color: "bg-gray-500",
   },
   commentReply: {
     icon: Cog,
-    label: "Comment Reply",
+    label: "Responder comentario",
     color: "bg-gray-500",
   },
   privateReply: {
     icon: Cog,
-    label: "Private Reply",
+    label: "Respuesta privada",
     color: "bg-gray-500",
   },
   abSplit: {
     icon: Shuffle,
-    label: "A/B Split",
+    label: "Prueba A/B",
     color: "bg-gray-500",
   },
   smartDelay: {
     icon: Hourglass,
-    label: "Smart Delay",
+    label: "Espera inteligente",
     color: "bg-gray-500",
   },
 };
@@ -103,9 +104,9 @@ function getSummary(nodeData: ActionNodeProps): string | null {
 
   switch (type) {
     case "addTag":
-      return nodeData.tagName ? `Add "${nodeData.tagName}"` : null;
+      return nodeData.tagName ? `Agregar "${nodeData.tagName}"` : null;
     case "removeTag":
-      return nodeData.tagName ? `Remove "${nodeData.tagName}"` : null;
+      return nodeData.tagName ? `Quitar "${nodeData.tagName}"` : null;
     case "setCustomField":
       return nodeData.fieldSlug
         ? `${nodeData.fieldSlug} = ${nodeData.value || "..."}`
@@ -115,13 +116,13 @@ function getSummary(nodeData: ActionNodeProps): string | null {
         ? `${nodeData.method || "GET"} ${nodeData.url}`
         : null;
     case "goToFlow":
-      return nodeData.flowId ? `Flow: ${nodeData.flowId.slice(0, 8)}...` : null;
+      return nodeData.flowId ? `Flujo: ${nodeData.flowId.slice(0, 8)}...` : null;
     case "humanTakeover":
-      return nodeData.message || "Hand off to agent";
+      return nodeData.message || "Derivar a un agente";
     case "subscribe":
-      return "Subscribe contact";
+      return "Suscribir contacto";
     case "unsubscribe":
-      return "Unsubscribe contact";
+      return "Desuscribir contacto";
     case "abSplit":
       if (nodeData.paths && nodeData.paths.length > 0) {
         return nodeData.paths.map((p) => `${p.name}: ${p.weight}%`).join(", ");
@@ -129,7 +130,7 @@ function getSummary(nodeData: ActionNodeProps): string | null {
       return null;
     case "smartDelay":
       return nodeData.timeout
-        ? `Wait up to ${nodeData.timeout} ${nodeData.timeoutUnit || "minutes"}`
+        ? `Esperar hasta ${nodeData.timeout} ${unitLabel(nodeData.timeoutUnit || "minutes")}`
         : null;
     default:
       return null;
@@ -141,7 +142,7 @@ export function ActionNode({ data, selected }: NodeProps) {
   const actionType = nodeData.actionType || "addTag";
   const config = actionConfig[actionType] || {
     icon: Cog,
-    label: "Action",
+    label: "Acción",
     color: "bg-gray-500",
   };
   const Icon = config.icon;
@@ -177,7 +178,7 @@ export function ActionNode({ data, selected }: NodeProps) {
         {summary ? (
           <p className="mt-1 truncate text-xs text-muted-foreground">{summary}</p>
         ) : (
-          <p className="mt-1 text-xs text-muted-foreground italic">Not configured</p>
+          <p className="mt-1 text-xs text-muted-foreground italic">Sin configurar</p>
         )}
       </div>
       {isAbSplit && paths.length > 0 ? (

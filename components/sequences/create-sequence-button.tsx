@@ -16,11 +16,11 @@ export function CreateSequenceButton() {
     setCreating(true);
 
     try {
-      const result = await createSequence("Untitled Sequence");
+      const result = await createSequence("Secuencia sin título");
 
       if (result.error) {
         console.error("Failed to create sequence:", result.error);
-        alert(`Failed to create sequence: ${result.error}`);
+        alert(`No se pudo crear la secuencia: ${result.error}`);
         return;
       }
 
@@ -29,7 +29,7 @@ export function CreateSequenceButton() {
       }
     } catch (err) {
       console.error("Failed to create sequence:", err);
-      alert(`Failed to create sequence: ${err instanceof Error ? err.message : "Unknown error"}`);
+      alert(`No se pudo crear la secuencia: ${err instanceof Error ? err.message : "Error desconocido"}`);
     } finally {
       pendingRef.current = false;
       setCreating(false);
@@ -47,7 +47,7 @@ export function CreateSequenceButton() {
       ) : (
         <Plus className="h-4 w-4" />
       )}
-      {creating ? "Creating..." : "New Sequence"}
+      {creating ? "Creando..." : "Nueva secuencia"}
     </button>
   );
 }

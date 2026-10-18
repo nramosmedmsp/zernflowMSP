@@ -4,6 +4,15 @@ import { scheduleBroadcastDelivery } from "@/lib/scheduler";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Json, Platform } from "@/lib/types/database";
 
+// Etiquetas en español de los estados de difusión que se muestran en los errores.
+const BROADCAST_STATUS_LABELS: Record<string, string> = {
+  draft: "Borrador",
+  scheduled: "Programada",
+  sending: "Enviando",
+  completed: "Completada",
+  cancelled: "Cancelada",
+};
+
 interface SegmentRule {
   field: string;
   operator: string;
@@ -38,7 +47,7 @@ export async function POST(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
   const { data: membership } = await supabase
@@ -49,7 +58,7 @@ export async function POST(
     .single();
 
   if (!membership) {
-    return NextResponse.json({ error: "No workspace" }, { status: 404 });
+    return NextResponse.json({ error: "No hay un espacio de trabajo" }, { status: 404 });
   }
 
   // Fetch the broadcast
@@ -61,12 +70,12 @@ export async function POST(
     .single();
 
   if (broadcastErr || !broadcast) {
-    return NextResponse.json({ error: "Broadcast not found" }, { status: 404 });
+    return NextResponse.json({ error: "No se encontró la difusión" }, { status: 404 });
   }
 
   if (broadcast.status !== "draft" && broadcast.status !== "scheduled") {
     return NextResponse.json(
-      { error: `Cannot send broadcast with status "${broadcast.status}"` },
+      { error: `No se puede enviar una difusión con estado "${BROADCAST_STATUS_LABELS[broadcast.status] ?? broadcast.status}"` },
       { status: 400 }
     );
   }
@@ -89,7 +98,7 @@ export async function POST(
 
   if (!messageContent?.text?.trim()) {
     return NextResponse.json(
-      { error: "Message content is required. Set message_content.text on the broadcast." },
+      { error: "El contenido del mensaje es obligatorio. Escribe el texto de la difusión." },
       { status: 400 }
     );
   }
@@ -104,7 +113,7 @@ export async function POST(
 
   if (contactIds.length === 0) {
     return NextResponse.json(
-      { error: "No contacts match the segment filter" },
+      { error: "Ningún contacto cumple el filtro de segmento" },
       { status: 400 }
     );
   }
@@ -117,7 +126,7 @@ export async function POST(
 
   if (!contactChannels?.length) {
     return NextResponse.json(
-      { error: "No contacts have active channel connections" },
+      { error: "Ningún contacto tiene conexiones de canal activas" },
       { status: 400 }
     );
   }
@@ -155,7 +164,7 @@ export async function POST(
     if (insertErr) {
       console.error("Failed to insert broadcast recipients:", insertErr);
       return NextResponse.json(
-        { error: `Failed to create recipients: ${insertErr.message}` },
+        { error: `No se pudieron crear los destinatarios: ${insertErr.message}` },
         { status: 500 }
       );
     }
@@ -167,7 +176,7 @@ export async function POST(
 
   if (recipientIds.length === 0) {
     return NextResponse.json(
-      { error: "Failed to create broadcast recipients" },
+      { error: "No se pudieron crear los destinatarios de la difusión" },
       { status: 500 }
     );
   }

@@ -31,30 +31,30 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
       {/* System Prompt */}
       <div>
         <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          System Prompt
+          Instrucciones del sistema (prompt)
         </label>
         <textarea
           value={data.systemPrompt || ""}
           onChange={(e) => onChange({ ...data, systemPrompt: e.target.value })}
-          placeholder="You are a helpful customer support agent..."
+          placeholder="Eres un asesor de atención al cliente amable y servicial..."
           rows={8}
           className="w-full resize-none rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         <p className="mt-1 text-[11px] text-muted-foreground/60">
-          Instructions for how the AI should behave and respond.
+          Indica cómo debe comportarse y responder la IA.
         </p>
       </div>
 
       {/* Model */}
       <div>
         <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          Model
+          Modelo
         </label>
         <input
           type="text"
           value={currentModel}
           onChange={(e) => onChange({ ...data, model: e.target.value })}
-          placeholder="provider/model (e.g. openai/gpt-4o-mini)"
+          placeholder="proveedor/modelo (ej. openai/gpt-4o-mini)"
           className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground/60 placeholder:font-sans focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -74,7 +74,7 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
           ))}
         </div>
         <p className="mt-1.5 text-[11px] text-muted-foreground/60">
-          Any model supported by{" "}
+          Cualquier modelo compatible con{" "}
           <a
             href="https://vercel.com/ai-gateway"
             target="_blank"
@@ -83,14 +83,14 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
           >
             Vercel AI Gateway
           </a>
-          . Format: provider/model-name
+          . Formato: proveedor/nombre-del-modelo
         </p>
       </div>
 
       {/* Temperature */}
       <div>
         <div className="mb-1.5 flex items-center justify-between">
-          <label className="text-xs font-medium text-muted-foreground">Temperature</label>
+          <label className="text-xs font-medium text-muted-foreground">Temperatura</label>
           <span className="text-xs text-muted-foreground">{data.temperature ?? 0.7}</span>
         </div>
         <input
@@ -103,15 +103,15 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
           className="w-full"
         />
         <div className="mt-1 flex justify-between text-[11px] text-muted-foreground/60">
-          <span>Precise</span>
-          <span>Creative</span>
+          <span>Precisa</span>
+          <span>Creativa</span>
         </div>
       </div>
 
       {/* Max Tokens */}
       <div>
         <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          Max Tokens
+          Máximo de tokens
         </label>
         <input
           type="number"
@@ -122,14 +122,14 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
           className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         <p className="mt-1 text-[11px] text-muted-foreground/60">
-          Maximum length of the AI response.
+          Longitud máxima de la respuesta de la IA.
         </p>
       </div>
 
       {/* Context Messages */}
       <div>
         <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          Context Messages
+          Mensajes de contexto
         </label>
         <input
           type="number"
@@ -140,7 +140,7 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
           className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         <p className="mt-1 text-[11px] text-muted-foreground/60">
-          How many past messages to include as context for the AI.
+          Cuántos mensajes anteriores se incluyen como contexto para la IA.
         </p>
       </div>
 
@@ -153,12 +153,12 @@ export function AiResponsePanel({ data: rawData, onChange }: AiResponsePanelProp
             onChange={(e) => onChange({ ...data, sendDirectly: e.target.checked })}
             className="h-3.5 w-3.5 rounded border-border text-blue-500 focus:ring-blue-500"
           />
-          Send response automatically
+          Enviar la respuesta automáticamente
         </label>
         <p className="mt-1 text-[11px] text-muted-foreground/60">
-          The generated response is always available to later nodes as{" "}
-          {"{{ai_response}}"}. Turn this off to only store it and send it
-          yourself with a Send Message node.
+          La respuesta generada siempre queda disponible para los nodos
+          siguientes como {"{{ai_response}}"}. Desactívalo para solo guardarla
+          y enviarla tú mismo con un nodo Enviar mensaje.
         </p>
       </div>
     </div>

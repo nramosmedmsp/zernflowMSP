@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { Database, Json } from "@/lib/types/database";
 import { PLATFORM_LABELS } from "@/lib/platforms";
+import { formatNumber, formatRelative } from "@/lib/format";
 
 type Channel = Database["public"]["Tables"]["channels"]["Row"];
 type CommentLog = Database["public"]["Tables"]["comment_logs"]["Row"];
@@ -87,10 +88,11 @@ export function GrowthView({
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const conversionRate =
+  const conversionRate = formatNumber(
     stats.totalComments > 0
-      ? ((stats.dmsSent / stats.totalComments) * 100).toFixed(1)
-      : "0.0";
+      ? Math.round((stats.dmsSent / stats.totalComments) * 1000) / 10
+      : 0
+  );
 
   async function handleToggle(trigger: TriggerWithFlow) {
     setTogglingId(trigger.id);
@@ -112,7 +114,7 @@ export function GrowthView({
   }
 
   async function handleDelete(triggerId: string) {
-    if (!confirm("Delete this comment rule? This cannot be undone.")) return;
+    if (!confirm("¿Eliminar esta regla de comentarios? Esta acción no se puede deshacer.")) return;
     setDeletingId(triggerId);
     const supabase = createClient();
 
@@ -290,10 +292,10 @@ export function GrowthView({
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-foreground">
-              Growth Tools
+              Herramientas de crecimiento
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Comment-to-DM automation for lead capture and engagement
+              Automatización de comentario a mensaje directo para captar clientes e interactuar
             </p>
           </div>
           <button
@@ -302,7 +304,7 @@ export function GrowthView({
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
-            New Comment Rule
+            Nueva regla de comentarios
           </button>
         </div>
       </div>
@@ -311,28 +313,28 @@ export function GrowthView({
         {/* Stats cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
-            label="Comments Processed"
-            value={stats.totalComments}
+            label="Comentarios procesados"
+            value={formatNumber(stats.totalComments)}
             icon={<Eye className="h-4 w-4" />}
-            sublabel="Last 30 days"
+            sublabel="Últimos 30 días"
           />
           <StatCard
-            label="Keywords Matched"
-            value={stats.matchedComments}
+            label="Palabras clave detectadas"
+            value={formatNumber(stats.matchedComments)}
             icon={<MessageCircle className="h-4 w-4" />}
-            sublabel="Last 30 days"
+            sublabel="Últimos 30 días"
           />
           <StatCard
-            label="DMs Sent"
-            value={stats.dmsSent}
+            label="Mensajes directos enviados"
+            value={formatNumber(stats.dmsSent)}
             icon={<Send className="h-4 w-4" />}
-            sublabel="Last 30 days"
+            sublabel="Últimos 30 días"
           />
           <StatCard
-            label="Conversion Rate"
+            label="Tasa de conversión"
             value={`${conversionRate}%`}
             icon={<TrendingUp className="h-4 w-4" />}
-            sublabel="Comments to DMs"
+            sublabel="De comentarios a mensajes directos"
           />
         </div>
 
@@ -341,7 +343,7 @@ export function GrowthView({
           <div ref={createFormRef} className="mt-6 rounded-xl border border-border bg-card p-6">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">
-                {editingId ? "Edit Comment-to-DM Rule" : "Create Comment-to-DM Rule"}
+                {editingId ? "Editar regla de comentario a mensaje directo" : "Crear regla de comentario a mensaje directo"}
               </h2>
               <button
                 onClick={handleCancelForm}
@@ -355,7 +357,7 @@ export function GrowthView({
               {/* Channel */}
               <div>
                 <label className="text-xs font-medium text-muted-foreground">
-                  Channel
+                  Canal
                 </label>
                 <select
                   value={form.channelId}
@@ -376,7 +378,7 @@ export function GrowthView({
               {/* Flow */}
               <div>
                 <label className="text-xs font-medium text-muted-foreground">
-                  Response Flow
+                  Flujo de respuesta
                 </label>
                 <select
                   value={form.flowId}
@@ -396,7 +398,7 @@ export function GrowthView({
               {/* Keywords */}
               <div>
                 <label className="text-xs font-medium text-muted-foreground">
-                  Keywords (comma-separated)
+                  Palabras clave (separadas por comas)
                 </label>
                 <input
                   type="text"
@@ -404,7 +406,7 @@ export function GrowthView({
                   onChange={(e) =>
                     setForm((f) => ({ ...f, keywords: e.target.value }))
                   }
-                  placeholder="info, price, details"
+                  placeholder="info, precio, detalles"
                   className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
@@ -412,7 +414,7 @@ export function GrowthView({
               {/* Match Type */}
               <div>
                 <label className="text-xs font-medium text-muted-foreground">
-                  Match Type
+                  Tipo de coincidencia
                 </label>
                 <select
                   value={form.matchType}
@@ -427,16 +429,16 @@ export function GrowthView({
                   }
                   className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 >
-                  <option value="contains">Contains</option>
-                  <option value="exact">Exact match</option>
-                  <option value="startsWith">Starts with</option>
+                  <option value="contains">Contiene</option>
+                  <option value="exact">Coincidencia exacta</option>
+                  <option value="startsWith">Empieza con</option>
                 </select>
               </div>
 
               {/* Public reply text (optional) */}
               <div className="sm:col-span-2">
                 <label className="text-xs font-medium text-muted-foreground">
-                  Public Reply (optional)
+                  Respuesta pública (opcional)
                 </label>
                 <input
                   type="text"
@@ -444,19 +446,19 @@ export function GrowthView({
                   onChange={(e) =>
                     setForm((f) => ({ ...f, replyText: e.target.value }))
                   }
-                  placeholder="Check your DMs! We just sent you more info."
+                  placeholder="¡Revisa tus mensajes directos! Te acabamos de enviar más información."
                   className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 <p className="mt-1 text-[11px] text-muted-foreground/60">
-                  If set, this will be posted as a public reply to the matching
-                  comment before sending the DM.
+                  Si la completas, se publicará como respuesta pública al
+                  comentario que coincida, antes de enviar el mensaje directo.
                 </p>
               </div>
 
               {/* Post IDs (optional) */}
               <div className="sm:col-span-2">
                 <label className="text-xs font-medium text-muted-foreground">
-                  Specific Post IDs (optional, comma-separated)
+                  IDs de publicaciones específicas (opcional, separados por comas)
                 </label>
                 <input
                   type="text"
@@ -464,12 +466,12 @@ export function GrowthView({
                   onChange={(e) =>
                     setForm((f) => ({ ...f, postIds: e.target.value }))
                   }
-                  placeholder="Leave empty to match comments on all posts"
+                  placeholder="Déjalo vacío para detectar comentarios en todas las publicaciones"
                   className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 <p className="mt-1 text-[11px] text-muted-foreground/60">
-                  Limit this rule to specific Zernio post IDs. If empty, all posts
-                  on this channel are monitored.
+                  Limita esta regla a IDs de publicaciones de Zernio específicas. Si lo
+                  dejas vacío, se monitorean todas las publicaciones de este canal.
                 </p>
               </div>
             </div>
@@ -479,7 +481,7 @@ export function GrowthView({
                 onClick={handleCancelForm}
                 className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
               >
-                Cancel
+                Cancelar
               </button>
               {editingId ? (
                 <button
@@ -489,7 +491,7 @@ export function GrowthView({
                   }
                   className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
-                  {saving ? "Saving..." : "Save Changes"}
+                  {saving ? "Guardando..." : "Guardar cambios"}
                 </button>
               ) : (
                 <button
@@ -499,7 +501,7 @@ export function GrowthView({
                   }
                   className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
-                  {creating ? "Creating..." : "Create Rule"}
+                  {creating ? "Creando..." : "Crear regla"}
                 </button>
               )}
             </div>
@@ -511,16 +513,16 @@ export function GrowthView({
           <div className="mt-8 rounded-xl border border-dashed border-input p-8 text-center">
             <MessageCircle className="mx-auto h-10 w-10 text-muted-foreground/50" />
             <h2 className="mt-3 text-lg font-semibold text-foreground">
-              Connect a channel first
+              Conecta un canal primero
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              You need at least one active channel to set up comment automation.
+              Necesitas al menos un canal activo para configurar la automatización de comentarios.
             </p>
             <a
               href="/dashboard/channels"
               className="mt-4 inline-flex rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
             >
-              Go to Channels
+              Ir a Canales
             </a>
           </div>
         )}
@@ -529,17 +531,17 @@ export function GrowthView({
           <div className="mt-8 rounded-xl border border-dashed border-input p-8 text-center">
             <MessageCircle className="mx-auto h-10 w-10 text-muted-foreground/50" />
             <h2 className="mt-3 text-lg font-semibold text-foreground">
-              Create a flow first
+              Crea un flujo primero
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Publish at least one flow to use as the DM response when comments
-              match your keywords.
+              Publica al menos un flujo para usarlo como respuesta por mensaje
+              directo cuando los comentarios coincidan con tus palabras clave.
             </p>
             <Link
               href="/dashboard/flows"
               className="mt-4 inline-flex rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
             >
-              Go to Flows
+              Ir a Flujos
             </Link>
           </div>
         )}
@@ -548,11 +550,11 @@ export function GrowthView({
         {triggers.length > 0 && (
           <div className="mt-8">
             <h2 className="text-lg font-semibold text-foreground">
-              Active Comment Rules
+              Reglas de comentarios activas
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              When a comment matches a keyword, the linked flow sends a DM to
-              the commenter.
+              Cuando un comentario coincide con una palabra clave, el flujo
+              vinculado envía un mensaje directo a quien comentó.
             </p>
 
             <div className="mt-4 space-y-3">
@@ -590,7 +592,7 @@ export function GrowthView({
                                   : "bg-muted-foreground"
                               )}
                             />
-                            {trigger.is_active ? "Active" : "Paused"}
+                            {trigger.is_active ? "Activa" : "En pausa"}
                           </span>
 
                           {channel && (
@@ -603,7 +605,7 @@ export function GrowthView({
 
                           {!trigger.channel_id && (
                             <span className="text-xs text-muted-foreground">
-                              All channels
+                              Todos los canales
                             </span>
                           )}
                         </div>
@@ -624,24 +626,24 @@ export function GrowthView({
 
                         {/* Flow name */}
                         <p className="mt-2 text-xs text-muted-foreground">
-                          Flow:{" "}
+                          Flujo:{" "}
                           <span className="font-medium text-foreground">
-                            {trigger.flows?.name || "Unknown"}
+                            {trigger.flows?.name || "Desconocido"}
                           </span>
                         </p>
 
                         {/* Reply text preview */}
                         {config.replyText && (
                           <p className="mt-1 text-xs text-muted-foreground/60">
-                            Public reply: &ldquo;{config.replyText}&rdquo;
+                            Respuesta pública: &ldquo;{config.replyText}&rdquo;
                           </p>
                         )}
 
                         {/* Post IDs */}
                         {config.postIds?.length ? (
                           <p className="mt-1 text-xs text-muted-foreground/60">
-                            Limited to {config.postIds.length} post
-                            {config.postIds.length !== 1 ? "s" : ""}
+                            Limitada a {config.postIds.length}{" "}
+                            {config.postIds.length === 1 ? "publicación" : "publicaciones"}
                           </p>
                         ) : null}
                       </div>
@@ -651,7 +653,7 @@ export function GrowthView({
                         <button
                           onClick={() => handleStartEdit(trigger)}
                           className="rounded-lg p-2 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-                          title="Edit rule"
+                          title="Editar regla"
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
@@ -665,7 +667,7 @@ export function GrowthView({
                               : "text-muted-foreground/60 hover:bg-muted"
                           )}
                           title={
-                            trigger.is_active ? "Pause rule" : "Activate rule"
+                            trigger.is_active ? "Pausar regla" : "Activar regla"
                           }
                         >
                           {trigger.is_active ? (
@@ -678,7 +680,7 @@ export function GrowthView({
                           onClick={() => handleDelete(trigger.id)}
                           disabled={deletingId === trigger.id}
                           className="rounded-lg p-2 text-muted-foreground/60 transition-colors hover:bg-red-50 hover:text-red-600"
-                          title="Delete rule"
+                          title="Eliminar regla"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -695,10 +697,10 @@ export function GrowthView({
         {recentLogs.length > 0 && (
           <div className="mt-8">
             <h2 className="text-lg font-semibold text-foreground">
-              Recent Activity
+              Actividad reciente
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Latest processed comments and their outcomes.
+              Últimos comentarios procesados y sus resultados.
             </p>
 
             <div className="mt-4 overflow-hidden rounded-xl border border-border">
@@ -706,19 +708,19 @@ export function GrowthView({
                 <thead>
                   <tr className="border-b border-border bg-muted">
                     <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
-                      Author
+                      Autor
                     </th>
                     <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
-                      Comment
+                      Comentario
                     </th>
                     <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
-                      Matched
+                      Coincide
                     </th>
                     <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
-                      DM
+                      Mensaje directo
                     </th>
                     <th className="px-4 py-3 text-xs font-medium text-muted-foreground">
-                      Time
+                      Hora
                     </th>
                   </tr>
                 </thead>
@@ -730,7 +732,7 @@ export function GrowthView({
                     >
                       <td className="px-4 py-3">
                         <p className="text-sm font-medium text-foreground">
-                          {log.author_name || log.author_username || "Unknown"}
+                          {log.author_name || log.author_username || "Desconocido"}
                         </p>
                         {log.author_username && (
                           <p className="text-xs text-muted-foreground/60">
@@ -744,7 +746,7 @@ export function GrowthView({
                       <td className="px-4 py-3">
                         {log.matched_trigger_id ? (
                           <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">
-                            Yes
+                            Sí
                           </span>
                         ) : (
                           <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -755,7 +757,7 @@ export function GrowthView({
                       <td className="px-4 py-3">
                         {log.dm_sent ? (
                           <span className="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                            Sent
+                            Enviado
                           </span>
                         ) : log.error ? (
                           <span
@@ -770,8 +772,11 @@ export function GrowthView({
                           </span>
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground/60">
-                        {formatRelativeTime(log.created_at)}
+                      <td
+                        suppressHydrationWarning
+                        className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground/60"
+                      >
+                        {formatRelative(log.created_at)}
                       </td>
                     </tr>
                   ))}
@@ -810,25 +815,4 @@ function StatCard({
       </p>
     </div>
   );
-}
-
-function formatRelativeTime(dateStr: string): string {
-  const now = Date.now();
-  const date = new Date(dateStr).getTime();
-  const diffMs = now - date;
-  const diffMin = Math.floor(diffMs / 60000);
-
-  if (diffMin < 1) return "Just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return `${diffHour}h ago`;
-
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return `${diffDay}d ago`;
-
-  return new Date(dateStr).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
 }

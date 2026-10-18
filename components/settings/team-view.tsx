@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useSyncExternalStore } from "react";
 import {
   Users,
   Mail,
@@ -14,6 +13,9 @@ import {
   Plus,
   Loader2,
   ArrowLeft,
+  Copy,
+  Check,
+  Link2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +25,8 @@ import {
 } from "@/lib/actions/team";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { formatDate } from "@/lib/format";
+import { inviteUrl, roleLabel } from "@/lib/auth-helpers";
 
 interface MemberDetail {
   userId: string;
@@ -55,6 +59,80 @@ const roleStyles: Record<string, string> = {
   member: "bg-gray-100 text-gray-600",
 };
 
+const noopSubscribe = () => () => {};
+
+/** Origen de la página; vacío durante el render del servidor. */
+function useOrigin() {
+  return useSyncExternalStore(
+    noopSubscribe,
+    () => window.location.origin,
+    () => ""
+  );
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Navegadores sin permiso de portapapeles (o http): copia clásica.
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(area);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function CopyLinkButton({
+  url,
+  compact = false,
+}: {
+  url: string;
+  compact?: boolean;
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function handleCopy() {
+    if (!url) return;
+    const ok = await copyText(url);
+    setState(ok ? "copied" : "failed");
+    setTimeout(() => setState("idle"), 2000);
+  }
+
+  const label =
+    state === "copied" ? "Copiado" : state === "failed" ? "No se pudo copiar" : "Copiar enlace";
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      disabled={!url}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border font-medium transition-colors hover:bg-muted disabled:opacity-50",
+        compact ? "px-2 py-1 text-[11px]" : "px-3 py-2 text-xs"
+      )}
+      title="Copiar enlace de invitación"
+    >
+      {state === "copied" ? (
+        <Check className="h-3.5 w-3.5 text-green-600" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+      {label}
+    </button>
+  );
+}
+
 export function TeamView({
   workspaceId,
   workspaceName,
@@ -70,8 +148,8 @@ export function TeamView({
   members: MemberDetail[];
   pendingInvites: PendingInvite[];
 }) {
-  const router = useRouter();
   const isOwner = currentUserRole === "owner";
+  const origin = useOrigin();
 
   const [members, setMembers] = useState(initialMembers);
   const [invites, setInvites] = useState(initialInvites);
@@ -81,7 +159,8 @@ export function TeamView({
   const [inviteRole, setInviteRole] = useState("member");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
-  const [inviteSuccess, setInviteSuccess] = useState(false);
+  const [createdInvite, setCreatedInvite] = useState<PendingInvite | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Remove member
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -95,18 +174,18 @@ export function TeamView({
 
     setInviting(true);
     setInviteError(null);
-    setInviteSuccess(false);
+    setCreatedInvite(null);
 
     const result = await inviteTeamMember(workspaceId, inviteEmail, inviteRole);
 
     if (result.error) {
       setInviteError(result.error);
     } else if (result.invite) {
-      setInvites((prev) => [result.invite as PendingInvite, ...prev]);
+      const invite = result.invite as PendingInvite;
+      setInvites((prev) => [invite, ...prev]);
       setInviteEmail("");
       setInviteRole("member");
-      setInviteSuccess(true);
-      setTimeout(() => setInviteSuccess(false), 3000);
+      setCreatedInvite(invite);
     }
 
     setInviting(false);
@@ -114,10 +193,13 @@ export function TeamView({
 
   async function handleRemove(userId: string) {
     setRemovingId(userId);
+    setActionError(null);
 
     const result = await removeTeamMember(workspaceId, userId);
 
-    if (!result.error) {
+    if (result.error) {
+      setActionError(result.error);
+    } else {
       setMembers((prev) => prev.filter((m) => m.userId !== userId));
     }
 
@@ -126,15 +208,21 @@ export function TeamView({
 
   async function handleRevoke(inviteId: string) {
     setRevokingId(inviteId);
+    setActionError(null);
 
     const result = await revokeInvite(inviteId);
 
-    if (!result.error) {
+    if (result.error) {
+      setActionError(result.error);
+    } else {
       setInvites((prev) => prev.filter((i) => i.id !== inviteId));
+      setCreatedInvite((prev) => (prev?.id === inviteId ? null : prev));
     }
 
     setRevokingId(null);
   }
+
+  const createdInviteUrl = createdInvite && origin ? inviteUrl(origin, createdInvite.id) : "";
 
   return (
     <div className="flex h-full flex-col">
@@ -144,13 +232,14 @@ export function TeamView({
           <Link
             href="/dashboard/settings"
             className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="Volver a Configuración"
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <div>
-            <h1 className="text-2xl font-bold">Team</h1>
+            <h1 className="text-2xl font-bold">Equipo</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Manage members and invitations for {workspaceName}
+              Administra los miembros e invitaciones de {workspaceName}
             </p>
           </div>
         </div>
@@ -158,12 +247,18 @@ export function TeamView({
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-2xl space-y-8 px-8 py-8">
+          {actionError && (
+            <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {actionError}
+            </p>
+          )}
+
           {/* Members list */}
           <section>
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-muted-foreground" />
               <h2 className="text-sm font-semibold">
-                Members ({members.length})
+                Miembros ({members.length})
               </h2>
             </div>
 
@@ -184,7 +279,7 @@ export function TeamView({
                         </p>
                         {member.userId === currentUserId && (
                           <span className="shrink-0 text-[10px] text-muted-foreground">
-                            (you)
+                            (tú)
                           </span>
                         )}
                       </div>
@@ -197,21 +292,16 @@ export function TeamView({
                   <div className="flex items-center gap-2 shrink-0 ml-4">
                     <span
                       className={cn(
-                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
                         roleStyles[member.role] ?? roleStyles.member
                       )}
                     >
                       {roleIcons[member.role] ?? roleIcons.member}
-                      {member.role}
+                      {roleLabel(member.role)}
                     </span>
 
                     <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                      Joined{" "}
-                      {new Date(member.joinedAt).toLocaleDateString([], {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
+                      Desde el {formatDate(member.joinedAt)}
                     </span>
 
                     {isOwner && member.userId !== currentUserId && (
@@ -221,7 +311,7 @@ export function TeamView({
                         }
                         disabled={removingId === member.userId}
                         className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                        title="Remove member"
+                        title="Quitar miembro"
                       >
                         {removingId === member.userId ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -244,13 +334,13 @@ export function TeamView({
               <section>
                 <div className="flex items-center gap-2">
                   <Mail className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold">Invite a Member</h2>
+                  <h2 className="text-sm font-semibold">Invitar a un miembro</h2>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Send an invitation link. The invite expires in 7 days.
+                  Se genera un enlace personal para ese correo. Vence en 7 días.
                 </p>
 
-                <form onSubmit={handleInvite} className="mt-4 flex gap-2">
+                <form onSubmit={handleInvite} className="mt-4 flex flex-wrap gap-2">
                   <input
                     type="email"
                     value={inviteEmail}
@@ -258,17 +348,17 @@ export function TeamView({
                       setInviteEmail(e.target.value);
                       setInviteError(null);
                     }}
-                    placeholder="colleague@example.com"
+                    placeholder="correo@ejemplo.com"
                     required
-                    className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <select
                     value={inviteRole}
                     onChange={(e) => setInviteRole(e.target.value)}
                     className="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
-                    <option value="member">Member</option>
-                    <option value="admin">Admin</option>
+                    <option value="member">{roleLabel("member")}</option>
+                    <option value="admin">{roleLabel("admin")}</option>
                   </select>
                   <button
                     type="submit"
@@ -280,17 +370,35 @@ export function TeamView({
                     ) : (
                       <Plus className="h-4 w-4" />
                     )}
-                    {inviting ? "Inviting..." : "Invite"}
+                    {inviting ? "Creando..." : "Crear invitación"}
                   </button>
                 </form>
 
                 {inviteError && (
                   <p className="mt-2 text-xs text-destructive">{inviteError}</p>
                 )}
-                {inviteSuccess && (
-                  <p className="mt-2 text-xs text-green-600">
-                    Invite sent successfully!
-                  </p>
+
+                {createdInvite && (
+                  <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-4 dark:border-green-900 dark:bg-green-950/40">
+                    <div className="flex items-center gap-2 text-sm font-medium text-green-800 dark:text-green-200">
+                      <Link2 className="h-4 w-4" />
+                      Invitación creada para {createdInvite.email}
+                    </div>
+                    <p className="mt-1 text-xs text-green-700 dark:text-green-300">
+                      Comparte este enlace con la persona invitada. Vence en 7 días.
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={createdInviteUrl}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs"
+                        aria-label="Enlace de invitación"
+                      />
+                      <CopyLinkButton url={createdInviteUrl} />
+                    </div>
+                  </div>
                 )}
               </section>
             </>
@@ -305,7 +413,7 @@ export function TeamView({
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-muted-foreground" />
                   <h2 className="text-sm font-semibold">
-                    Pending Invites ({invites.length})
+                    Invitaciones pendientes ({invites.length})
                   </h2>
                 </div>
 
@@ -317,7 +425,7 @@ export function TeamView({
                       <div
                         key={invite.id}
                         className={cn(
-                          "flex items-center justify-between rounded-xl border border-border bg-card p-4",
+                          "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4",
                           isExpired && "opacity-60"
                         )}
                       >
@@ -332,26 +440,20 @@ export function TeamView({
                             <div className="flex items-center gap-2 mt-0.5">
                               <span
                                 className={cn(
-                                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
+                                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
                                   roleStyles[invite.role] ?? roleStyles.member
                                 )}
                               >
                                 {roleIcons[invite.role] ?? roleIcons.member}
-                                {invite.role}
+                                {roleLabel(invite.role)}
                               </span>
                               {isExpired ? (
                                 <span className="text-[10px] text-destructive">
-                                  Expired
+                                  Venció el {formatDate(invite.expires_at)}
                                 </span>
                               ) : (
                                 <span className="text-[10px] text-muted-foreground">
-                                  Expires{" "}
-                                  {new Date(
-                                    invite.expires_at
-                                  ).toLocaleDateString([], {
-                                    month: "short",
-                                    day: "numeric",
-                                  })}
+                                  Vence el {formatDate(invite.expires_at)}
                                 </span>
                               )}
                             </div>
@@ -359,18 +461,27 @@ export function TeamView({
                         </div>
 
                         {isOwner && (
-                          <button
-                            onClick={() => setConfirmRevoke(invite.id)}
-                            disabled={revokingId === invite.id}
-                            className="shrink-0 ml-4 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                            title="Revoke invite"
-                          >
-                            {revokingId === invite.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <X className="h-3.5 w-3.5" />
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {!isExpired && (
+                              <CopyLinkButton
+                                url={origin ? inviteUrl(origin, invite.id) : ""}
+                                compact
+                              />
                             )}
-                          </button>
+                            <button
+                              onClick={() => setConfirmRevoke(invite.id)}
+                              disabled={revokingId === invite.id}
+                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                              title="Revocar invitación"
+                            >
+                              {revokingId === invite.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <X className="h-3.5 w-3.5" />
+                              )}
+                              Revocar
+                            </button>
+                          </div>
                         )}
                       </div>
                     );
@@ -383,9 +494,10 @@ export function TeamView({
       </div>
       <ConfirmDialog
         open={!!confirmRemove}
-        title="Remove member"
-        message={`Are you sure you want to remove ${confirmRemove?.name ?? "this member"} from the workspace?`}
-        confirmLabel="Remove"
+        title="Quitar miembro"
+        message={`¿Seguro que quieres quitar a ${confirmRemove?.name ?? "este miembro"} del espacio de trabajo?`}
+        confirmLabel="Quitar"
+        cancelLabel="Cancelar"
         destructive
         onConfirm={() => {
           if (confirmRemove) handleRemove(confirmRemove.userId);
@@ -395,9 +507,10 @@ export function TeamView({
       />
       <ConfirmDialog
         open={!!confirmRevoke}
-        title="Revoke invite"
-        message="Are you sure you want to revoke this invitation?"
-        confirmLabel="Revoke"
+        title="Revocar invitación"
+        message="¿Seguro que quieres revocar esta invitación? El enlace dejará de funcionar."
+        confirmLabel="Revocar"
+        cancelLabel="Cancelar"
         destructive
         onConfirm={() => {
           if (confirmRevoke) handleRevoke(confirmRevoke);

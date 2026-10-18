@@ -18,12 +18,12 @@ export function CreateFlowButton() {
       const res = await fetch("/api/v1/flows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Untitled Flow" }),
+        body: JSON.stringify({ name: "Flujo sin título" }),
       });
 
       if (!res.ok) {
         console.error("Failed to create flow");
-        alert("Failed to create flow. Please try again.");
+        alert("No se pudo crear el flujo. Inténtalo de nuevo.");
         return;
       }
 
@@ -31,7 +31,7 @@ export function CreateFlowButton() {
       router.push(`/dashboard/flows/${flow.id}`);
     } catch (err) {
       console.error("Failed to create flow:", err);
-      alert("Failed to create flow. Please try again.");
+      alert("No se pudo crear el flujo. Inténtalo de nuevo.");
     } finally {
       pendingRef.current = false;
       setCreating(false);
@@ -49,7 +49,7 @@ export function CreateFlowButton() {
       ) : (
         <Plus className="h-4 w-4" />
       )}
-      {creating ? "Creating..." : "New Flow"}
+      {creating ? "Creando..." : "Nuevo flujo"}
     </button>
   );
 }

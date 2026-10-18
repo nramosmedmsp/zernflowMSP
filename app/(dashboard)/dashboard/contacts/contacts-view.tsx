@@ -13,6 +13,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatNumber, formatRelative } from "@/lib/format";
 import {
   SegmentBuilder,
   createEmptyFilter,
@@ -29,16 +30,8 @@ type ContactWithTags = Database["public"]["Tables"]["contacts"]["Row"] & {
 };
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "Never";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (!dateStr) return "Nunca";
+  return formatRelative(dateStr);
 }
 
 export function ContactsView({
@@ -81,9 +74,9 @@ export function ContactsView({
       <div className="border-b border-border px-8 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">Contacts</h1>
+            <h1 className="text-2xl font-bold">Contactos</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {contacts.length} contact{contacts.length !== 1 ? "s" : ""} in your workspace
+              {formatNumber(contacts.length)} {contacts.length === 1 ? "contacto" : "contactos"} en tu espacio de trabajo
             </p>
           </div>
         </div>
@@ -94,7 +87,7 @@ export function ContactsView({
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="text"
-              placeholder="Search by name or email..."
+              placeholder="Buscar por nombre o correo..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
@@ -110,7 +103,7 @@ export function ContactsView({
             )}
           >
             <Filter className="h-4 w-4" />
-            Segment
+            Segmento
             <ChevronDown
               className={cn(
                 "h-3.5 w-3.5 transition-transform",
@@ -143,7 +136,7 @@ export function ContactsView({
                   : "bg-muted text-muted-foreground hover:bg-accent"
               )}
             >
-              All
+              Todas
             </button>
             {tags.map((tag) => (
               <button
@@ -179,10 +172,10 @@ export function ContactsView({
           <div className="flex flex-col items-center justify-center py-20">
             <Users className="h-10 w-10 text-muted-foreground/40" />
             <p className="mt-3 text-sm font-medium text-muted-foreground">
-              No contacts found
+              No se encontraron contactos
             </p>
             <p className="mt-1 text-xs text-muted-foreground/70">
-              Contacts are created automatically when someone messages your channels
+              Los contactos se crean automáticamente cuando alguien escribe a tus canales
             </p>
           </div>
         ) : (
@@ -190,19 +183,19 @@ export function ContactsView({
             <thead>
               <tr className="border-b border-border bg-muted/50 text-left">
                 <th className="px-8 py-3 text-xs font-medium uppercase text-muted-foreground">
-                  Name
+                  Nombre
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
-                  Email
+                  Correo electrónico
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
-                  Last Interaction
+                  Última interacción
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
-                  Tags
+                  Etiquetas
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
-                  Subscribed
+                  Suscrito
                 </th>
               </tr>
             </thead>
@@ -227,7 +220,7 @@ export function ContactsView({
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={contact.avatar_url}
-                              alt={contact.display_name || "Contact"}
+                              alt={contact.display_name || "Contacto"}
                               className="h-8 w-8 rounded-full object-cover"
                             />
                           ) : (
@@ -235,7 +228,7 @@ export function ContactsView({
                           )}
                         </div>
                         <span className="text-sm font-medium hover:underline">
-                          {contact.display_name ?? "Unknown"}
+                          {contact.display_name ?? "Desconocido"}
                         </span>
                       </Link>
                     </td>
@@ -247,12 +240,15 @@ export function ContactsView({
                         </span>
                       ) : (
                         <span className="text-xs text-muted-foreground/50">
-                          No email
+                          Sin correo
                         </span>
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <span
+                        suppressHydrationWarning
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground"
+                      >
                         <Calendar className="h-3 w-3" />
                         {formatDate(contact.last_interaction_at)}
                       </span>
@@ -285,7 +281,7 @@ export function ContactsView({
                         </div>
                       ) : (
                         <span className="text-xs text-muted-foreground/50">
-                          No tags
+                          Sin etiquetas
                         </span>
                       )}
                     </td>
@@ -293,7 +289,7 @@ export function ContactsView({
                       {contact.is_subscribed ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-green-600">
                           <CheckCircle className="h-3.5 w-3.5" />
-                          Yes
+                          Sí
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">

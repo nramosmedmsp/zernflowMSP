@@ -60,7 +60,8 @@ export function ExportFlowButton({
     <button
       onClick={handleExport}
       className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground transition-colors"
-      aria-label={`Export ${flow.name}`}
+      aria-label={`Exportar ${flow.name}`}
+title={`Exportar ${flow.name}`}
     >
       <Download className="h-3.5 w-3.5" />
     </button>
@@ -86,14 +87,14 @@ export function DeleteFlowButton({
 
       if (!res.ok) {
         console.error("Failed to delete flow");
-        alert("Failed to delete flow. Please try again.");
+        alert("No se pudo eliminar el flujo. Inténtalo de nuevo.");
         return;
       }
 
       router.refresh();
     } catch (err) {
       console.error("Failed to delete flow:", err);
-      alert("Failed to delete flow. Please try again.");
+      alert("No se pudo eliminar el flujo. Inténtalo de nuevo.");
     } finally {
       setDeleting(false);
     }
@@ -113,7 +114,8 @@ export function DeleteFlowButton({
         onClick={() => setConfirmOpen(true)}
         disabled={deleting}
         className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground/60 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors disabled:opacity-50"
-        aria-label={`Delete ${flow.name}`}
+        aria-label={`Eliminar ${flow.name}`}
+title={`Eliminar ${flow.name}`}
       >
         {deleting ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -123,9 +125,10 @@ export function DeleteFlowButton({
       </button>
       <ConfirmDialog
         open={confirmOpen}
-        title="Delete flow"
-        message={`"${flow.name}" and its triggers, versions, and run history will be permanently deleted. This cannot be undone.`}
-        confirmLabel="Delete"
+        title="Eliminar flujo"
+        message={`"${flow.name}" y sus disparadores, versiones e historial de ejecuciones se eliminarán de forma permanente. Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        cancelLabel="Cancelar"
         destructive
         onConfirm={() => {
           setConfirmOpen(false);
@@ -155,15 +158,15 @@ export function ImportFlowButton() {
       const data = JSON.parse(text);
 
       if (!isValidFlowData(data)) {
-        throw new Error("Invalid flow file. Expected name, nodes, and edges.");
+        throw new Error("Archivo de flujo no válido. Debe incluir nombre, nodos y conexiones.");
       }
 
       setPreview(data);
     } catch (err) {
       if (err instanceof SyntaxError) {
-        setError("Invalid JSON file");
+        setError("Archivo JSON no válido");
       } else {
-        setError(err instanceof Error ? err.message : "Invalid file");
+        setError(err instanceof Error ? err.message : "Archivo no válido");
       }
       setTimeout(() => setError(null), 4000);
     } finally {
@@ -184,7 +187,7 @@ export function ImportFlowButton() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: preview.name + " (imported)",
+          name: preview.name + " (importado)",
           description: preview.description || null,
           nodes: preview.nodes,
           edges: preview.edges,
@@ -192,12 +195,12 @@ export function ImportFlowButton() {
       });
 
       if (!res.ok) {
-        let errorMsg = "Failed to import flow";
+        let errorMsg = "No se pudo importar el flujo";
         try {
           const err = await res.json();
           errorMsg = err.error || errorMsg;
         } catch {
-          errorMsg = `Server returned ${res.status}`;
+          errorMsg = `El servidor respondió con el código ${res.status}`;
         }
         throw new Error(errorMsg);
       }
@@ -207,7 +210,7 @@ export function ImportFlowButton() {
       router.push(`/dashboard/flows/${flow.id}`);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to import");
+      setError(err instanceof Error ? err.message : "No se pudo importar");
       setTimeout(() => setError(null), 4000);
     } finally {
       setImporting(false);
@@ -236,7 +239,7 @@ export function ImportFlowButton() {
         ) : (
           <Upload className="h-4 w-4" />
         )}
-        {importing ? "Importing..." : "Import"}
+        {importing ? "Importando..." : "Importar"}
       </button>
 
       {error && (
@@ -254,7 +257,7 @@ export function ImportFlowButton() {
               <div className="min-w-0 flex-1">
                 <p className="font-medium">{preview.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {nodeCount} {nodeCount === 1 ? "node" : "nodes"} · {edgeCount} {edgeCount === 1 ? "connection" : "connections"}
+                  {nodeCount} {nodeCount === 1 ? "nodo" : "nodos"} · {edgeCount} {edgeCount === 1 ? "conexión" : "conexiones"}
                 </p>
               </div>
             </div>
@@ -268,7 +271,7 @@ export function ImportFlowButton() {
                 onClick={() => setPreview(null)}
                 className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
               >
-                Cancel
+                Cancelar
               </button>
               <button
                 onClick={handleConfirmImport}
@@ -276,7 +279,7 @@ export function ImportFlowButton() {
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity"
               >
                 {importing && <Loader2 className="h-4 w-4 animate-spin" />}
-                {importing ? "Importing..." : "Import"}
+                {importing ? "Importando..." : "Importar"}
               </button>
             </div>
           </div>

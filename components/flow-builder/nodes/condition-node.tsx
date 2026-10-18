@@ -17,15 +17,15 @@ export interface ConditionNodeProps {
 const operatorLabels: Record<string, string> = {
   equals: "=",
   not_equals: "!=",
-  contains: "contains",
-  exists: "exists",
+  contains: "contiene",
+  exists: "existe",
   gt: ">",
   lt: "<",
 };
 
 export function ConditionNode({ data, selected }: NodeProps) {
   const nodeData = data as ConditionNodeProps;
-  const label = nodeData.label || "Condition";
+  const label = nodeData.label || "Condición";
   const conditions = nodeData.conditions || [];
   const logic = nodeData.logic || "and";
 
@@ -43,7 +43,7 @@ export function ConditionNode({ data, selected }: NodeProps) {
       />
       <div className="flex items-center gap-2 rounded-t-lg bg-amber-500 px-3 py-2 text-white">
         <GitBranch className="h-3.5 w-3.5" />
-        <span className="text-xs font-semibold">Condition</span>
+        <span className="text-xs font-semibold">Condición</span>
       </div>
       <div className="p-3">
         <p className="text-sm font-medium">{label}</p>
@@ -53,7 +53,7 @@ export function ConditionNode({ data, selected }: NodeProps) {
               <p key={i} className="text-xs text-muted-foreground">
                 {i > 0 && (
                   <span className="font-medium uppercase text-amber-600">
-                    {logic}{" "}
+                    {logic === "or" ? "o" : "y"}{" "}
                   </span>
                 )}
                 {c.field} {operatorLabels[c.operator] || c.operator} {c.value}
@@ -61,17 +61,17 @@ export function ConditionNode({ data, selected }: NodeProps) {
             ))}
             {conditions.length > 2 && (
               <p className="text-xs text-muted-foreground">
-                +{conditions.length - 2} more
+                +{conditions.length - 2} más
               </p>
             )}
           </div>
         ) : (
-          <p className="mt-1 text-xs text-muted-foreground italic">No conditions set</p>
+          <p className="mt-1 text-xs text-muted-foreground italic">Sin condiciones</p>
         )}
       </div>
       <div className="flex justify-between border-t border-border px-3 py-1.5">
         <span className="text-[10px] font-medium text-emerald-600">
-          Yes
+          Sí
         </span>
         <span className="text-[10px] font-medium text-red-500">No</span>
       </div>

@@ -31,11 +31,11 @@ export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const workspace = await getWorkspace(supabase);
   if (!workspace)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   if (!workspace.late_api_key_encrypted) {
     return NextResponse.json(
-      { error: "Zernio API key not configured. Go to Settings first." },
+      { error: "La clave de API de Zernio no está configurada. Ve primero a Configuración." },
       { status: 400 }
     );
   }
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
 
   if (!isSupportedPlatform(platform)) {
     return NextResponse.json(
-      { error: `Unsupported platform. Must be one of: ${PLATFORMS.join(", ")}` },
+      { error: `Plataforma no compatible. Debe ser una de: ${PLATFORMS.join(", ")}` },
       { status: 400 }
     );
   }
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
     const profiles = profilesRes.data?.profiles ?? [];
     if (profiles.length === 0) {
       return NextResponse.json(
-        { error: "No Zernio profiles found. Create one in your Zernio dashboard first." },
+        { error: "No se encontraron perfiles de Zernio. Crea uno primero en tu panel de Zernio." },
         { status: 400 }
       );
     }
@@ -73,14 +73,14 @@ export async function POST(request: NextRequest) {
     });
 
     if (!res.data?.authUrl) {
-      return NextResponse.json({ error: "Failed to get connect URL" }, { status: 500 });
+      return NextResponse.json({ error: "No se pudo obtener la URL de conexión" }, { status: 500 });
     }
 
     return NextResponse.json({ authUrl: res.data.authUrl });
   } catch (error) {
     console.error("Failed to get connect URL:", error);
     return NextResponse.json(
-      { error: `Connection failed: ${error instanceof Error ? error.message : String(error)}` },
+      { error: `Falló la conexión: ${error instanceof Error ? error.message : String(error)}` },
       { status: 500 }
     );
   }

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, Plus, Loader2, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { switchWorkspace, createWorkspace } from "@/lib/actions/workspace";
+import { roleLabel } from "@/lib/auth-helpers";
 
 interface WorkspaceItem {
   id: string;
@@ -29,6 +30,7 @@ export function WorkspaceSwitcher({
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [switching, setSwitching] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -39,6 +41,7 @@ export function WorkspaceSwitcher({
         setOpen(false);
         setCreating(false);
         setNewName("");
+        setError(null);
       }
     }
     if (open) document.addEventListener("mousedown", handleClick);
@@ -56,7 +59,13 @@ export function WorkspaceSwitcher({
       return;
     }
     setSwitching(workspaceId);
-    await switchWorkspace(workspaceId);
+    setError(null);
+    const result = await switchWorkspace(workspaceId);
+    if (result.error) {
+      setError(result.error);
+      setSwitching(null);
+      return;
+    }
     router.refresh();
     setOpen(false);
     setSwitching(null);
@@ -66,12 +75,15 @@ export function WorkspaceSwitcher({
     e.preventDefault();
     if (!newName.trim()) return;
     setSwitching("new");
+    setError(null);
     const result = await createWorkspace(newName.trim());
     if (result.ok) {
       router.refresh();
       setOpen(false);
       setCreating(false);
       setNewName("");
+    } else {
+      setError(result.error ?? "No se pudo crear el espacio de trabajo.");
     }
     setSwitching(null);
   }
@@ -80,8 +92,10 @@ export function WorkspaceSwitcher({
     <div ref={dropdownRef} className="relative">
       <button
         onClick={() => setOpen(!open)}
+        title="Cambiar de espacio de trabajo"
         className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-sidebar-accent transition-colors"
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={avatarUrl(current.id)}
           alt=""
@@ -100,6 +114,10 @@ export function WorkspaceSwitcher({
 
       {open && (
         <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-border bg-popover p-1 shadow-lg">
+          <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Espacios de trabajo
+          </p>
+
           {/* Workspace list */}
           {workspaces.map((ws) => {
             const isActive = ws.id === current.id;
@@ -109,6 +127,7 @@ export function WorkspaceSwitcher({
                 key={ws.id}
                 onClick={() => handleSwitch(ws.id)}
                 disabled={!!switching}
+                title={`${ws.name} · ${roleLabel(ws.role)}`}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
                   isActive
@@ -116,6 +135,7 @@ export function WorkspaceSwitcher({
                     : "text-popover-foreground hover:bg-accent"
                 )}
               >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={avatarUrl(ws.id, 24)}
                   alt=""
@@ -131,6 +151,10 @@ export function WorkspaceSwitcher({
             );
           })}
 
+          {error && (
+            <p className="px-2 py-1 text-xs text-destructive">{error}</p>
+          )}
+
           {/* Divider */}
           <div className="my-1 border-t border-border" />
 
@@ -141,8 +165,12 @@ export function WorkspaceSwitcher({
                 ref={inputRef}
                 type="text"
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Workspace name"
+                onChange={(e) => {
+                  setNewName(e.target.value);
+                  setError(null);
+                }}
+                placeholder="Nombre del espacio de trabajo"
+                maxLength={100}
                 className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
                 disabled={switching === "new"}
               />
@@ -155,7 +183,7 @@ export function WorkspaceSwitcher({
                   {switching === "new" ? (
                     <Loader2 className="mx-auto h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    "Create"
+                    "Crear"
                   )}
                 </button>
                 <button
@@ -163,10 +191,11 @@ export function WorkspaceSwitcher({
                   onClick={() => {
                     setCreating(false);
                     setNewName("");
+                    setError(null);
                   }}
                   className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
                 >
-                  Cancel
+                  Cancelar
                 </button>
               </div>
             </form>
@@ -176,7 +205,7 @@ export function WorkspaceSwitcher({
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
             >
               <Plus className="h-3.5 w-3.5" />
-              Create workspace
+              Crear espacio de trabajo
             </button>
           )}
         </div>

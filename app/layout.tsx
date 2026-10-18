@@ -1,38 +1,22 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { APP_DESCRIPTION, APP_LOGO_URL, APP_NAME } from "@/lib/brand";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: {
-    default: "ZernFlow - The Open Source ManyChat Alternative",
-    template: "%s | ZernFlow",
+    default: APP_NAME,
+    template: `%s | ${APP_NAME}`,
   },
-  description:
-    "Automate DMs, comments, and flows across Instagram, Facebook, WhatsApp, Telegram, X, Bluesky, and Reddit. Free, self-hostable, and open source.",
-  metadataBase: new URL("https://zernflow.com"),
-  openGraph: {
-    title: "ZernFlow - The Open Source ManyChat Alternative",
-    description:
-      "Automate DMs, comments, and flows across Instagram, Facebook, WhatsApp, Telegram, X, Bluesky, and Reddit. Free, self-hostable, and open source.",
-    url: "https://zernflow.com",
-    siteName: "ZernFlow",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "ZernFlow - The Open Source ManyChat Alternative",
-    description:
-      "Automate DMs, comments, and flows across 7 platforms. Free, self-hostable, open source.",
-  },
+  description: APP_DESCRIPTION,
+  applicationName: APP_NAME,
+  // Herramienta interna: no se indexa (robots.ts también bloquea todo).
+  robots: { index: false, follow: false },
   icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
-      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
-    ],
-    apple: "/apple-touch-icon.png",
+    icon: APP_LOGO_URL,
+    apple: APP_LOGO_URL,
   },
 };
 
@@ -42,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="es" suppressHydrationWarning>
       <head>
         <script
           dangerouslySetInnerHTML={{

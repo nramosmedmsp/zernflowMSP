@@ -1,26 +1,62 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
-import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import { BrandLogo } from "@/lib/brand-logo";
+import { APP_NAME } from "@/lib/brand";
+import {
+  MIN_PASSWORD_LENGTH,
+  SIGNUP_REQUIRES_INVITE_MESSAGE,
+  isSignupRequiresInviteError,
+  validateNewPassword,
+} from "@/lib/auth-helpers";
+
+// El registro abierto solo sirve para la primera persona de una instalación
+// nueva: el trigger handle_new_user (migración 00017) rechaza a cualquier otra
+// que no tenga una invitación pendiente.
+
+function translateSignUpError(message: string): string {
+  if (isSignupRequiresInviteError(message)) return SIGNUP_REQUIRES_INVITE_MESSAGE;
+  const text = message.toLowerCase();
+  if (text.includes("already registered") || text.includes("already exists")) {
+    return "Ya existe una cuenta con este correo. Inicia sesión.";
+  }
+  if (text.includes("signups not allowed")) return SIGNUP_REQUIRES_INVITE_MESSAGE;
+  if (text.includes("password")) {
+    return `La contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`;
+  }
+  if (text.includes("rate limit") || text.includes("security purposes")) {
+    return "Hiciste demasiados intentos. Espera unos minutos y vuelve a intentarlo.";
+  }
+  return "No se pudo crear la cuenta. Inténtalo de nuevo.";
+}
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [checkEmail, setCheckEmail] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signUp({
+    const passwordError = validateNewPassword(password, confirmation);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -30,7 +66,14 @@ export default function RegisterPage() {
     });
 
     if (error) {
-      setError(error.message);
+      setError(translateSignUpError(error.message));
+      setLoading(false);
+      return;
+    }
+
+    // Con la confirmación de correo activa no hay sesión hasta abrir el enlace.
+    if (!data.session) {
+      setCheckEmail(true);
       setLoading(false);
       return;
     }
@@ -39,117 +82,106 @@ export default function RegisterPage() {
     router.refresh();
   }
 
-  async function handleGitHubLogin() {
-    await supabase.auth.signInWithOAuth({
-      provider: "github",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center">
-          <Image src="/logo.png" alt="ZernFlow" width={48} height={48} className="mx-auto mb-3" />
-          <h1 className="text-2xl font-bold">Create your account</h1>
+          <BrandLogo size={48} className="mx-auto mb-3" />
+          <h1 className="text-2xl font-bold">Crea tu cuenta</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Get started with ZernFlow
+            Primer acceso a {APP_NAME}
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="name" className="block text-sm font-medium mb-1.5">
-              Name
-            </label>
-            <input
-              id="name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-              placeholder="Your name"
-            />
-          </div>
+        {checkEmail ? (
+          <p className="rounded-lg border border-border bg-muted px-3 py-3 text-center text-sm text-muted-foreground">
+            Revisa tu correo: te enviamos un enlace para confirmar tu cuenta.
+          </p>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium mb-1.5">
+                Nombre
+              </label>
+              <input
+                id="name"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                maxLength={100}
+                autoComplete="name"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                placeholder="Tu nombre y apellido"
+              />
+            </div>
 
-          <div>
-            <label
-              htmlFor="email"
-              className="block text-sm font-medium mb-1.5"
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium mb-1.5">
+                Correo
+              </label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                placeholder="tu@correo.com"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium mb-1.5">
+                Contraseña
+              </label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                autoComplete="new-password"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                placeholder={`Mínimo ${MIN_PASSWORD_LENGTH} caracteres`}
+              />
+            </div>
+
+            <div>
+              <label htmlFor="confirmation" className="block text-sm font-medium mb-1.5">
+                Confirma tu contraseña
+              </label>
+              <input
+                id="confirmation"
+                type="password"
+                value={confirmation}
+                onChange={(e) => setConfirmation(e.target.value)}
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                autoComplete="new-password"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                placeholder="Repite la contraseña"
+              />
+            </div>
+
+            {error && <p className="text-sm text-destructive">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-              placeholder="you@example.com"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="password"
-              className="block text-sm font-medium mb-1.5"
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-              placeholder="Min. 6 characters"
-            />
-          </div>
-
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            {loading ? "Creating account..." : "Create account"}
-          </button>
-        </form>
-
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-border" />
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-background px-2 text-muted-foreground">
-              Or continue with
-            </span>
-          </div>
-        </div>
-
-        <button
-          onClick={handleGitHubLogin}
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-accent"
-        >
-          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-          </svg>
-          GitHub
-        </button>
+              {loading ? "Creando cuenta..." : "Crear cuenta"}
+            </button>
+          </form>
+        )}
 
         <p className="text-center text-sm text-muted-foreground">
-          Already have an account?{" "}
+          ¿Ya tienes una cuenta?{" "}
           <Link href="/login" className="font-medium text-foreground hover:underline">
-            Sign in
+            Inicia sesión
           </Link>
         </p>
       </div>

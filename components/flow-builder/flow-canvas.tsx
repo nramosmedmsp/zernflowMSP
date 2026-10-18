@@ -21,6 +21,8 @@ import { useCallback, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTime } from "@/lib/format";
+import { flowStatusLabel } from "./labels";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { createClient } from "@/lib/supabase/client";
 import type { Database, FlowStatus, Json } from "@/lib/types/database";
@@ -221,7 +223,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
 
         if (error) {
           console.error("Failed to save flow:", error);
-          setSaveError("Failed to save");
+          setSaveError("No se pudo guardar");
           setTimeout(() => setSaveError(null), 3000);
           return;
         }
@@ -245,7 +247,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       });
       if (!res.ok) {
         console.error("Failed to delete flow");
-        setSaveError("Failed to delete");
+        setSaveError("No se pudo eliminar");
         setTimeout(() => setSaveError(null), 3000);
         setDeleting(false);
         return;
@@ -253,7 +255,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       router.push("/dashboard/flows");
     } catch (err) {
       console.error("Failed to delete flow:", err);
-      setSaveError("Failed to delete");
+      setSaveError("No se pudo eliminar");
       setTimeout(() => setSaveError(null), 3000);
       setDeleting(false);
     }
@@ -269,7 +271,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       });
       if (!res.ok) {
         console.error("Failed to publish flow");
-        setSaveError("Failed to publish");
+        setSaveError("No se pudo publicar");
         setTimeout(() => setSaveError(null), 3000);
         return;
       }
@@ -291,7 +293,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back
+            Volver
           </button>
           <div className="h-5 w-px bg-border" />
           <input
@@ -300,7 +302,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             onChange={(e) => setFlowName(e.target.value)}
             className="w-auto max-w-[200px] border-none bg-transparent text-sm font-semibold outline-none focus:ring-0"
             style={{ width: `${Math.max(flowName.length, 8)}ch` }}
-            placeholder="Flow name"
+            placeholder="Nombre del flujo"
           />
           <span
             className={cn(
@@ -312,7 +314,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
                   : "bg-muted text-muted-foreground"
             )}
           >
-            {flow.status}
+            {flowStatusLabel(flow.status)}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -323,7 +325,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
           )}
           {!saveError && lastSaved && (
             <span className="text-xs text-muted-foreground">
-              Saved {lastSaved.toLocaleTimeString()}
+              Guardado {formatTime(lastSaved)}
             </span>
           )}
           <button
@@ -342,7 +344,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             )}
           >
             <Play className="h-3.5 w-3.5" />
-            Test
+            Probar
           </button>
           <button
             onClick={() => {
@@ -360,7 +362,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             )}
           >
             <History className="h-3.5 w-3.5" />
-            History
+            Historial
           </button>
           <button
             onClick={() => {
@@ -384,7 +386,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent transition-colors"
           >
             <Download className="h-3.5 w-3.5" />
-            Export
+            Exportar
           </button>
           <button
             onClick={handleSave}
@@ -396,7 +398,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             ) : (
               <Save className="h-3.5 w-3.5" />
             )}
-            Save
+            Guardar
           </button>
           <button
             onClick={handlePublish}
@@ -408,13 +410,13 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             ) : (
               <Rocket className="h-3.5 w-3.5" />
             )}
-            Publish
+            Publicar
           </button>
           <button
             onClick={() => setConfirmDelete(true)}
             disabled={deleting}
             className="rounded-lg p-2 text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-            title="Delete flow"
+            title="Eliminar flujo"
           >
             {deleting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -424,9 +426,10 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
           </button>
           <ConfirmDialog
             open={confirmDelete}
-            title="Delete flow"
-            message={`"${flowName}" and its triggers, versions, and run history will be permanently deleted. This cannot be undone.`}
-            confirmLabel="Delete"
+            title="Eliminar flujo"
+            message={`"${flowName}" y sus disparadores, versiones e historial de ejecuciones se eliminarán de forma permanente. Esta acción no se puede deshacer.`}
+            confirmLabel="Eliminar"
+            cancelLabel="Cancelar"
             destructive
             onConfirm={() => {
               setConfirmDelete(false);

@@ -24,18 +24,18 @@ interface TriggerPanelProps {
 }
 
 const triggerTypes: Array<{ value: TriggerType; label: string; description: string }> = [
-  { value: "keyword", label: "Keyword", description: "Triggered when a user sends a matching keyword" },
-  { value: "postback", label: "Button Click", description: "Triggered when a user clicks a button" },
-  { value: "quick_reply", label: "Quick Reply", description: "Triggered when a user taps a quick reply" },
-  { value: "welcome", label: "Welcome Message", description: "Triggered when a user starts a conversation" },
-  { value: "default", label: "Default Reply", description: "Triggered when no other trigger matches" },
-  { value: "comment_keyword", label: "Comment Keyword", description: "Triggered by keywords in post comments" },
+  { value: "keyword", label: "Palabra clave", description: "Se activa cuando el cliente envía una palabra clave que coincide" },
+  { value: "postback", label: "Botón (postback)", description: "Se activa cuando el cliente pulsa un botón" },
+  { value: "quick_reply", label: "Respuesta rápida", description: "Se activa cuando el cliente elige una respuesta rápida" },
+  { value: "welcome", label: "Bienvenida", description: "Se activa cuando el cliente inicia una conversación" },
+  { value: "default", label: "Por defecto", description: "Se activa cuando ningún otro disparador coincide" },
+  { value: "comment_keyword", label: "Palabra clave en comentario", description: "Se activa con palabras clave en los comentarios de una publicación" },
 ];
 
 const matchTypes: Array<{ value: "exact" | "contains" | "startsWith"; label: string }> = [
-  { value: "exact", label: "Exact match" },
-  { value: "contains", label: "Contains" },
-  { value: "startsWith", label: "Starts with" },
+  { value: "exact", label: "Coincidencia exacta" },
+  { value: "contains", label: "Contiene" },
+  { value: "startsWith", label: "Empieza con" },
 ];
 
 export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
@@ -84,7 +84,7 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
       {/* Trigger Type */}
       <div>
         <label className="mb-2 block text-xs font-semibold text-foreground">
-          Trigger Type
+          Tipo de disparador
         </label>
         <div className="space-y-1.5">
           {triggerTypes.map((t) => (
@@ -118,7 +118,7 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
       {showKeywords && (
         <div>
           <label className="mb-2 block text-xs font-semibold text-foreground">
-            Keywords
+            Palabras clave
           </label>
 
           {/* Existing keywords */}
@@ -148,6 +148,8 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
                   <button
                     type="button"
                     onClick={() => removeKeyword(index)}
+                    aria-label="Quitar palabra clave"
+                    title="Quitar palabra clave"
                     className="rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -169,7 +171,7 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
                   addKeyword();
                 }
               }}
-              placeholder="Enter keyword..."
+              placeholder="Escribe una palabra clave..."
               className="flex-1 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
             <select
@@ -186,6 +188,8 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
             <button
               type="button"
               onClick={addKeyword}
+              aria-label="Agregar palabra clave"
+              title="Agregar palabra clave"
               disabled={!newKeyword.trim()}
               className="rounded-lg bg-emerald-500 p-2 text-white transition-colors hover:bg-emerald-600 disabled:opacity-40"
             >
@@ -195,7 +199,7 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
 
           {keywords.length === 0 && (
             <p className="mt-2 text-xs text-muted-foreground">
-              Add keywords that will trigger this flow. Press Enter or click + to add.
+              Agrega las palabras clave que activarán este flujo. Pulsa Enter o haz clic en + para agregar.
             </p>
           )}
 
@@ -211,16 +215,16 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
                 className="mt-0.5 h-4 w-4 rounded border-input text-emerald-500 focus:ring-emerald-500 disabled:opacity-40"
               />
               <div>
-                <p className="text-sm font-medium text-foreground">Also match in DMs</p>
+                <p className="text-sm font-medium text-foreground">También coincidir en DM</p>
                 <p className="text-xs text-muted-foreground">
                   {keywords.length === 0
-                    ? "Add at least one keyword to use this."
-                    : "Run this flow when someone sends a keyword as a direct message, not just as a comment."}
+                    ? "Agrega al menos una palabra clave para usar esta opción."
+                    : "Ejecuta este flujo cuando alguien envíe la palabra clave por mensaje directo, no solo como comentario."}
                 </p>
                 {data.alsoMatchInDms === true && (
                   <p className="mt-1.5 text-xs text-muted-foreground">
-                    A DM has no comment behind it, so public replies and the comment
-                    variables ({"{{comment_text}}"}, {"{{post_id}}"}) are empty on that run.
+                    Un DM no tiene un comentario detrás, así que las respuestas públicas y las
+                    variables de comentario ({"{{comment_text}}"}, {"{{post_id}}"}) quedan vacías en esa ejecución.
                   </p>
                 )}
               </div>
@@ -233,17 +237,17 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
       {showPayload && (
         <div>
           <label className="mb-2 block text-xs font-semibold text-foreground">
-            Payload
+            Valor (payload)
           </label>
           <input
             type="text"
             value={data.payload || ""}
             onChange={(e) => onChange({ ...data, payload: e.target.value })}
-            placeholder="Enter payload value..."
+            placeholder="Escribe el valor del payload..."
             className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
           <p className="mt-1.5 text-xs text-muted-foreground">
-            The payload value to match when a {triggerType === "postback" ? "button is clicked" : "quick reply is tapped"}.
+            El valor del payload que debe coincidir cuando {triggerType === "postback" ? "se pulsa un botón" : "se elige una respuesta rápida"}.
           </p>
         </div>
       )}

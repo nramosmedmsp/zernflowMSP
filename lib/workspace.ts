@@ -47,7 +47,8 @@ export const getWorkspace = cache(async () => {
     .limit(1)
     .single();
 
-  if (!membership?.workspaces) redirect("/login");
+  // Sesión válida pero sin membresía: /login devolvería al dashboard (bucle).
+  if (!membership?.workspaces) redirect("/sin-espacio");
 
   return {
     user,

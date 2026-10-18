@@ -8,7 +8,7 @@ export async function createSequence(name: string) {
   const { workspace, supabase } = await getWorkspace();
 
   const trimmed = name.trim();
-  if (!trimmed) return { error: "Name is required" };
+  if (!trimmed) return { error: "El nombre es obligatorio" };
 
   const { data, error } = await supabase
     .from("sequences")
@@ -33,7 +33,7 @@ export async function updateSequence(
 ) {
   const { workspace, supabase } = await getWorkspace();
 
-  // Verify ownership
+  // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: existing } = await supabase
     .from("sequences")
     .select("id")
@@ -41,7 +41,7 @@ export async function updateSequence(
     .eq("workspace_id", workspace.id)
     .single();
 
-  if (!existing) return { error: "Sequence not found" };
+  if (!existing) return { error: "No se encontró la secuencia" };
 
   const { data, error } = await supabase
     .from("sequences")
@@ -83,7 +83,7 @@ export async function enrollContact(
 ) {
   const { workspace, supabase } = await getWorkspace();
 
-  // Verify sequence ownership
+  // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: sequence } = await supabase
     .from("sequences")
     .select("id, steps, status")
@@ -91,13 +91,13 @@ export async function enrollContact(
     .eq("workspace_id", workspace.id)
     .single();
 
-  if (!sequence) return { error: "Sequence not found" };
-  if (sequence.status !== "active") return { error: "Sequence is not active" };
+  if (!sequence) return { error: "No se encontró la secuencia" };
+  if (sequence.status !== "active") return { error: "La secuencia no está activa" };
 
   const steps = (sequence.steps as unknown as SequenceStep[]) || [];
-  if (steps.length === 0) return { error: "Sequence has no steps" };
+  if (steps.length === 0) return { error: "La secuencia no tiene pasos" };
 
-  // Calculate next_step_at based on first step
+  // Calcular next_step_at según el primer paso
   let nextStepAt: string;
   const firstStep = steps[0];
   if (firstStep.type === "delay" && firstStep.delayMinutes) {
@@ -105,7 +105,7 @@ export async function enrollContact(
       Date.now() + firstStep.delayMinutes * 60 * 1000
     ).toISOString();
   } else {
-    // Message step: execute now
+    // Paso de mensaje: se ejecuta de inmediato
     nextStepAt = new Date().toISOString();
   }
 
@@ -122,7 +122,7 @@ export async function enrollContact(
 
   if (error) {
     if (error.code === "23505") {
-      return { error: "Contact is already enrolled in this sequence" };
+      return { error: "El contacto ya está inscrito en esta secuencia" };
     }
     return { error: error.message };
   }
@@ -134,18 +134,18 @@ export async function enrollContact(
 export async function cancelEnrollment(enrollmentId: string) {
   const { workspace, supabase } = await getWorkspace();
 
-  // Verify the enrollment belongs to a sequence in this workspace
+  // Verificar que la inscripción pertenece a una secuencia de este espacio de trabajo
   const { data: enrollment } = await supabase
     .from("sequence_enrollments")
     .select("id, sequence_id, sequences!inner(workspace_id)")
     .eq("id", enrollmentId)
     .single();
 
-  if (!enrollment) return { error: "Enrollment not found" };
+  if (!enrollment) return { error: "No se encontró la inscripción" };
 
   const seq = enrollment.sequences as unknown as { workspace_id: string };
   if (seq.workspace_id !== workspace.id) {
-    return { error: "Enrollment not found" };
+    return { error: "No se encontró la inscripción" };
   }
 
   const { error } = await supabase
