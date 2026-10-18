@@ -8,6 +8,7 @@ import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
 import { messagePreview } from "@/lib/message-preview";
+import { handleInbound } from "@/lib/cases";
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -265,6 +266,20 @@ async function processMessageEvent(
   }
 
   // Messages are stored by Zernio (source of truth) — no local insert needed.
+
+  // ── Gestiones (docs/FASE-1-TECNICO.md 3.1) ───────────────────────────────
+  // Abre o retoma la gestión del contacto y la reparte. Un fallo aquí no debe
+  // impedir que corran los flujos.
+  try {
+    await handleInbound(supabase, {
+      workspaceId: channel.workspace_id,
+      contactId,
+      conversationId: conversation.id,
+      at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Case engine (handleInbound) error:", err);
+  }
 
   // ── Flow engine ───────────────────────────────────────────────────────────
 

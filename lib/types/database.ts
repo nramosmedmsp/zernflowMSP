@@ -87,6 +87,11 @@ export interface WorkspaceSettings {
   business_template?: BusinessTemplate;
   /** "Última compra", "Vencimiento de membresía"... */
   key_date_label?: string;
+  /**
+   * Un asesor puede devolver a la cola (dejar sin responsable) sus propias
+   * gestiones. Por defecto false: solo supervisores y administradores.
+   */
+  agent_can_return_to_queue?: boolean;
 }
 
 /** case_types.routing */
@@ -1626,6 +1631,8 @@ export interface Database {
           first_response_at: string | null;
           next_action_at: string | null;
           next_action_note: string | null;
+          /** 00020: cuándo el cron avisó que next_action_at venció (null = pendiente). */
+          next_action_notified_at: string | null;
           closed_at: string | null;
           closed_by: string | null;
           outcome_reason_id: string | null;
@@ -1655,6 +1662,7 @@ export interface Database {
           first_response_at?: string | null;
           next_action_at?: string | null;
           next_action_note?: string | null;
+          next_action_notified_at?: string | null;
           closed_at?: string | null;
           closed_by?: string | null;
           outcome_reason_id?: string | null;
@@ -1681,6 +1689,7 @@ export interface Database {
           first_response_at?: string | null;
           next_action_at?: string | null;
           next_action_note?: string | null;
+          next_action_notified_at?: string | null;
           closed_at?: string | null;
           closed_by?: string | null;
           outcome_reason_id?: string | null;
@@ -2003,6 +2012,27 @@ export interface Database {
           p_team_id: string | null;
         };
         Returns: boolean;
+      };
+      // ── Fase 1 (00020): motor de gestiones (solo service_role) ──────────
+      /** Devuelve { case_id, created }. */
+      open_inbound_case: {
+        Args: {
+          p_workspace_id: string;
+          p_contact_id: string;
+          p_case_type_id: string | null;
+          p_stage_id: string | null;
+          p_at: string;
+        };
+        Returns: Json;
+      };
+      /** Devuelve { status, assignee_id? }. */
+      assign_case_pick: {
+        Args: {
+          p_case_id: string;
+          p_candidates: string[];
+          p_mode: "round_robin" | "least_load";
+        };
+        Returns: Json;
       };
     };
     Enums: {

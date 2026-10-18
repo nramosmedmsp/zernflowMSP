@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import type { Json } from "@/lib/types/database";
+import { runCaseTasks } from "@/lib/cases";
+
+export const maxDuration = 60;
+
+// Las tareas de gestiones paran de tomar lotes nuevos a los 45 s desde el
+// inicio de la invocación (y nunca usan más de 25 s propios), para terminar
+// holgadas antes de maxDuration aunque los trabajos de flujos hayan tardado.
+const ROUTE_BUDGET_MS = 45_000;
+const CASE_TASKS_BUDGET_MS = 25_000;
 
 // Signals the handler to skip retry/backoff and route straight to the
 // failed + settle branch (which performs/re-attempts the session cancel).
@@ -43,6 +52,8 @@ export async function GET(request: NextRequest) {
   if (!cronSecret || providedSecret !== cronSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const startedAt = Date.now();
 
   const supabase = await createServiceClient();
 
@@ -186,7 +197,20 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ processed, failed, total: jobs.length });
+  // Gestiones (docs/FASE-1-TECNICO.md 3.5): activar programadas, avisar
+  // próximos contactos vencidos y reintentar el reparto. Con fecha límite
+  // propia para no pasarse del tiempo de la función; lo que quede se hace en
+  // la siguiente vuelta (todo es idempotente).
+  let cases: Awaited<ReturnType<typeof runCaseTasks>> | { error: string };
+  const deadline = Math.min(startedAt + ROUTE_BUDGET_MS, Date.now() + CASE_TASKS_BUDGET_MS);
+  try {
+    cases = await runCaseTasks(supabase, { deadline });
+  } catch (err) {
+    console.error("Case tasks error:", err);
+    cases = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return NextResponse.json({ processed, failed, total: jobs.length, cases });
 }
 
 // Marks a job out of retries as failed. A failed resume_flow job would leave

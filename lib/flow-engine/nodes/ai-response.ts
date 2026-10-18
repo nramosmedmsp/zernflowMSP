@@ -4,6 +4,7 @@ import type { FlowExecutionContext, AiResponseNodeData } from "../types";
 import { createZernioClient } from "@/lib/zernio-client";
 import { getWorkspaceSecrets, type WorkspaceSecrets } from "@/lib/workspace-secrets";
 import { generateText, createGateway } from "ai";
+import { stampBotOutbound } from "@/lib/cases/inbound";
 
 // Halt the run: continuing would let a downstream Send Message deliver the
 // literal "{{ai_response}}" token to the contact (same pause mechanism as
@@ -135,6 +136,9 @@ export async function executeAiResponse(
         platform_message_id: response.data?.data?.messageId || null,
         status: "sent",
       });
+
+      // Gestiones: el bot solo sella la salida (no cuenta como respuesta humana).
+      await stampBotOutbound(supabase, { contactId: context.contactId });
 
       await supabase.from("analytics_events").insert({
         workspace_id: context.workspaceId,

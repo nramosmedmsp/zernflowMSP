@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { handleHumanOutboundForConversation } from "@/lib/cases";
 import { createZernioClient } from "@/lib/zernio-client";
 import { messagePreview } from "@/lib/message-preview";
 import { getLateApiKey } from "@/lib/workspace-secrets";
@@ -157,6 +158,19 @@ export async function POST(request: NextRequest) {
         last_message_preview: messagePreview(text),
       })
       .eq("id", conversationId);
+
+    // Respuesta humana (docs/FASE-1-TECNICO.md 3.2): sella la gestión activa,
+    // registra la primera respuesta y pausa el bot. Si falla, el mensaje ya
+    // salió: solo se registra el error.
+    try {
+      await handleHumanOutboundForConversation(await createServiceClient(), {
+        conversationId,
+        userId: user.id,
+        at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Case engine (handleHumanOutbound) error:", err);
+    }
 
     // Return a message-shaped response for the UI's optimistic update
     return NextResponse.json(

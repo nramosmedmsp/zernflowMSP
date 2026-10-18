@@ -21,6 +21,7 @@ import { executeAiResponse } from "./nodes/ai-response";
 import { adaptMessage } from "./platform-adapter";
 import { createZernioClient } from "@/lib/zernio-client";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { stampBotOutbound } from "@/lib/cases/inbound";
 
 export async function executeFlow(
   supabase: SupabaseClient<Database>,
@@ -407,6 +408,8 @@ async function sendFirstMessageAsPrivateReply(
       status: "sent",
     });
 
+    await stampBotOutbound(supabase, { contactId: context.contactId });
+
     await supabase.from("analytics_events").insert({
       workspace_id: context.workspaceId,
       flow_id: context.flowId,
@@ -540,6 +543,9 @@ async function executeSendMessage(
         platform_message_id: response.data?.data?.messageId || null,
         status: "sent",
       });
+
+      // Gestiones: el bot solo sella la salida (no cuenta como respuesta humana).
+      await stampBotOutbound(supabase, { contactId: context.contactId });
 
       await supabase.from("analytics_events").insert({
         workspace_id: context.workspaceId,
@@ -954,6 +960,8 @@ async function executePrivateReply(
       sent_by_flow_id: context.flowId,
       status: "sent",
     });
+
+    await stampBotOutbound(supabase, { contactId: context.contactId });
   } catch (error) {
     console.error("Failed to send private reply:", error);
     await supabase.from("messages").insert({
