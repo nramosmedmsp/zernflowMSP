@@ -1,8 +1,12 @@
-// Tareas programadas de gestiones (docs/FASE-1-TECNICO.md 3.5). Las llama
-// /api/cron/jobs cada minuto. Todo es por lotes, con fecha límite y con
-// actualizaciones condicionales: dos ejecuciones solapadas no duplican nada.
+// Tareas programadas de gestiones (docs/FASE-1-TECNICO.md 3.5 y
+// FASE-2-TECNICO.md 3). Las llama /api/cron/jobs cada minuto. Todo es por
+// lotes, con fecha límite y con actualizaciones condicionales: dos ejecuciones
+// solapadas no duplican nada.
 
+import type { CaseRouting } from "@/lib/types/database";
 import { assignCase, loadAssignmentContext, type AssignmentContextCache } from "./assign";
+import { sendAutoTemplate } from "./auto-template";
+import { isOpenAt, nextOpeningFor } from "./hours";
 import {
   caseLink,
   contactName,
@@ -12,14 +16,24 @@ import {
   type Db,
   type NotificationInput,
 } from "./io";
+import type { CaseMessenger } from "./messaging";
+import { detectClientNoReply } from "./no-reply";
+import { reassignWaitingCases } from "./reassign";
+import { resolveTargetTeamId } from "./routing";
 
 const BATCH = 50;
 
 export interface CaseTaskStats {
   activated: number;
+  /** Programadas que se movieron a la próxima apertura (fuera de horario). */
+  deferred: number;
+  autoTemplates: { sent: number; failed: number };
   retried: number;
   assigned: number;
+  reassigned: number;
+  waitAlerts: number;
   overdueNotified: number;
+  noReplyEvents: number;
   stoppedEarly: boolean;
 }
 
@@ -27,28 +41,44 @@ function timeLeft(deadline: number): boolean {
   return Date.now() < deadline;
 }
 
-async function names(db: Db, table: "contacts" | "case_types", ids: string[]): Promise<Map<string, string>> {
+async function names(db: Db, ids: string[]): Promise<Map<string, string>> {
   const unique = [...new Set(ids.filter(Boolean))];
   if (unique.length === 0) return new Map();
-  if (table === "contacts") {
-    const { data } = await db.from("contacts").select("id, display_name").in("id", unique);
-    return new Map((data ?? []).map((c) => [c.id, contactName(c)]));
-  }
-  const { data } = await db.from("case_types").select("id, name").in("id", unique);
-  return new Map((data ?? []).map((t) => [t.id, t.name]));
+  const { data } = await db.from("contacts").select("id, display_name").in("id", unique);
+  return new Map((data ?? []).map((c) => [c.id, contactName(c)]));
 }
 
-/** Programadas con fecha cumplida → abiertas, reparto y aviso "Recompra para hoy: …". */
+interface DueType {
+  id: string;
+  name: string;
+  routing: CaseRouting;
+  fixed_team_id: string | null;
+  auto_template: unknown;
+}
+
+/**
+ * Programadas con fecha cumplida → abiertas, reparto, plantilla automática
+ * (si el tipo la tiene) y aviso "Recompra para hoy: …". Fase 2: si el equipo
+ * de destino está fuera de horario, la gestión no se activa: su
+ * scheduled_for pasa a la próxima apertura (las proactivas esperan igual que
+ * el reparto y la plantilla no sale de madrugada).
+ */
 export async function activateScheduledCases(
   db: Db,
-  opts: { deadline: number; now?: Date; cache?: AssignmentContextCache },
-): Promise<{ activated: number; stoppedEarly: boolean }> {
+  opts: { deadline: number; now?: Date; cache?: AssignmentContextCache; messenger?: CaseMessenger },
+): Promise<{ activated: number; deferred: number; autoTemplates: { sent: number; failed: number }; stoppedEarly: boolean }> {
+  const cache: AssignmentContextCache = opts.cache ?? new Map();
   let activated = 0;
+  let deferred = 0;
+  const autoTemplates = { sent: 0, failed: 0 };
+  const result = (stoppedEarly: boolean) => ({ activated, deferred, autoTemplates, stoppedEarly });
+
   while (timeLeft(opts.deadline)) {
-    const nowIso = (opts.now ?? new Date()).toISOString();
+    const now = opts.now ?? new Date();
+    const nowIso = now.toISOString();
     const { data: due, error } = await db
       .from("cases")
-      .select("id, workspace_id, contact_id, case_type_id, assignee_id")
+      .select("id, workspace_id, contact_id, case_type_id, assignee_id, team_id, scheduled_for")
       .eq("status", "scheduled")
       .lte("scheduled_for", nowIso)
       .order("scheduled_for", { ascending: true })
@@ -57,15 +87,64 @@ export async function activateScheduledCases(
       console.error("[cases cron] scheduled", error.message);
       break;
     }
-    if (!due || due.length === 0) return { activated, stoppedEarly: false };
+    if (!due || due.length === 0) return result(false);
 
-    const [contacts, types] = await Promise.all([
-      names(db, "contacts", due.map((c) => c.contact_id)),
-      names(db, "case_types", due.map((c) => c.case_type_id ?? "")),
+    const contactIds = [...new Set(due.map((c) => c.contact_id))];
+    const typeIds = [...new Set(due.map((c) => c.case_type_id).filter((v): v is string => !!v))];
+    const [{ data: contacts }, { data: types }] = await Promise.all([
+      db.from("contacts").select("id, display_name, owner_id, team_id").in("id", contactIds),
+      typeIds.length
+        ? db.from("case_types").select("id, name, routing, fixed_team_id, auto_template").in("id", typeIds)
+        : Promise.resolve({ data: [] as DueType[] }),
     ]);
+    const contactById = new Map((contacts ?? []).map((c) => [c.id, c]));
+    const typeById = new Map<string, DueType>((types ?? []).map((t) => [t.id, t]));
 
     for (const row of due) {
-      if (!timeLeft(opts.deadline)) return { activated, stoppedEarly: true };
+      if (!timeLeft(opts.deadline)) return result(true);
+      const contact = contactById.get(row.contact_id);
+      const type = row.case_type_id ? typeById.get(row.case_type_id) : undefined;
+
+      // ¿El equipo de destino atiende ahora?
+      const ctx = await loadAssignmentContext(db, row.workspace_id, cache);
+      const teamId = resolveTargetTeamId({
+        caseTypeId: type?.id ?? null,
+        routing: type?.routing ?? "contact_owner",
+        fixedTeamId: type?.fixed_team_id ?? null,
+        currentTeamId: row.team_id,
+        contactOwnerId: contact?.owner_id ?? null,
+        contactTeamId: contact?.team_id ?? null,
+        teams: ctx.teams,
+        teamMembers: ctx.teamMembers,
+        members: ctx.members,
+        workspaceMode: ctx.workspaceMode,
+      });
+      if (!isOpenAt(ctx.hours, teamId, now)) {
+        const opening = nextOpeningFor(ctx.hours, teamId, now);
+        if (opening && opening.getTime() > now.getTime() && row.scheduled_for) {
+          const { data: moved } = await db
+            .from("cases")
+            .update({ scheduled_for: opening.toISOString() })
+            .eq("id", row.id)
+            .eq("status", "scheduled")
+            .eq("scheduled_for", row.scheduled_for)
+            .select("id");
+          if (moved && moved.length > 0) {
+            deferred++;
+            await logActivity(db, {
+              workspace_id: row.workspace_id,
+              type: "case_scheduled",
+              case_id: row.id,
+              contact_id: row.contact_id,
+              from_value: row.scheduled_for,
+              to_value: opening.toISOString(),
+              meta: { rescheduled: true, reason: "off_hours" },
+            });
+          }
+          continue;
+        }
+      }
+
       const { data: claimed } = await db
         .from("cases")
         .update({ status: "open", opened_at: nowIso })
@@ -84,35 +163,48 @@ export async function activateScheduledCases(
         to_value: "open",
       });
 
-      const typeName = (row.case_type_id && types.get(row.case_type_id)) || "Gestión";
-      const name = contacts.get(row.contact_id) ?? "Contacto sin nombre";
+      const typeName = type?.name || "Gestión";
+      const name = contact ? contactName(contact) : "Contacto sin nombre";
       const title = `${typeName} para hoy: ${name}`;
       const link = caseLink(row.contact_id, row.id);
 
       let assigneeId = row.assignee_id;
       if (!assigneeId) {
-        const outcome = await assignCase(db, row.id, { notifyAssignee: false, cache: opts.cache });
+        const outcome = await assignCase(db, row.id, { notifyAssignee: false, cache, at: now });
         if (outcome.status === "assigned" || outcome.status === "already_assigned") {
           assigneeId = outcome.assigneeId;
         }
       }
+
+      if (type?.auto_template) {
+        try {
+          const sent = await sendAutoTemplate(db, { caseId: row.id, at: nowIso, messenger: opts.messenger, cache });
+          if (sent.status === "sent") autoTemplates.sent++;
+          else if (sent.status === "failed") autoTemplates.failed++;
+        } catch (err) {
+          autoTemplates.failed++;
+          console.error("[cases cron] auto template", err);
+        }
+      }
+
       if (assigneeId) {
         await notify(db, [{ workspace_id: row.workspace_id, user_id: assigneeId, type: "case_activated", title, link }]);
       }
     }
     if (due.length < BATCH) break;
   }
-  return { activated, stoppedEarly: !timeLeft(opts.deadline) };
+  return result(!timeLeft(opts.deadline));
 }
 
 /**
  * Reintenta el reparto de las abiertas sin responsable (alguien volvió a
- * estar disponible, cambió el equipo...). No vuelve a avisar "sin asignar".
- * Recorre por id para no quedarse siempre con las mismas.
+ * estar disponible, cambió el equipo, abrió el horario...). No vuelve a avisar
+ * "sin asignar". Recorre por id para no quedarse siempre con las mismas. Fase
+ * 2: salta las de equipos fuera de horario (se reparten al abrir).
  */
 export async function retryUnassignedCases(
   db: Db,
-  opts: { deadline: number; cache?: AssignmentContextCache; maxCases?: number; workspaceId?: string },
+  opts: { deadline: number; cache?: AssignmentContextCache; maxCases?: number; workspaceId?: string; now?: Date },
 ): Promise<{ retried: number; assigned: number; stoppedEarly: boolean }> {
   const cache: AssignmentContextCache = opts.cache ?? new Map();
   const maxCases = opts.maxCases ?? 200;
@@ -124,7 +216,7 @@ export async function retryUnassignedCases(
   while (timeLeft(opts.deadline) && retried < maxCases) {
     let query = db
       .from("cases")
-      .select("id, workspace_id")
+      .select("id, workspace_id, team_id")
       .eq("status", "open")
       .is("assignee_id", null)
       .order("id", { ascending: true })
@@ -149,9 +241,12 @@ export async function retryUnassignedCases(
         workspacesWithoutAvailable.add(row.workspace_id);
         continue;
       }
+      // Atajo: con el equipo (o la empresa sin equipos) cerrado no se reparte.
+      const now = opts.now ?? new Date();
+      if ((row.team_id || ctx.teams.length === 0) && !isOpenAt(ctx.hours, row.team_id, now)) continue;
 
       retried++;
-      const outcome = await assignCase(db, row.id, { notifyIfUnassigned: false, cache });
+      const outcome = await assignCase(db, row.id, { notifyIfUnassigned: false, cache, at: now });
       if (outcome.status === "assigned") assigned++;
     }
     if (rows.length < BATCH) break;
@@ -199,7 +294,7 @@ export async function notifyOverdueNextActions(
       break;
     }
     const rows = claimed ?? [];
-    const contacts = await names(db, "contacts", rows.map((r) => r.contact_id));
+    const contacts = await names(db, rows.map((r) => r.contact_id));
 
     const notifications: NotificationInput[] = [];
     for (const row of rows) {
@@ -230,34 +325,73 @@ export async function notifyOverdueNextActions(
   return { notified, stoppedEarly: !timeLeft(opts.deadline) };
 }
 
-/** Las tres tareas en orden, compartiendo la memoria de reparto y la fecha límite. */
-export async function runCaseTasks(db: Db, opts: { deadline: number }): Promise<CaseTaskStats> {
+
+/** Todas las tareas en orden, compartiendo la memoria de reparto y la fecha límite. */
+export async function runCaseTasks(
+  db: Db,
+  opts: { deadline: number; messenger?: CaseMessenger; now?: Date },
+): Promise<CaseTaskStats> {
   const cache: AssignmentContextCache = new Map();
-  const stats: CaseTaskStats = { activated: 0, retried: 0, assigned: 0, overdueNotified: 0, stoppedEarly: false };
+  const stats: CaseTaskStats = {
+    activated: 0,
+    deferred: 0,
+    autoTemplates: { sent: 0, failed: 0 },
+    retried: 0,
+    assigned: 0,
+    reassigned: 0,
+    waitAlerts: 0,
+    overdueNotified: 0,
+    noReplyEvents: 0,
+    stoppedEarly: false,
+  };
 
   const tasks: [string, () => Promise<void>][] = [
     [
       "activate",
       async () => {
-        const r = await activateScheduledCases(db, { deadline: opts.deadline, cache });
+        const r = await activateScheduledCases(db, {
+          deadline: opts.deadline,
+          cache,
+          messenger: opts.messenger,
+          now: opts.now,
+        });
         stats.activated = r.activated;
+        stats.deferred = r.deferred;
+        stats.autoTemplates = r.autoTemplates;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "overdue",
       async () => {
-        const r = await notifyOverdueNextActions(db, { deadline: opts.deadline });
+        const r = await notifyOverdueNextActions(db, { deadline: opts.deadline, now: opts.now });
         stats.overdueNotified = r.notified;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "reassign",
+      async () => {
+        const r = await reassignWaitingCases(db, { deadline: opts.deadline, cache, now: opts.now });
+        stats.reassigned = r.reassigned;
+        stats.waitAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "retry",
       async () => {
-        const r = await retryUnassignedCases(db, { deadline: opts.deadline, cache });
+        const r = await retryUnassignedCases(db, { deadline: opts.deadline, cache, now: opts.now });
         stats.retried = r.retried;
         stats.assigned = r.assigned;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "no_reply",
+      async () => {
+        const r = await detectClientNoReply(db, { deadline: opts.deadline, now: opts.now });
+        stats.noReplyEvents = r.emitted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],

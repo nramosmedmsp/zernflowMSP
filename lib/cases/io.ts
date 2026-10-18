@@ -60,7 +60,11 @@ export type NotificationType =
   | "case_unassigned"
   | "mention"
   | "case_activated"
-  | "next_action_due";
+  | "next_action_due"
+  // Fase 2
+  | "case_reassigned"
+  | "wait_exceeded"
+  | "auto_template_failed";
 
 export interface NotificationInput {
   workspace_id: string;
@@ -102,6 +106,12 @@ export async function workspaceAdminIds(db: Db, workspaceId: string): Promise<st
     .eq("workspace_id", workspaceId)
     .in("role", ["owner", "admin"]);
   return (data ?? []).map((r) => r.user_id);
+}
+
+/** Supervisores del equipo; sin equipo o sin supervisores, los administradores. */
+export async function supervisorsOrAdmins(db: Db, workspaceId: string, teamId: string | null): Promise<string[]> {
+  const supervisors = teamId ? await teamSupervisorIds(db, teamId) : [];
+  return supervisors.length > 0 ? supervisors : workspaceAdminIds(db, workspaceId);
 }
 
 /** Supervisores de un equipo. */

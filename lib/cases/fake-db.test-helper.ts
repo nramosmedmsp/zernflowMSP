@@ -1,7 +1,8 @@
 // Base en memoria para las pruebas del motor de gestiones: imita lo que el
 // motor usa de supabase-js (select/insert/update con filtros, orden, límite,
-// count, single/maybeSingle) y las RPC de la migración 00020. No es un
-// PostgREST completo: ignora la lista de columnas y devuelve filas enteras.
+// count, single/maybeSingle) y las RPC de las migraciones 00020 y 00021. No es
+// un PostgREST completo: ignora la lista de columnas y devuelve filas enteras.
+// Imita también el trigger de 00021 que mantiene cases.assigned_at.
 
 import { randomUUID } from "node:crypto";
 import { pickAssignee } from "./routing";
@@ -35,6 +36,13 @@ const DEFAULTS: Record<string, () => Row> = {
     legal_due_at: null,
     priority: "normal",
     created_by: null,
+    off_hours_reply_sent_at: null,
+    auto_template_sent_at: null,
+    reassigned_count: 0,
+    assigned_at: null,
+    wait_alerted_at: null,
+    no_reply_event_outbound_at: null,
+    no_reply_event_minutes: null,
   }),
   contacts: () => ({
     display_name: null,
@@ -57,13 +65,18 @@ const DEFAULTS: Record<string, () => Row> = {
     sla_resolution_hours: null,
     require_category: false,
     require_outcome_reason: false,
+    auto_template: null,
     archived_at: null,
   }),
   case_stages: () => ({ color: null, position: 0, kind: "open", archived_at: null }),
   case_categories: () => ({ position: 0, is_high_priority: false, archived_at: null }),
   case_outcome_reasons: () => ({ position: 0, archived_at: null }),
   case_rules: () => ({ position: 0, enabled: true, trigger_stage_id: null, condition: {}, params: {} }),
-  teams: () => ({ is_default: false, assignment_mode: "round_robin", archived_at: null }),
+  teams: () => ({ is_default: false, assignment_mode: "round_robin", business_hours: null, archived_at: null }),
+  holidays: () => ({ team_id: null }),
+  channels: () => ({ is_active: true }),
+  triggers: () => ({ channel_id: null, config: {}, priority: 0, is_active: true }),
+  flows: () => ({ status: "draft" }),
   team_members: () => ({ role: "agent", case_type_ids: null }),
   workspace_members: () => ({ role: "member", availability: "available", last_assigned_at: null }),
   workspaces: () => ({ settings: {} }),
@@ -145,6 +158,20 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     this.filters.push((r) => r[col] !== null && r[col] !== undefined && compare(r[col], v) <= 0);
     return this;
   }
+  gte(col: string, v: unknown) {
+    this.filters.push((r) => r[col] !== null && r[col] !== undefined && compare(r[col], v) >= 0);
+    return this;
+  }
+  lt(col: string, v: unknown) {
+    this.filters.push((r) => r[col] !== null && r[col] !== undefined && compare(r[col], v) < 0);
+    return this;
+  }
+  /** Solo `not(col, "is", null)`. */
+  not(col: string, op: string, v: unknown) {
+    if (op !== "is" || v !== null) throw new Error(`not(${op}) no soportado`);
+    this.filters.push((r) => (r[col] ?? null) !== null);
+    return this;
+  }
   contains(col: string, vs: unknown[]) {
     this.filters.push((r) => Array.isArray(r[col]) && vs.every((v) => (r[col] as unknown[]).includes(v)));
     return this;
@@ -222,7 +249,14 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
       case "update": {
         const rows = this.matching();
         const now = new Date().toISOString();
-        for (const r of rows) Object.assign(r, clone(this.payload as Row), "updated_at" in r ? { updated_at: now } : {});
+        for (const r of rows) {
+          const before = r.assignee_id;
+          Object.assign(r, clone(this.payload as Row), "updated_at" in r ? { updated_at: now } : {});
+          // Trigger set_case_assigned_at (00021).
+          if (this.table === "cases" && r.assignee_id !== before) {
+            r.assigned_at = r.assignee_id ? this.db.now() : null;
+          }
+        }
         if (!this.returning) return { data: null, error: null };
         return this.finish(rows);
       }
@@ -265,6 +299,7 @@ export class FakeDb {
       ...clone(row),
     };
     if (table === "activity") full.id = this.rows(table).length + 1;
+    if (table === "cases" && full.assignee_id && !("assigned_at" in row)) full.assigned_at = this.now();
     this.rows(table).push(full);
     return full;
   }
@@ -321,16 +356,43 @@ export class FakeDb {
       );
       if (!pick) return { data: { status: "no_candidate" }, error: null };
       row.assignee_id = pick;
+      row.assigned_at = this.now();
       const m = members.find((x) => x.user_id === pick)!;
       // Marca estrictamente creciente aunque dos repartos caigan en el mismo milisegundo.
       this.clock += 1;
       m.last_assigned_at = new Date(Date.UTC(2026, 0, 1) + this.clock * 1000).toISOString();
       return { data: { status: "assigned", assignee_id: pick }, error: null };
     }
+    if (name === "cases_pending_no_reply") {
+      const t = (v: unknown) => (v ? new Date(v as string).getTime() : null);
+      const older = t(args.p_older_than)!;
+      const rows = this.rows("cases")
+        .filter((c) => {
+          const out = t(c.last_outbound_at);
+          const inn = t(c.last_inbound_at);
+          const stamped = t(c.no_reply_event_outbound_at);
+          return (
+            c.workspace_id === args.p_workspace_id &&
+            c.status === "open" &&
+            c.waiting_since === null &&
+            out !== null &&
+            out <= older &&
+            (inn === null || inn < out) &&
+            (stamped !== out || ((c.no_reply_event_minutes as number | null) ?? 0) < (args.p_max_minutes as number)) &&
+            (!args.p_after_id || (c.id as string) > (args.p_after_id as string))
+          );
+        })
+        .sort((a, b) => compare(a.id, b.id))
+        .slice(0, args.p_limit as number);
+      return { data: clone(rows), error: null };
+    }
     return { data: null, error: { message: `rpc desconocida ${name}` } };
   }
 
   private clock = 0;
+
+  /** Reloj del trigger de assigned_at (las pruebas lo fijan). */
+  now: () => string = () => new Date().toISOString();
 
   /** Como cliente tipado del motor. */
   asDb(): Db {

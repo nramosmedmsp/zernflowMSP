@@ -3,6 +3,7 @@
 import { CASE_NOT_FOUND } from "./access";
 import { isDateString, parseScheduleAt } from "./dates";
 import { applyRulePlan, countWins, loadRules, resumeAutomationIfIdle, type RuleEffects } from "./effects";
+import { emitCaseClosed, emitStageChanged } from "./events";
 import { GENERIC_ERROR, loadCase, loadCaseType, logActivity, type CaseRow, type ContactRow, type Db, type EngineResult } from "./io";
 import {
   CLOSE_TRIGGER,
@@ -255,6 +256,8 @@ export async function closeCase(
       ...(keyDate ? { key_date: keyDate } : {}),
     },
   });
+  emitStageChanged(db, closed, row.stage_id, prepared.stageId);
+  emitCaseClosed(db, closed, prepared.stageId, prepared.kind);
 
   const plan = planRules({
     rules: prepared.rules,

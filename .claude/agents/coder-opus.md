@@ -1,7 +1,7 @@
 ---
 name: coder-opus
 description: Programador para tareas de código no triviales en el CRM (lógica, base de datos, seguridad, flujos de autenticación). Usa Opus con esfuerzo medio.
-model: opus
+model: sonnet
 effort: medium
 ---
 

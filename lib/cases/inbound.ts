@@ -1,9 +1,13 @@
-// Mensajes entrantes y salientes (docs/FASE-1-TECNICO.md 3.1 y 3.2).
+// Mensajes entrantes y salientes (docs/FASE-1-TECNICO.md 3.1 y 3.2; fase 2:
+// reparto solo en horario y respuesta fuera de horario).
 
 import type { Json } from "@/lib/types/database";
 import { assignCase, type AssignOutcome } from "./assign";
 import { runEventRules } from "./effects";
+import { emitStageChanged } from "./events";
 import { firstOpenStageId, loadContact, logActivity, type CaseRow, type Db } from "./io";
+import type { CaseMessenger } from "./messaging";
+import { sendOffHoursReply, type OffHoursReplyOutcome } from "./off-hours";
 import { botOutboundPatch, humanOutboundPatch, inboundPatch, shouldReopen } from "./rules";
 
 export interface InboundResult {
@@ -11,6 +15,8 @@ export interface InboundResult {
   opened: boolean;
   reopened: boolean;
   assignment: AssignOutcome | null;
+  /** Fase 2: respuesta fuera de horario (null si falló de forma inesperada). */
+  offHoursReply: OffHoursReplyOutcome | null;
 }
 
 /** Tipo de gestión sugerido para el tipo de contacto (el primero por posición). */
@@ -80,12 +86,21 @@ async function latestOpenCase(db: Db, contactId: string): Promise<CaseRow | null
  *    de contacto, primera etapa abierta). Sin tipo de contacto, le pone el
  *    de por defecto;
  * 2. sella last_inbound_at y, si no había espera, waiting_since;
- * 3. si no tiene responsable, aplica el reparto;
- * 4. no pausa el bot.
+ * 3. si no tiene responsable, aplica el reparto (fuera de horario queda sin
+ *    asignar y el cron la reparte al abrir);
+ * 4. no pausa el bot;
+ * 5. fuera de horario, envía la respuesta automática si está activa.
  */
 export async function handleInbound(
   db: Db,
-  params: { workspaceId: string; contactId: string; conversationId?: string | null; at?: string },
+  params: {
+    workspaceId: string;
+    contactId: string;
+    conversationId?: string | null;
+    at?: string;
+    /** Para las pruebas; por defecto envía por Zernio. */
+    messenger?: CaseMessenger;
+  },
 ): Promise<InboundResult | null> {
   const at = params.at ?? new Date().toISOString();
   const contact = await loadContact(db, params.workspaceId, params.contactId);
@@ -139,6 +154,7 @@ export async function handleInbound(
           to_value: "open",
           meta: { closed_at: lastClosed.closed_at },
         });
+        emitStageChanged(db, row, lastClosed.stage_id, row.stage_id);
       } else {
         // Otro mensaje simultáneo la reabrió primero.
         row = await latestOpenCase(db, contact.id);
@@ -226,10 +242,23 @@ export async function handleInbound(
   // 3. Reparto. Solo se avisa "sin asignar" cuando la gestión es nueva o se reabre.
   let assignment: AssignOutcome | null = null;
   if (!row.assignee_id) {
-    assignment = await assignCase(db, row.id, { notifyIfUnassigned: opened || reopened });
+    assignment = await assignCase(db, row.id, { notifyIfUnassigned: opened || reopened, at: new Date(at) });
   }
 
-  return { caseId: row.id, opened, reopened, assignment };
+  // 5. Respuesta fuera de horario. Un fallo no corta el webhook.
+  let offHoursReply: OffHoursReplyOutcome | null = null;
+  try {
+    offHoursReply = await sendOffHoursReply(db, {
+      caseId: row.id,
+      conversationId: params.conversationId,
+      at,
+      messenger: params.messenger,
+    });
+  } catch (err) {
+    console.error("[cases] off hours reply", err);
+  }
+
+  return { caseId: row.id, opened, reopened, assignment, offHoursReply };
 }
 
 /**
@@ -316,13 +345,24 @@ export async function handleHumanOutboundForConversation(
   });
 }
 
-/** Envío del bot (motor de flujos): solo sella last_outbound_at de las gestiones abiertas. */
-export async function stampBotOutbound(db: Db, params: { contactId: string; at?: string }): Promise<void> {
-  const at = params.at ?? new Date().toISOString();
-  const { error } = await db
-    .from("cases")
-    .update(botOutboundPatch(at))
-    .eq("contact_id", params.contactId)
-    .eq("status", "open");
-  if (error) console.error("[cases] bot outbound", error.message);
+/**
+ * Salida automática (flujos, difusiones, secuencias, respuesta fuera de
+ * horario, plantilla de proactivas; docs/FASE-2-TECNICO.md 3.5): solo sella
+ * last_outbound_at de las gestiones abiertas del contacto (o de `caseId`). No
+ * cuenta como respuesta humana ni corta la espera del cliente. Usa el cliente
+ * de servicio y nunca lanza errores: un fallo solo se registra.
+ */
+export async function stampBotOutbound(
+  db: Db,
+  params: { contactId: string; at?: string; caseId?: string | null },
+): Promise<void> {
+  try {
+    const at = params.at ?? new Date().toISOString();
+    let query = db.from("cases").update(botOutboundPatch(at)).eq("contact_id", params.contactId).eq("status", "open");
+    if (params.caseId) query = query.eq("id", params.caseId);
+    const { error } = await query;
+    if (error) console.error("[cases] bot outbound", error.message);
+  } catch (err) {
+    console.error("[cases] bot outbound", err);
+  }
 }

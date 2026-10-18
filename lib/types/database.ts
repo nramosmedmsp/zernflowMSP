@@ -27,7 +27,23 @@ export type TriggerType =
   | "quick_reply"
   | "welcome"
   | "default"
-  | "comment_keyword";
+  | "comment_keyword"
+  // Fase 2 (00021): eventos de gestión (lib/flow-engine/case-triggers.ts).
+  | "case_stage_changed"
+  | "case_closed"
+  | "client_no_reply";
+
+/**
+ * triggers.config de los disparadores de gestión (fase 2). Todas las claves
+ * son opcionales: sin ellas el disparador aplica a cualquier tipo o etapa.
+ */
+export interface CaseTriggerConfig {
+  case_type_id?: string;
+  stage_id?: string;
+  outcome?: "won" | "lost" | "resolved";
+  /** client_no_reply: minutos sin respuesta del cliente (por defecto 60). */
+  minutes?: number;
+}
 export type FlowSessionStatus =
   | "active"
   | "completed"
@@ -57,11 +73,51 @@ export type SequenceStatus = "draft" | "active" | "paused";
 export type SequenceEnrollmentStatus = "active" | "completed" | "cancelled";
 
 export interface SequenceStep {
-  type: "message" | "delay";
+  type: "message" | "delay" | "template";
   /** Message text (for message steps) */
   content?: string;
   /** Delay in minutes (for delay steps) */
   delayMinutes?: number;
+  /**
+   * Fase 2: en un paso 'template', la plantilla a enviar; en un paso
+   * 'message', la plantilla alternativa si la ventana de 24 h está cerrada.
+   */
+  template?: TemplateMessageContent | null;
+}
+
+// ── Fase 2 (00021): plantillas en envíos automáticos ─────────────────────
+
+/**
+ * Plantilla de WhatsApp como contenido de una difusión o de un paso de
+ * secuencia. `params` son los valores en el orden de la plantilla
+ * (encabezado, cuerpo, botones) y admiten variables: {nombre}, {empresa},
+ * {fecha_clave}, {campo:slug}...
+ */
+export interface TemplateMessageContent {
+  kind: "template";
+  template_name: string;
+  language: string;
+  params: string[];
+}
+
+/** Texto libre (formato de la fase 1; `kind` puede faltar). */
+export interface TextMessageContent {
+  kind?: "text";
+  text: string;
+}
+
+/** broadcasts.message_content */
+export type BroadcastMessageContent = TextMessageContent | TemplateMessageContent;
+
+/**
+ * case_types.auto_template: plantilla que se envía al activarse una gestión
+ * proactiva (Recompra, Renovación). Variables en `params`: {nombre},
+ * {fecha_clave}, {empresa}, {sede}, {asesor} y {campo:slug}.
+ */
+export interface CaseTypeAutoTemplate {
+  template_name: string;
+  language: string;
+  params: string[];
 }
 
 // ── Fase 1 (00019): roles, equipos y gestiones ───────────────────────────
@@ -92,6 +148,41 @@ export interface WorkspaceSettings {
    * gestiones. Por defecto false: solo supervisores y administradores.
    */
   agent_can_return_to_queue?: boolean;
+  /** Fase 2: horario de la empresa (y de los equipos sin horario propio). Sin él = 24 horas. */
+  business_hours?: BusinessHours | null;
+  /** Fase 2: respuesta automática a mensajes que llegan fuera de horario. */
+  off_hours_reply?: OffHoursReplySettings | null;
+  /** Fase 2: minutos hábiles de espera antes de reasignar (null = desactivada). */
+  reassign_after_minutes?: number | null;
+}
+
+// ── Fase 2 (00021): horarios ─────────────────────────────────────────────
+
+/** Días de business_hours (claves en inglés, como en la base). */
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+/**
+ * Tramo de atención en hora de Lima: ["09:00", "13:00"]. El fin puede ser
+ * "24:00"; si es menor que el inicio, el tramo cruza la medianoche
+ * (["22:00", "02:00"] termina a las 2:00 del día siguiente).
+ */
+export type TimeRange = [string, string];
+
+/**
+ * teams.business_hours y workspaces.settings.business_hours:
+ * { "mon": [["09:00","13:00"],["14:00","19:00"]], ..., "sun": [] }.
+ * Un día ausente o vacío está cerrado. null (o sin ningún tramo) = 24 horas.
+ * Para leerlo de la base usa parseBusinessHours (lib/business-hours.ts).
+ */
+export type BusinessHours = { [day in Weekday]?: TimeRange[] };
+
+/** workspaces.settings.off_hours_reply (leer con parseOffHoursReply). */
+export interface OffHoursReplySettings {
+  enabled: boolean;
+  /** Texto con variables {nombre}, {empresa}, {sede} y {apertura}. */
+  text: string;
+  /** Horas mínimas para repetirla en la misma gestión (null = una sola vez por gestión). */
+  min_hours_between: number | null;
 }
 
 /** case_types.routing */
@@ -159,7 +250,13 @@ export type ActivityType =
   | "note_added"
   | "first_response"
   | "next_action_set"
-  | "config_changed";
+  | "config_changed"
+  // Fase 2 (00021)
+  | "off_hours_reply_sent"
+  | "auto_template_sent"
+  | "auto_template_failed"
+  | "auto_template_skipped"
+  | "contacts_imported";
 
 export interface Database {
   public: {
@@ -1258,6 +1355,8 @@ export interface Database {
           name: string;
           is_default: boolean;
           assignment_mode: AssignmentMode;
+          /** Fase 2: horario propio (ver BusinessHours); null = usa el de la empresa. */
+          business_hours: Json | null;
           archived_at: string | null;
           created_at: string;
           updated_at: string;
@@ -1268,6 +1367,7 @@ export interface Database {
           name: string;
           is_default?: boolean;
           assignment_mode?: AssignmentMode;
+          business_hours?: Json | null;
           archived_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1276,6 +1376,7 @@ export interface Database {
           name?: string;
           is_default?: boolean;
           assignment_mode?: AssignmentMode;
+          business_hours?: Json | null;
           archived_at?: string | null;
           updated_at?: string;
         };
@@ -1380,6 +1481,8 @@ export interface Database {
           sla_resolution_hours: number | null;
           require_category: boolean;
           require_outcome_reason: boolean;
+          /** Fase 2: plantilla al activarse (ver CaseTypeAutoTemplate), o null. */
+          auto_template: Json | null;
           archived_at: string | null;
           created_at: string;
           updated_at: string;
@@ -1399,6 +1502,7 @@ export interface Database {
           sla_resolution_hours?: number | null;
           require_category?: boolean;
           require_outcome_reason?: boolean;
+          auto_template?: Json | null;
           archived_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1416,6 +1520,7 @@ export interface Database {
           sla_resolution_hours?: number | null;
           require_category?: boolean;
           require_outcome_reason?: boolean;
+          auto_template?: Json | null;
           archived_at?: string | null;
           updated_at?: string;
         };
@@ -1640,6 +1745,21 @@ export interface Database {
           legal_due_at: string | null;
           priority: CasePriority;
           created_by: string | null;
+          // ── Fase 2 (00021) ──
+          /** Última respuesta automática fuera de horario. */
+          off_hours_reply_sent_at: string | null;
+          /** Plantilla automática enviada al activarse (proactivas). */
+          auto_template_sent_at: string | null;
+          /** Veces que se reasignó por espera. */
+          reassigned_count: number;
+          /** Cuándo se asignó al responsable actual (lo mantiene un trigger; null sin responsable). */
+          assigned_at: string | null;
+          /** Último aviso al supervisor de espera excedida sin a quién reasignar. */
+          wait_alerted_at: string | null;
+          /** client_no_reply: last_outbound_at para el que se emitió el evento. */
+          no_reply_event_outbound_at: string | null;
+          /** client_no_reply: umbral (minutos) del último evento emitido. */
+          no_reply_event_minutes: number | null;
           created_at: string;
           updated_at: string;
         };
@@ -1670,6 +1790,13 @@ export interface Database {
           legal_due_at?: string | null;
           priority?: CasePriority;
           created_by?: string | null;
+          off_hours_reply_sent_at?: string | null;
+          auto_template_sent_at?: string | null;
+          reassigned_count?: number;
+          assigned_at?: string | null;
+          wait_alerted_at?: string | null;
+          no_reply_event_outbound_at?: string | null;
+          no_reply_event_minutes?: number | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1696,6 +1823,13 @@ export interface Database {
           outcome_note?: string | null;
           legal_due_at?: string | null;
           priority?: CasePriority;
+          off_hours_reply_sent_at?: string | null;
+          auto_template_sent_at?: string | null;
+          reassigned_count?: number;
+          assigned_at?: string | null;
+          wait_alerted_at?: string | null;
+          no_reply_event_outbound_at?: string | null;
+          no_reply_event_minutes?: number | null;
           updated_at?: string;
         };
         Relationships: [
@@ -1937,6 +2071,95 @@ export interface Database {
           },
         ];
       };
+      // ── Fase 2 (00021) ──────────────────────────────────────────────────
+      holidays: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          /** null = toda la empresa */
+          team_id: string | null;
+          /** "YYYY-MM-DD" */
+          date: string;
+          name: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          team_id?: string | null;
+          date: string;
+          name: string;
+          created_at?: string;
+        };
+        Update: {
+          team_id?: string | null;
+          date?: string;
+          name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "holidays_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "holidays_team_id_fkey";
+            columns: ["team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      import_batches: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          created_by: string | null;
+          file_name: string;
+          total: number;
+          created: number;
+          updated: number;
+          skipped: number;
+          /** Arreglo de errores por fila (lo define la importación). */
+          errors: Json;
+          options: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          created_by?: string | null;
+          file_name?: string;
+          total?: number;
+          created?: number;
+          updated?: number;
+          skipped?: number;
+          errors?: Json;
+          options?: Json;
+          created_at?: string;
+        };
+        Update: {
+          file_name?: string;
+          total?: number;
+          created?: number;
+          updated?: number;
+          skipped?: number;
+          errors?: Json;
+          options?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "import_batches_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: {
       [_ in never]: never;
@@ -2033,6 +2256,36 @@ export interface Database {
           p_mode: "round_robin" | "least_load";
         };
         Returns: Json;
+      };
+      // ── Fase 2 (00021) ──────────────────────────────────────────────────
+      /** Formato de business_hours (lo usan los checks de la base). */
+      is_valid_business_hours: {
+        Args: { p: Json };
+        Returns: boolean;
+      };
+      /**
+       * Gestiones abiertas que esperan respuesta del cliente (último mensaje
+       * saliente sin respuesta, sin espera del cliente) y con algún umbral de
+       * client_no_reply pendiente. Solo service_role.
+       */
+      cases_pending_no_reply: {
+        Args: {
+          p_workspace_id: string;
+          p_older_than: string;
+          p_max_minutes: number;
+          p_after_id: string | null;
+          p_limit: number;
+        };
+        Returns: {
+          id: string;
+          workspace_id: string;
+          contact_id: string;
+          case_type_id: string | null;
+          stage_id: string | null;
+          last_outbound_at: string;
+          no_reply_event_outbound_at: string | null;
+          no_reply_event_minutes: number | null;
+        }[];
       };
     };
     Enums: {

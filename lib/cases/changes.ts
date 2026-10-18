@@ -7,6 +7,7 @@ import { CASE_NOT_FOUND } from "./access";
 import { assignCase, loadAssignmentContext } from "./assign";
 import { parseInstant } from "./dates";
 import { runEventRules } from "./effects";
+import { emitStageChanged } from "./events";
 import {
   GENERIC_ERROR,
   caseLink,
@@ -71,6 +72,7 @@ export async function changeStage(
     from_value: row.stage_id,
     to_value: stage.id,
   });
+  emitStageChanged(db, row, row.stage_id, stage.id);
   await runEventRules(db, {
     caseRow: { ...row, stage_id: stage.id },
     ctx: {
@@ -155,6 +157,7 @@ export async function classifyCase(
   ]);
 
   const fresh = { ...row, case_type_id: type.id, stage_id: stageId, category_id: null };
+  emitStageChanged(db, fresh, row.stage_id, stageId);
   if (row.case_type_id === null && row.status === "open") {
     await runEventRules(db, {
       caseRow: fresh,

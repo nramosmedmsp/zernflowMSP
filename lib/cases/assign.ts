@@ -1,8 +1,13 @@
 // Reparto con E/S (docs/FASE-1-TECNICO.md 3.3). La decisión es pura
 // (routing.ts); la elección final y el sello de last_assigned_at los hace la
 // RPC `assign_case_pick` de forma atómica.
+//
+// Fase 2 (docs/FASE-2-TECNICO.md 3.1): fuera del horario del equipo de
+// destino no se reparte; la gestión queda sin asignar (sin avisos) y el cron
+// la reparte al abrir.
 
 import type { Json } from "@/lib/types/database";
+import { buildHoursInfo, isOpenAt, loadHolidayRows, type HoursInfo } from "./hours";
 import {
   assignmentModeFromSettings,
   decideAssignment,
@@ -28,6 +33,8 @@ export interface AssignmentContext {
   teamMembers: RoutingTeamMember[];
   members: RoutingMember[];
   workspaceMode: AssignmentMode;
+  /** Fase 2: horarios, feriados y configuración de atención del espacio. */
+  hours: HoursInfo;
 }
 
 /** Memoria por espacio para no releer equipos y miembros en cada gestión (cron). */
@@ -41,17 +48,18 @@ export async function loadAssignmentContext(
   const cached = cache?.get(workspaceId);
   if (cached) return cached;
   const promise = (async () => {
-    const [{ data: ws }, { data: teams }, { data: members }] = await Promise.all([
-      db.from("workspaces").select("settings").eq("id", workspaceId).maybeSingle(),
+    const [{ data: ws }, { data: teams }, { data: members }, holidays] = await Promise.all([
+      db.from("workspaces").select("name, settings").eq("id", workspaceId).maybeSingle(),
       db
         .from("teams")
-        .select("id, is_default, assignment_mode")
+        .select("id, name, is_default, assignment_mode, business_hours")
         .eq("workspace_id", workspaceId)
         .is("archived_at", null),
       db
         .from("workspace_members")
         .select("user_id, role, availability, last_assigned_at")
         .eq("workspace_id", workspaceId),
+      loadHolidayRows(db, workspaceId),
     ]);
     const teamIds = (teams ?? []).map((t) => t.id);
     const { data: teamMembers } = teamIds.length
@@ -77,6 +85,7 @@ export async function loadAssignmentContext(
         availability: m.availability,
         lastAssignedAt: m.last_assigned_at,
       })),
+      hours: buildHoursInfo({ workspace: ws ?? null, teams: teams ?? [], holidays }),
     };
   })();
   cache?.set(workspaceId, promise);
@@ -91,12 +100,18 @@ export interface AssignOptions {
   /** Avisar al asesor asignado. Por defecto sí. */
   notifyAssignee?: boolean;
   cache?: AssignmentContextCache;
+  /** Instante del reparto (para el horario). Por defecto, ahora. */
+  at?: Date;
+  /** Personas que no pueden recibirla (reasignación por espera). */
+  exclude?: readonly string[];
+  /** Motivo que se guarda en el registro `assigned` (p. ej. "espera"). */
+  reason?: string;
 }
 
 export type AssignOutcome =
   | { status: "assigned"; assigneeId: string; teamId: string | null; via: "owner" | "round_robin" | "least_load" }
   | { status: "already_assigned"; assigneeId: string }
-  | { status: "unassigned"; reason: "manual" | "no_eligible"; teamId: string | null }
+  | { status: "unassigned"; reason: "manual" | "no_eligible" | "off_hours"; teamId: string | null }
   | { status: "skipped"; reason: "not_found" | "not_open" };
 
 function rpcStatus(data: Json | null): { status: string; assigneeId: string | null } {
@@ -151,6 +166,7 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
     teamMembers: ctx.teamMembers,
     members: ctx.members,
     workspaceMode: ctx.workspaceMode,
+    excludeUserIds: opts.exclude,
   });
 
   if (decision.teamId !== row.team_id) {
@@ -173,6 +189,15 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
   const name = contactName(contact);
   const typeName = caseType?.name ?? "Sin clasificar";
   const link = caseLink(row.contact_id, row.id);
+
+  // Fuera de horario no se reparte (ni se avisa): el cron lo hace al abrir.
+  // El modo manual y "sin elegibles" siguen su curso: no dependen de la hora.
+  if (
+    (decision.kind === "owner" || decision.kind === "pick") &&
+    !isOpenAt(ctx.hours, decision.teamId, opts.at ?? new Date())
+  ) {
+    return { status: "unassigned", reason: "off_hours", teamId: decision.teamId };
+  }
 
   let assigned: { assigneeId: string; via: "owner" | "round_robin" | "least_load" } | null = null;
   if (decision.kind === "owner" || decision.kind === "pick") {
@@ -206,7 +231,7 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
       actor_id: opts.actorId ?? null,
       from_value: null,
       to_value: assigned.assigneeId,
-      meta: { via: assigned.via, team_id: decision.teamId },
+      meta: { via: assigned.via, team_id: decision.teamId, ...(opts.reason ? { reason: opts.reason } : {}) },
     });
     if (opts.notifyAssignee !== false) {
       await notify(db, [

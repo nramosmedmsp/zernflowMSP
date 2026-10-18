@@ -73,6 +73,11 @@ export interface RoutingInput {
   members: readonly RoutingMember[];
   /** workspaces.settings.assignment_mode (solo sin equipo de destino). */
   workspaceMode: AssignmentMode;
+  /**
+   * Personas que no pueden recibir la gestión (fase 2: la reasignación por
+   * espera excluye a la anterior). Tampoco valen como responsable fijo.
+   */
+  excludeUserIds?: readonly string[];
 }
 
 export type AssignmentDecision =
@@ -137,6 +142,7 @@ export function eligibleMembers(input: RoutingInput, teamId: string | null): Rou
 function ownerEligible(input: RoutingInput, teamId: string | null): boolean {
   const ownerId = input.contactOwnerId;
   if (!ownerId) return false;
+  if (input.excludeUserIds?.includes(ownerId)) return false;
   if (input.caseTypeId !== null && input.routing !== "contact_owner") return false;
   const member = input.members.find((m) => m.userId === ownerId);
   if (!member || member.availability !== "available") return false;
@@ -156,7 +162,10 @@ export function decideAssignment(input: RoutingInput): AssignmentDecision {
   const mode = team ? team.assignmentMode : input.workspaceMode;
   if (mode === "manual") return { kind: "manual", teamId };
 
-  const available = eligibleMembers(input, teamId).filter((m) => m.availability === "available");
+  const excluded = new Set(input.excludeUserIds ?? []);
+  const available = eligibleMembers(input, teamId).filter(
+    (m) => m.availability === "available" && !excluded.has(m.userId),
+  );
   if (available.length === 0) return { kind: "none", teamId };
 
   return {
