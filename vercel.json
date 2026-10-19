@@ -1,10 +1,11 @@
 {
+  "regions": ["gru1"],
   "crons": [
     {
       "path": "/api/cron/jobs",
       "schedule": "* * * * *"
     },
-{
+    {
       "path": "/api/cron/sequences",
       "schedule": "* * * * *"
     }
