@@ -6,7 +6,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/types/database";
 import { assignCase, loadAssignmentContext } from "@/lib/cases/assign";
-import { assignTo, changeStage, classifyCase, transferCase } from "@/lib/cases/changes";
+import { assignTo, changeStage, classifyCase, setCategory, transferCase } from "@/lib/cases/changes";
 import { suggestedCaseTypeId } from "@/lib/cases/inbound";
 import { isOpenAt } from "@/lib/cases/hours";
 import { loadCase, loadCaseType, loadContact, type CaseRow } from "@/lib/cases/io";
@@ -113,6 +113,23 @@ async function runClassify(db: Db, data: ClassifyCaseNodeData, context: FlowExec
   if (data.stageId) {
     const moved = await changeStage(db, { caseId: ensured.row.id, stageId: data.stageId, actorId: null, flowChain });
     if ("error" in moved) return moved.error;
+  }
+  if (data.categoryId) {
+    // Categoría opcional del tipo elegido. Si no pertenece al tipo (o ya no
+    // existe) se ignora: la gestión queda clasificada igual y se deja registro.
+    const categorized = await setCategory(db, { caseId: ensured.row.id, categoryId: data.categoryId, actorId: null });
+    if ("error" in categorized) {
+      console.warn(
+        `[flows] nodo classifyCase (flujo ${context.flowId}): categoría "${data.categoryName ?? data.categoryId}" ignorada: ${categorized.error}`,
+      );
+      await db.from("analytics_events").insert({
+        workspace_id: context.workspaceId,
+        flow_id: context.flowId,
+        contact_id: context.contactId,
+        event_type: "case_category_ignored",
+        metadata: { categoryId: data.categoryId, reason: categorized.error },
+      });
+    }
   }
   return null;
 }

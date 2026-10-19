@@ -4,6 +4,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CASE_CONDITION_LABELS, isBooleanCaseField, isCaseConditionField } from "@/lib/flow-engine/case-conditions";
+import { describeContactCondition } from "@/lib/flow-engine/condition-fields";
 
 export interface ConditionNodeProps {
   label?: string;
@@ -61,7 +62,7 @@ export function ConditionNode({ data, selected }: NodeProps) {
                   ? `${CASE_CONDITION_LABELS[c.field]} ${operatorLabels[c.operator] || c.operator} ${
                       isBooleanCaseField(c.field) ? (c.value === "true" ? "Sí" : "No") : "elegido"
                     }`
-                  : `${c.field} ${operatorLabels[c.operator] || c.operator} ${c.value}`}
+                  : describeContactCondition(c)}
               </p>
             ))}
             {conditions.length > 2 && (

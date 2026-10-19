@@ -1,6 +1,7 @@
 import { getWorkspace } from "@/lib/workspace";
 import { notFound } from "next/navigation";
 import { FlowCanvas } from "@/components/flow-builder/flow-canvas";
+import { TemplateNotesBanner } from "@/components/flow-builder/template-notes-banner";
 
 export default async function FlowEditorPage({
   params,
@@ -23,7 +24,10 @@ export default async function FlowEditorPage({
 
   return (
     <div className="flex h-full flex-col">
-      <FlowCanvas flow={flow} />
+      <TemplateNotesBanner flowId={flow.id} />
+      <div className="min-h-0 flex-1">
+        <FlowCanvas flow={flow} />
+      </div>
     </div>
   );
 }

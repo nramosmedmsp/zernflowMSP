@@ -40,14 +40,36 @@ export interface CaseConditionSnapshot {
   withinHours: boolean;
 }
 
+/** Texto sin mayúsculas, tildes ni espacios de más: así se comparan los textos de las condiciones. */
+export function normalizeForCompare(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function sameText(actual: string | undefined, expected: string): boolean {
+  return actual !== undefined && actual !== null && normalizeForCompare(actual) === normalizeForCompare(expected ?? "");
+}
+
+/**
+ * Compara el valor real con el esperado. "es igual", "no es igual" y "contiene"
+ * ignoran mayúsculas y tildes ("Sí" = "si", "Envío" contiene "envio"); los
+ * números y "existe" no dependen del texto.
+ */
 export function compareCondition(actual: string | undefined, operator: string, expected: string): boolean {
   switch (operator) {
     case "equals":
-      return actual === expected;
+      return sameText(actual, expected);
     case "not_equals":
-      return actual !== expected;
+      return !sameText(actual, expected);
     case "contains":
-      return actual?.includes(expected) || false;
+      return (
+        actual !== undefined &&
+        actual !== null &&
+        normalizeForCompare(actual).includes(normalizeForCompare(expected ?? ""))
+      );
     case "exists":
       return actual !== undefined && actual !== null && actual !== "";
     case "gt":

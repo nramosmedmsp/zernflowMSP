@@ -5,8 +5,9 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleInbound } from "@/lib/cases";
-import { executeFlow } from "@/lib/flow-engine/engine";
+import { executeFlow, FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
+import { claimWaitingSession, findWaitingSession } from "@/lib/flow-engine/waiting-session";
 import type { Database } from "@/lib/types/database";
 
 type Db = SupabaseClient<Database>;
@@ -64,8 +65,37 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
     },
   };
 
+  // Las palabras clave globales (baja, alta) van primero.
   const handled = await handleGlobalKeywords(supabase, channel.workspace_id, contactId, msg.text || undefined);
   if (handled) return;
+
+  // Si el contacto tiene una sesión esperando su respuesta (Espera inteligente)
+  // y la espera no venció, el mensaje la retoma sin buscar disparadores: así
+  // respuestas como "1" o "Sede 2" no necesitan coincidir con una palabra clave.
+  const waiting = await findWaitingSession(supabase, { contactId, channelId: channel.id });
+  if (waiting) {
+    if (!(await claimWaitingSession(supabase, waiting.id))) return; // otro mensaje la retomó
+    try {
+      await resumeSession(supabase, waiting, {
+        triggerId: "",
+        flowId: waiting.flow_id,
+        channelId: channel.id,
+        contactId,
+        conversationId: conversation.id,
+        workspaceId: channel.workspace_id,
+        incomingMessage,
+        lateConversationId: input.lateConversationId,
+        lateAccountId: input.lateAccountId,
+      });
+    } catch (err) {
+      console.error("Flow resume error:", err);
+      // Un fallo pasajero al leer el flujo no consume la espera: la próxima respuesta lo reintenta.
+      if (err instanceof FlowLoadError) {
+        await supabase.from("flow_sessions").update({ waiting_for_input: true }).eq("id", waiting.id);
+      }
+    }
+    return;
+  }
 
   const trigger = await matchTrigger(supabase, {
     channelId: channel.id,

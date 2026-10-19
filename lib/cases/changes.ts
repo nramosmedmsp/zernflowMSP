@@ -525,3 +525,58 @@ export async function addNote(
   }
   return { ok: true, noteId: note.id, notified, notNotified };
 }
+
+/**
+ * Nota interna escrita por el sistema (sin autor), por ejemplo la del nodo
+ * Atención humana de un flujo. `case_notes.author_id` admite null; la política
+ * de inserción exige autor solo a quien escribe con sesión de usuario, y el
+ * motor escribe con el cliente de servicio. No menciona ni notifica a nadie.
+ */
+export async function addSystemNote(
+  db: Db,
+  params: { caseId: string; body: string; conversationId?: string | null },
+): Promise<EngineResult<{ noteId: string }>> {
+  const row = await loadCase(db, params.caseId);
+  if (!row) return { error: CASE_NOT_FOUND };
+
+  const body = params.body.trim().slice(0, MAX_NOTE_LENGTH);
+  if (!body) return { error: "La nota está vacía." };
+
+  let conversationId: string | null = null;
+  if (params.conversationId) {
+    const { data: conv } = await db
+      .from("conversations")
+      .select("id")
+      .eq("id", params.conversationId)
+      .eq("contact_id", row.contact_id)
+      .eq("workspace_id", row.workspace_id)
+      .maybeSingle();
+    conversationId = conv?.id ?? null;
+  }
+
+  const { data: note, error } = await db
+    .from("case_notes")
+    .insert({
+      workspace_id: row.workspace_id,
+      case_id: row.id,
+      contact_id: row.contact_id,
+      conversation_id: conversationId,
+      author_id: null,
+      body,
+      mentions: [],
+    })
+    .select("id")
+    .single();
+  if (error || !note) return { error: GENERIC_ERROR };
+
+  await logActivity(db, {
+    workspace_id: row.workspace_id,
+    type: "note_added",
+    case_id: row.id,
+    contact_id: row.contact_id,
+    conversation_id: conversationId,
+    actor_id: null,
+    meta: { note_id: note.id, mentions: [], source: "flow" },
+  });
+  return { ok: true, noteId: note.id };
+}

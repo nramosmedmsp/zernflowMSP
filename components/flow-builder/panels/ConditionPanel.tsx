@@ -10,6 +10,17 @@ import {
   isCaseConditionField,
   type CaseConditionField,
 } from "@/lib/flow-engine/case-conditions";
+import {
+  CONTACT_CONDITION_LABELS,
+  newContactCondition,
+  parseConditionField,
+  renameConditionTarget,
+  setTagPresence,
+  tagCondition,
+  upgradeCondition,
+  type ContactConditionKind,
+} from "@/lib/flow-engine/condition-fields";
+import { PLATFORMS, PLATFORM_LABELS } from "@/lib/platforms";
 import { useCaseCatalog, type CaseCatalog } from "./use-case-catalog";
 
 interface Condition {
@@ -29,14 +40,22 @@ interface ConditionPanelProps {
   onChange: (data: Record<string, unknown>) => void;
 }
 
-const fieldOptions = [
-  { value: "tag", label: "Etiqueta" },
-  { value: "custom_field", label: "Campo personalizado" },
-  { value: "platform", label: "Plataforma" },
-  { value: "variable", label: "Variable" },
-  { value: "is_subscribed", label: "Está suscrito" },
-  { value: "last_interaction", label: "Última interacción" },
-];
+// Lo que guarda el panel es lo que lee el motor: tag:<nombre>, variable:<nombre>,
+// custom_field:<slug>, platform e is_subscribed (ver lib/flow-engine/condition-fields.ts).
+const fieldOptions: Array<{ value: ContactConditionKind; label: string }> = (
+  ["tag", "custom_field", "platform", "variable", "is_subscribed"] as const
+).map((value) => ({ value, label: CONTACT_CONDITION_LABELS[value] }));
+
+const nameLabels: Record<"tag" | "variable" | "custom_field", { label: string; placeholder: string }> = {
+  tag: { label: "Nombre de la etiqueta", placeholder: "Ej. VIP" },
+  variable: { label: "Nombre de la variable", placeholder: "Ej. message" },
+  custom_field: { label: "Campo personalizado (slug)", placeholder: "Ej. numero_pedido" },
+};
+
+const selectClass =
+  "w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500";
+const inputClass =
+  "w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500";
 
 // Condiciones de gestión (fase 2): se comparan con el id elegido o con Sí/No.
 const caseFieldOptions = CASE_CONDITION_FIELDS.map((f) => ({ value: f, label: CASE_CONDITION_LABELS[f] }));
@@ -77,13 +96,14 @@ const operatorOptions = [
 export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps) {
   const data = rawData as ConditionPanelData;
   const catalog = useCaseCatalog();
-  const conditions = data.conditions || [];
+  // Las condiciones guardadas con el formato antiguo se muestran (y se guardan al editarlas) en el actual.
+  const conditions = (data.conditions || []).map((c) => upgradeCondition(c, isCaseConditionField));
   const logic = data.logic || "and";
 
   const addCondition = useCallback(() => {
     onChange({
       ...data,
-      conditions: [...conditions, { field: "tag", operator: "equals", value: "" }],
+      conditions: [...conditions, newContactCondition("tag")],
     });
   }, [data, conditions, onChange]);
 
@@ -131,7 +151,11 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
 
       {/* Conditions List */}
       <div className="space-y-3">
-        {conditions.map((condition, index) => (
+        {conditions.map((condition, index) => {
+          const isCase = isCaseConditionField(condition.field);
+          const contactKind = parseConditionField(condition).kind;
+          const target = parseConditionField(condition).name;
+          return (
           <div key={index}>
             {index > 0 && (
               <div className="my-2 flex items-center justify-center">
@@ -166,7 +190,7 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
               {/* Field */}
               <div className="space-y-2">
                 <select
-                  value={condition.field}
+                  value={isCaseConditionField(condition.field) ? condition.field : contactKind}
                   onChange={(e) => {
                     const field = e.target.value;
                     // Al pasar a un campo de gestión el valor es un id o Sí/No, y el operador solo igual / no igual.
@@ -177,10 +201,10 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
                         value: isBooleanCaseField(field) ? "true" : "",
                       });
                     } else {
-                      updateCondition(index, { ...condition, field });
+                      updateCondition(index, newContactCondition(field as ContactConditionKind));
                     }
                   }}
-                  className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  className={selectClass}
                 >
                   {fieldOptions.map((f) => (
                     <option key={f.value} value={f.value}>
@@ -196,20 +220,76 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
                   </optgroup>
                 </select>
 
+                {/* Nombre de la etiqueta, variable o campo */}
+                {!isCase && (contactKind === "tag" || contactKind === "variable" || contactKind === "custom_field") && (
+                  <div>
+                    <label className="mb-1 block text-[11px] text-muted-foreground">{nameLabels[contactKind].label}</label>
+                    <input
+                      type="text"
+                      value={target}
+                      onChange={(e) => updateCondition(index, renameConditionTarget(condition, e.target.value))}
+                      placeholder={nameLabels[contactKind].placeholder}
+                      className={inputClass}
+                    />
+                  </div>
+                )}
+
+                {/* Etiqueta: tiene o no tiene */}
+                {!isCase && contactKind === "tag" && (
+                  <select
+                    value={tagCondition(condition).has ? "true" : "false"}
+                    onChange={(e) => updateCondition(index, setTagPresence(condition, e.target.value === "true"))}
+                    className={selectClass}
+                  >
+                    <option value="true">El contacto tiene la etiqueta</option>
+                    <option value="false">El contacto no tiene la etiqueta</option>
+                  </select>
+                )}
+
+                {/* Suscripción: Sí / No */}
+                {!isCase && contactKind === "is_subscribed" && (
+                  <select
+                    value={condition.value === "false" ? "false" : "true"}
+                    onChange={(e) => updateCondition(index, { ...condition, operator: "equals", value: e.target.value })}
+                    className={selectClass}
+                  >
+                    <option value="true">Sí</option>
+                    <option value="false">No</option>
+                  </select>
+                )}
+
                 {/* Operator */}
-                <select
-                  value={condition.operator}
-                  onChange={(e) =>
-                    updateCondition(index, { ...condition, operator: e.target.value })
-                  }
-                  className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                >
-                  {(isCaseConditionField(condition.field) ? caseOperatorOptions : operatorOptions).map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                {(isCase || (contactKind !== "tag" && contactKind !== "is_subscribed")) && (
+                  <select
+                    value={condition.operator}
+                    onChange={(e) =>
+                      updateCondition(index, { ...condition, operator: e.target.value })
+                    }
+                    className={selectClass}
+                  >
+                    {(isCase ? caseOperatorOptions : operatorOptions).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {/* Plataforma: lista de plataformas */}
+                {!isCase && contactKind === "platform" && (
+                  <select
+                    value={condition.value}
+                    onChange={(e) => updateCondition(index, { ...condition, value: e.target.value })}
+                    className={selectClass}
+                  >
+                    <option value="">Selecciona...</option>
+                    {PLATFORMS.map((p) => (
+                      <option key={p} value={p}>
+                        {PLATFORM_LABELS[p]}
+                      </option>
+                    ))}
+                  </select>
+                )}
 
                 {isCaseConditionField(condition.field) && (
                   <>
@@ -239,21 +319,29 @@ export function ConditionPanel({ data: rawData, onChange }: ConditionPanelProps)
                 )}
 
                 {/* Value (hidden for "exists" operator) */}
-                {!isCaseConditionField(condition.field) && condition.operator !== "exists" && (
-                  <input
-                    type="text"
-                    value={condition.value}
-                    onChange={(e) =>
-                      updateCondition(index, { ...condition, value: e.target.value })
-                    }
-                    placeholder="Valor..."
-                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
+                {!isCase &&
+                  (contactKind === "variable" || contactKind === "custom_field") &&
+                  condition.operator !== "exists" && (
+                    <input
+                      type="text"
+                      value={condition.value}
+                      onChange={(e) =>
+                        updateCondition(index, { ...condition, value: e.target.value })
+                      }
+                      placeholder="Valor..."
+                      className={inputClass}
+                    />
+                  )}
+                {!isCase && contactKind === "variable" && target === "message" && (
+                  <p className="text-[11px] text-muted-foreground">
+                    La variable message es el último mensaje del cliente. Los textos se comparan sin mayúsculas ni tildes.
+                  </p>
                 )}
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Add Condition */}

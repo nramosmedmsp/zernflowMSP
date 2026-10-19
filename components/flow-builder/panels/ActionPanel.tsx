@@ -388,7 +388,7 @@ function HumanTakeoverConfig({ data, onChange }: ActionSubPanelProps) {
           className="w-full resize-none rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
         />
         <p className="mt-1.5 text-xs text-muted-foreground">
-          Este mensaje será visible para los agentes como nota interna.
+          Se guarda como nota interna (de parte del sistema) en la gestión abierta del contacto, para que el asesor la vea. Admite {"{{variables}}"}.
         </p>
       </div>
     </div>
@@ -550,7 +550,7 @@ function SmartDelayConfig({ data, onChange }: ActionSubPanelProps) {
       <div className="rounded-lg border border-border bg-muted p-4">
         <p className="text-sm font-medium text-foreground">Espera inteligente</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Pausa el flujo y espera la respuesta del cliente. Si no responde dentro del tiempo límite, continúa con el siguiente paso.
+          Pausa el flujo y espera la respuesta del cliente: lo que escriba (o el botón que pulse) retoma el flujo aquí, sin buscar otro disparador, y queda en la variable {"{{message}}"}.
         </p>
       </div>
 
@@ -579,7 +579,7 @@ function SmartDelayConfig({ data, onChange }: ActionSubPanelProps) {
           </select>
         </div>
         <p className="mt-1.5 text-xs text-muted-foreground">
-          Si el cliente no responde dentro de este tiempo, el flujo continuará.
+          Si el cliente no responde dentro de este tiempo, la espera termina y su siguiente mensaje se trata como uno nuevo (el flujo no continúa solo).
         </p>
       </div>
     </div>

@@ -37,8 +37,10 @@ export function ClassifyCasePanel({ data, onChange }: PanelProps) {
   const catalog = useCaseCatalog();
   const caseTypeId = (data.caseTypeId as string) || "";
   const stageId = (data.stageId as string) || "";
+  const categoryId = (data.categoryId as string) || "";
   const type = catalog.caseTypes.find((t) => t.id === caseTypeId);
   const stages = openStages(type);
+  const categories = type?.categories ?? [];
 
   return (
     <div className="space-y-4">
@@ -63,6 +65,8 @@ export function ClassifyCasePanel({ data, onChange }: PanelProps) {
                 caseTypeName: next?.name ?? "",
                 stageId: "",
                 stageName: "",
+                categoryId: "",
+                categoryName: "",
               });
             }}
             className={selectClass}
@@ -97,6 +101,30 @@ export function ClassifyCasePanel({ data, onChange }: PanelProps) {
           </select>
           <p className="mt-1.5 text-xs text-muted-foreground">
             Al clasificar, la gestión pasa a la primera etapa del tipo. Elige otra si debe quedar en una etapa distinta.
+          </p>
+        </div>
+      )}
+
+      {caseTypeId && (
+        <div>
+          <label className="mb-2 block text-xs font-semibold text-muted-foreground">Categoría (opcional)</label>
+          <select
+            value={categoryId}
+            onChange={(e) => {
+              const category = categories.find((c) => c.id === e.target.value);
+              onChange({ ...data, categoryId: e.target.value, categoryName: category?.name ?? "" });
+            }}
+            className={selectClass}
+          >
+            <option value="">Sin categoría</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Debe ser una categoría del tipo elegido; si no lo es, el flujo la ignora y deja registro.
           </p>
         </div>
       )}

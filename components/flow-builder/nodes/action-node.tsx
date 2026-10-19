@@ -37,6 +37,7 @@ export interface ActionNodeProps {
   timeoutUnit?: string;
   caseTypeName?: string;
   stageName?: string;
+  categoryName?: string;
   stageId?: string;
   mode?: "fixed" | "reroute";
   teamId?: string;
@@ -163,9 +164,14 @@ function getSummary(nodeData: ActionNodeProps): string | null {
       return null;
     case "classifyCase":
       if (!nodeData.caseTypeId) return null;
-      return nodeData.stageName
-        ? `${nodeData.caseTypeName || "Tipo"} > ${nodeData.stageName}`
-        : nodeData.caseTypeName || "Tipo elegido";
+      return [
+        nodeData.stageName
+          ? `${nodeData.caseTypeName || "Tipo"} > ${nodeData.stageName}`
+          : nodeData.caseTypeName || "Tipo elegido",
+        nodeData.categoryName ? `Categoría: ${nodeData.categoryName}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
     case "changeStage":
       return nodeData.stageId ? `Etapa: ${nodeData.stageName || "elegida"}` : null;
     case "assignTeam":

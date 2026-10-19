@@ -141,3 +141,28 @@ describe("simulador: Enviar mensaje con plantilla", () => {
     expect(result.steps[1].result).toMatchObject({ type: "message_skipped" });
   });
 });
+
+describe("simulador: salida de condición sin conexión", () => {
+  it("si la salida elegida no tiene destino, el flujo termina (no sigue por la otra salida)", () => {
+    const cond: Node = {
+      id: "c",
+      type: "condition",
+      position: { x: 0, y: 0 },
+      data: { conditions: [{ field: "case_type", operator: "equals", value: "t1" }], logic: "and" },
+    };
+    const yes = action("yes", { actionType: "distributeCase" });
+    const nodes = [trigger(), cond, yes];
+    const edges: Edge[] = [
+      { id: "e0", source: "t", target: "c" },
+      { id: "y", source: "c", target: "yes", sourceHandle: "yes" },
+    ];
+
+    const matches = simulateFlow(nodes, edges, { incomingMessage: "x", mockCase: { caseTypeId: "t1" } });
+    expect(matches.steps.some((s) => s.nodeId === "yes")).toBe(true);
+
+    const noMatch = simulateFlow(nodes, edges, { incomingMessage: "x", mockCase: { caseTypeId: "t2" } });
+    expect(noMatch.steps.some((s) => s.nodeId === "yes")).toBe(false);
+    expect(noMatch.steps[noMatch.steps.length - 1].result.type).toBe("flow_end");
+    expect(noMatch.completed).toBe(true);
+  });
+});

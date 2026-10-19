@@ -132,6 +132,7 @@ export interface GoToFlowNodeData {
 }
 
 export interface HumanTakeoverNodeData {
+  /** Nota interna para el asesor: se guarda en la gestión abierta (admite {{variables}}). */
   message?: string;
 }
 
@@ -186,6 +187,10 @@ export interface ClassifyCaseNodeData {
   caseTypeName?: string;
   stageId?: string;
   stageName?: string;
+  /** Categoría opcional del tipo elegido. Si no pertenece al tipo, el motor la ignora. */
+  categoryId?: string;
+  /** Solo para mostrar en el lienzo y el simulador. */
+  categoryName?: string;
 }
 
 /** Cambiar etapa: etapa abierta del tipo actual de la gestión. */

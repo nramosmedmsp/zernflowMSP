@@ -16,6 +16,7 @@ import type {
   PrivateReplyNodeData,
   AiResponseNodeData,
   EnrollSequenceNodeData,
+  HumanTakeoverNodeData,
 } from "./types";
 import { executeAiResponse } from "./nodes/ai-response";
 import { adaptMessage } from "./platform-adapter";
@@ -27,8 +28,13 @@ import { messagePreview } from "@/lib/message-preview";
 import { CASE_ACTION_TYPES, type CaseActionType } from "./types";
 import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
 import { evaluateCaseCondition, isCaseConditionField } from "./case-conditions";
+import { evaluateContactCondition, type FlowCondition } from "./condition-fields";
+import { interpolateVariables } from "./interpolate";
+import { nodeKind } from "./node-kind";
+import { findWaitingSession, smartDelayTimeoutMs } from "./waiting-session";
 import { decideSendMode, isWindowOpen, parseNodeTemplate, SKIP_REASON_LABELS } from "./send-mode";
-import { executeCaseAction, loadCaseSnapshot } from "./nodes/case-actions";
+import { executeCaseAction, findTargetCase, loadCaseSnapshot } from "./nodes/case-actions";
+import { addSystemNote } from "@/lib/cases/changes";
 import { sendFlowTemplate } from "./nodes/send-template";
 
 export async function executeFlow(
@@ -49,16 +55,9 @@ export async function executeFlow(
 
   // Check for active session waiting for input. Los flujos disparados por un
   // evento de gestión (startFresh) no reanudan la sesión que espera al cliente.
-  const { data: activeSession } = context.startFresh
-    ? { data: null }
-    : await supabase
-        .from("flow_sessions")
-        .select("*")
-        .eq("contact_id", context.contactId)
-        .eq("channel_id", context.channelId)
-        .eq("status", "active")
-        .eq("waiting_for_input", true)
-        .single();
+  const activeSession = context.startFresh
+    ? null
+    : await findWaitingSession(supabase, { contactId: context.contactId, channelId: context.channelId });
 
   if (activeSession) {
     return resumeSession(supabase, activeSession, context);
@@ -205,9 +204,15 @@ export async function resumeSession(
 
   context.variables = (session.variables as Record<string, string>) || {};
 
-  // The resume is driven by a fresh reply; make {{message}} reflect it.
-  if (context.incomingMessage.text) {
-    context.variables.message = context.incomingMessage.text;
+  // The resume is driven by a fresh reply; make {{message}} reflect it. Un clic
+  // en un botón sin texto guarda su carga (payload) como respuesta.
+  const reply =
+    context.incomingMessage.text ||
+    context.incomingMessage.quickReplyPayload ||
+    context.incomingMessage.postbackPayload ||
+    context.incomingMessage.callbackData;
+  if (reply) {
+    context.variables.message = reply;
   }
 
   // Update session
@@ -346,44 +351,6 @@ async function traverseNodes(
   await traverseNodes(supabase, sessionId, nextNode, nodes, edges, context, depth + 1);
 }
 
-/**
- * Tipos que el lienzo guarda como nodo `action` con `data.actionType`
- * (el `switch` de `executeNode` los atiende por su nombre).
- */
-const CANVAS_ACTION_KINDS: readonly string[] = [
-  "addTag",
-  "removeTag",
-  "setCustomField",
-  "httpRequest",
-  "goToFlow",
-  "humanTakeover",
-  "subscribe",
-  "unsubscribe",
-  "abSplit",
-  "smartDelay",
-  "enrollSequence",
-];
-
-/**
- * Tipo efectivo del nodo. El lienzo guarda todas las acciones (etiquetas, campo
- * personalizado, HTTP, suscripción, secuencia, A/B, gestiones...) como nodo
- * `action` con `data.actionType`; aquí se resuelve a ese tipo. Los nodos con
- * `type` propio (formato antiguo) se ejecutan igual que antes.
- */
-function nodeKind(node: FlowNode): string {
-  const type = node.type as string;
-  if (type === "action") {
-    const actionType = (node.data as { actionType?: string } | undefined)?.actionType;
-    if (
-      actionType &&
-      ((CASE_ACTION_TYPES as readonly string[]).includes(actionType) || CANVAS_ACTION_KINDS.includes(actionType))
-    ) {
-      return actionType;
-    }
-  }
-  return type;
-}
-
 function conditionHandleAliases(handle: string): string[] {
   if (handle === "true" || handle === "yes") return ["true", "yes"];
   if (handle === "false" || handle === "no") return ["false", "no"];
@@ -422,7 +389,7 @@ async function executeNode(
     case "goToFlow":
       return executeGoToFlow(supabase, node.data as GoToFlowNodeData, context, sessionId);
     case "humanTakeover":
-      return executeHumanTakeover(supabase, context, sessionId);
+      return executeHumanTakeover(supabase, node.data as HumanTakeoverNodeData, context, sessionId);
     case "subscribe":
     case "unsubscribe":
       return executeSubscription(supabase, kind, context);
@@ -435,10 +402,15 @@ async function executeNode(
     case "abSplit":
       return executeABSplit(node.data as ABSplitNodeData);
     case "smartDelay":
-      // Wait for next input
+      // Espera la siguiente respuesta del cliente. `waiting_until` marca cuándo
+      // vence: pasado ese momento, un mensaje nuevo ya no retoma esta sesión.
       await supabase
         .from("flow_sessions")
-        .update({ waiting_for_input: true, current_node_id: node.id })
+        .update({
+          waiting_for_input: true,
+          waiting_until: new Date(Date.now() + smartDelayTimeoutMs(node.data as { timeout?: unknown; timeoutUnit?: unknown })).toISOString(),
+          current_node_id: node.id,
+        })
         .eq("id", sessionId);
       return "pause";
     case "enrollSequence":
@@ -806,73 +778,36 @@ async function executeCondition(
     ? await loadCaseSnapshot(supabase, context, contact.contact_type_id ?? null)
     : null;
 
-  const results = data.conditions.map((condition) => {
-    let fieldValue: string | undefined;
+  // Lo que se sabe del contacto, una sola vez para todas las condiciones.
+  const tagRows = (contact.contact_tags ?? []) as unknown as Array<{ tags: { name: string } | null }>;
+  const fieldRows = (contact.contact_custom_fields ?? []) as unknown as Array<{
+    value: string;
+    custom_field_definitions: { slug: string } | null;
+  }>;
+  const facts = {
+    platform: context.platform,
+    isSubscribed: contact.is_subscribed,
+    tags: tagRows.flatMap((ct) => (ct.tags?.name ? [ct.tags.name] : [])),
+    customFields: Object.fromEntries(
+      fieldRows.flatMap((f) => (f.custom_field_definitions?.slug ? [[f.custom_field_definitions.slug, f.value] as const] : [])),
+    ),
+    variables: context.variables ?? {},
+  };
 
+  const results = data.conditions.map((condition) => {
     if (caseSnapshot && isCaseConditionField(condition.field)) {
       return evaluateCaseCondition(
         { field: condition.field, operator: condition.operator, value: condition.value },
         caseSnapshot
       );
     }
-
-    // Check built-in fields
-    if (condition.field === "platform") {
-      fieldValue = context.platform;
-    } else if (condition.field === "is_subscribed") {
-      fieldValue = String(contact.is_subscribed);
-    } else if (condition.field.startsWith("tag:")) {
-      const tagName = condition.field.replace("tag:", "");
-      const hasTags = Array.isArray(contact.contact_tags);
-      const hasTag = hasTags && (contact.contact_tags as Array<{ tags: { name: string } | null }>).some(
-        (ct) => ct.tags?.name === tagName
-      );
-      fieldValue = String(hasTag);
-    } else if (condition.field.startsWith("variable:")) {
-      const varName = condition.field.replace("variable:", "");
-      fieldValue = context.variables?.[varName];
-    } else {
-      // Check custom fields
-      const customFields = contact.contact_custom_fields as Array<{
-        value: string;
-        custom_field_definitions: { slug: string } | null;
-      }> | null;
-      const field = customFields?.find(
-        (f) => f.custom_field_definitions?.slug === condition.field
-      );
-      fieldValue = field?.value;
-    }
-
-    return evaluateCondition(fieldValue, condition.operator, condition.value);
+    return evaluateContactCondition(condition as FlowCondition, facts);
   });
 
   const passed =
     data.logic === "and" ? results.every(Boolean) : results.some(Boolean);
 
   return passed ? "handle:true" : "handle:false";
-}
-
-function evaluateCondition(
-  actual: string | undefined,
-  operator: string,
-  expected: string
-): boolean {
-  switch (operator) {
-    case "equals":
-      return actual === expected;
-    case "not_equals":
-      return actual !== expected;
-    case "contains":
-      return actual?.includes(expected) || false;
-    case "exists":
-      return actual !== undefined && actual !== null && actual !== "";
-    case "gt":
-      return Number(actual) > Number(expected);
-    case "lt":
-      return Number(actual) < Number(expected);
-    default:
-      return false;
-  }
 }
 
 async function executeDelay(
@@ -1036,9 +971,34 @@ async function executeGoToFlow(
 
 async function executeHumanTakeover(
   supabase: SupabaseClient<Database>,
+  data: HumanTakeoverNodeData | undefined,
   context: FlowExecutionContext,
   sessionId: string
 ) {
+  // El texto del nodo queda como nota interna (sin autor: la escribe el
+  // sistema) en la gestión abierta, para que el asesor la vea. Un fallo aquí no
+  // debe impedir el traspaso.
+  const note = data?.message ? interpolateVariables(data.message, context.variables || {}).trim() : "";
+  if (note) {
+    try {
+      const target = await findTargetCase(supabase, context);
+      if (!target) {
+        console.warn(`[flows] atención humana (flujo ${context.flowId}): no hay gestión abierta, la nota no se guardó`);
+      } else {
+        const saved = await addSystemNote(supabase, {
+          caseId: target.id,
+          body: note,
+          conversationId: context.conversationId,
+        });
+        if ("error" in saved) {
+          console.error(`[flows] atención humana (flujo ${context.flowId}): no se guardó la nota: ${saved.error}`);
+        }
+      }
+    } catch (err) {
+      console.error("[flows] atención humana: error al guardar la nota", err);
+    }
+  }
+
   // Pause automation on the conversation
   await supabase
     .from("conversations")
@@ -1281,29 +1241,4 @@ async function executeEnrollSequence(
   if (error && error.code !== "23505") {
     console.error("Failed to enroll contact in sequence:", error);
   }
-}
-
-function resolveVariablePath(
-  variables: Record<string, unknown>,
-  path: string
-): unknown {
-  let value: unknown = variables;
-  for (const key of path.split(".")) {
-    if (typeof value !== "object" || value === null) return undefined;
-    value = (value as Record<string, unknown>)[key];
-  }
-  return value;
-}
-
-function interpolateVariables(
-  text: string,
-  variables: Record<string, unknown>
-): string {
-  // Supports dot paths ({{myvar.data.name}}) into object variables (e.g. parsed
-  // httpRequest JSON responses). Unresolved paths leave the token literal.
-  return text.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (token, path: string) => {
-    const value = resolveVariablePath(variables, path);
-    if (value === null || value === undefined) return token;
-    return typeof value === "object" ? JSON.stringify(value) : String(value);
-  });
 }
