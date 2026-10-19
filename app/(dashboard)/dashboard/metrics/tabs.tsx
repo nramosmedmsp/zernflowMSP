@@ -19,6 +19,8 @@ import { MiniBarChart } from "../analytics/analytics-view";
 import { formatDayKey } from "../analytics/day-buckets";
 import { Card, Td, Th, EmptyState, ExportButton, StatCard, dur, pctText, pickStats } from "./ui";
 
+const n = (count: number, one: string, many: string) => `${formatNumber(count)} ${count === 1 ? one : many}`;
+
 interface TabProps {
   report: MetricsReport;
   mode: TimeMode;
@@ -148,7 +150,7 @@ export function FunnelTab({ report, mode }: TabProps) {
           <Card
             key={t.typeId}
             title={t.typeName}
-            subtitle={`${formatNumber(t.total)} gestiones · ${t.won} ganadas · ${t.lost} perdidas · ${t.resolved} resueltas · ${t.other} sin resultado`}
+            subtitle={`${n(t.total, "gestión", "gestiones")} · ${n(t.won, "ganada", "ganadas")} · ${n(t.lost, "perdida", "perdidas")} · ${n(t.resolved, "resuelta", "resueltas")} · ${formatNumber(t.other)} sin resultado`}
           >
             {t.stages.length === 0 ? (
               <p className="text-sm text-muted-foreground">Este tipo no tiene etapas abiertas configuradas.</p>
@@ -204,7 +206,7 @@ export function ResultsTab({ report }: { report: MetricsReport }) {
           <>
             <MiniBarChart
               data={days}
-              labels={r.byDay.map((d) => `${formatDayKey(d.day)}: ${d.won} ganadas, ${d.lost} perdidas, ${d.resolved} resueltas`)}
+              labels={r.byDay.map((d) => `${formatDayKey(d.day)}: ${n(d.won, "ganada", "ganadas")}, ${n(d.lost, "perdida", "perdidas")}, ${n(d.resolved, "resuelta", "resueltas")}`)}
               maxVal={Math.max(...days, 0)}
               color="bg-green-500"
             />
