@@ -1,6 +1,6 @@
 import { getWorkspace } from "@/lib/workspace";
 import Link from "next/link";
-import { GitBranch, Sparkles, Plug } from "lucide-react";
+import { GitBranch, Sparkles, Plug, FlaskConical, Network } from "lucide-react";
 import { CreateFlowButton } from "@/components/create-flow-button";
 import { ImportFlowButton, ExportFlowButton, DeleteFlowButton } from "@/components/flow-actions";
 import type { FlowStatus } from "@/lib/types/database";
@@ -53,6 +53,20 @@ export default async function FlowsPage() {
           </div>
           <div className="flex items-center gap-3">
             <ImportFlowButton />
+            <Link
+              href="/dashboard/flows/lab"
+              className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            >
+              <FlaskConical className="h-4 w-4" />
+              Laboratorio
+            </Link>
+            <Link
+              href="/dashboard/flows/map"
+              className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            >
+              <Network className="h-4 w-4" />
+              Mapa
+            </Link>
             <Link
               href="/dashboard/flows/templates"
               className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"

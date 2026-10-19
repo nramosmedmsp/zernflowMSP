@@ -6,6 +6,7 @@
 import type { CaseRouting } from "@/lib/types/database";
 import { assignCase, loadAssignmentContext, type AssignmentContextCache } from "./assign";
 import { sendAutoTemplate } from "./auto-template";
+import { planActivation } from "./decisions";
 import { isOpenAt, nextOpeningFor } from "./hours";
 import {
   caseLink,
@@ -119,30 +120,34 @@ export async function activateScheduledCases(
         members: ctx.members,
         workspaceMode: ctx.workspaceMode,
       });
-      if (!isOpenAt(ctx.hours, teamId, now)) {
-        const opening = nextOpeningFor(ctx.hours, teamId, now);
-        if (opening && opening.getTime() > now.getTime() && row.scheduled_for) {
-          const { data: moved } = await db
-            .from("cases")
-            .update({ scheduled_for: opening.toISOString() })
-            .eq("id", row.id)
-            .eq("status", "scheduled")
-            .eq("scheduled_for", row.scheduled_for)
-            .select("id");
-          if (moved && moved.length > 0) {
-            deferred++;
-            await logActivity(db, {
-              workspace_id: row.workspace_id,
-              type: "case_scheduled",
-              case_id: row.id,
-              contact_id: row.contact_id,
-              from_value: row.scheduled_for,
-              to_value: opening.toISOString(),
-              meta: { rescheduled: true, reason: "off_hours" },
-            });
-          }
-          continue;
+      const open = isOpenAt(ctx.hours, teamId, now);
+      const plan = planActivation({
+        isOpen: open,
+        nextOpening: open ? null : nextOpeningFor(ctx.hours, teamId, now),
+        now,
+        scheduledFor: row.scheduled_for,
+      });
+      if (plan.action === "defer" && row.scheduled_for) {
+        const { data: moved } = await db
+          .from("cases")
+          .update({ scheduled_for: plan.to.toISOString() })
+          .eq("id", row.id)
+          .eq("status", "scheduled")
+          .eq("scheduled_for", row.scheduled_for)
+          .select("id");
+        if (moved && moved.length > 0) {
+          deferred++;
+          await logActivity(db, {
+            workspace_id: row.workspace_id,
+            type: "case_scheduled",
+            case_id: row.id,
+            contact_id: row.contact_id,
+            from_value: row.scheduled_for,
+            to_value: plan.to.toISOString(),
+            meta: { rescheduled: true, reason: "off_hours" },
+          });
         }
+        continue;
       }
 
       const { data: claimed } = await db

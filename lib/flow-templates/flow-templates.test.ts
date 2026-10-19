@@ -261,7 +261,7 @@ describe.each(FLOW_TEMPLATES.map((t) => [t.id, t] as const))("grafo de %s", (_id
     expect(rows).toHaveLength(1);
     const row = rows[0];
     expect(BUILDER_TRIGGER_TYPES as readonly string[]).toContain(row.type);
-    expect(["keyword", "welcome", "default", "case_stage_changed", "case_closed", "client_no_reply"]).toContain(row.type);
+    expect(["keyword", "welcome", "default", "case_opened", "case_stage_changed", "case_closed", "client_no_reply"]).toContain(row.type);
     const config = row.config as Record<string, unknown>;
     if (row.type === "keyword") expect((config.keywords as unknown[]).length).toBeGreaterThan(0);
     if (row.type === "case_stage_changed") {
@@ -300,7 +300,9 @@ describe("disparadores pedidos", () => {
 
   it("eventos de gestión", () => {
     const t = (id: string) => ({ ...trigger(id).data, refs: trigger(id).refs });
-    expect(t("ecommerce-bienvenida")).toMatchObject({ triggerType: "welcome" });
+    expect(t("ecommerce-bienvenida")).toMatchObject({ triggerType: "case_opened" });
+    // Clasifica también a quien vuelve: solo gestiones nuevas que quedan sin clasificar.
+    expect(t("ecommerce-bienvenida")).toMatchObject({ label: "Gestión nueva sin clasificar", onlyUnclassified: true });
     expect(t("ecommerce-datos-pago")).toMatchObject({
       triggerType: "case_stage_changed",
       refs: { caseType: "Venta", stage: "Pedido o enlace de pago enviado" },

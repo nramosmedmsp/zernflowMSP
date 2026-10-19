@@ -32,6 +32,7 @@ import {
   getContactCases,
   markNotificationsRead,
   openManualCase,
+  setConversationBotPaused,
   setMyAvailability,
   takeCase,
   transferCase,
@@ -190,6 +191,45 @@ describe("acciones de gestiones: permisos", () => {
     });
     as(SUP);
     expect(await openManualCase({ contactId, assignee: BETO })).toMatchObject({ ok: true });
+  });
+
+  it("pausar o reanudar el bot: solo quien puede editar la gestión; valida la conversación y queda en la actividad", async () => {
+    const [conversation] = fake.seed("conversations", [
+      { workspace_id: WS, contact_id: contactId, channel_id: "ch", late_conversation_id: "conv-1", is_automation_paused: false },
+    ]);
+    const conversationId = conversation.id as string;
+    const [otherContact] = fake.seed("contacts", [{ workspace_id: WS, display_name: "Otra" }]);
+    const [otherConversation] = fake.seed("conversations", [
+      { workspace_id: WS, contact_id: otherContact.id, channel_id: "ch", late_conversation_id: "conv-2", is_automation_paused: false },
+    ]);
+    const paused = (id: string) => fake.rows("conversations").find((c) => c.id === id)!.is_automation_paused;
+
+    // Un asesor sin relación con el contacto no la ve ni la toca.
+    as(BETO);
+    expect(await setConversationBotPaused(caseId, conversationId, true)).toEqual({ error: CASE_NOT_FOUND });
+    expect(paused(conversationId)).toBe(false);
+
+    // El asesor de la gestión pausa y reanuda; queda quién lo hizo.
+    as(ANA);
+    expect(await setConversationBotPaused(caseId, conversationId, true)).toEqual({ ok: true, paused: true });
+    expect(paused(conversationId)).toBe(true);
+    expect(await setConversationBotPaused(caseId, conversationId, false)).toEqual({ ok: true, paused: false });
+    expect(paused(conversationId)).toBe(false);
+    expect(fake.rows("activity").filter((a) => String(a.type).startsWith("automation_"))).toMatchObject([
+      { type: "automation_paused", actor_id: ANA, case_id: caseId, conversation_id: conversationId },
+      { type: "automation_resumed", actor_id: ANA, case_id: caseId, conversation_id: conversationId },
+    ]);
+
+    // Una conversación de otro contacto no se puede tocar con esta gestión, ni con datos no válidos.
+    expect(await setConversationBotPaused(caseId, otherConversation.id as string, true)).toEqual({ error: "Conversación no encontrada." });
+    expect(paused(otherConversation.id as string)).toBe(false);
+    expect(await setConversationBotPaused(caseId, "no-es-un-id", true)).toEqual({ error: "Datos no válidos." });
+    expect(await setConversationBotPaused(caseId, conversationId, "si" as never)).toEqual({ error: "Datos no válidos." });
+
+    // Con la gestión cerrada ya no se puede editar: no hay botón.
+    await closeCase({ caseId, kind: "won" });
+    expect(await setConversationBotPaused(caseId, conversationId, true)).toHaveProperty("error");
+    expect(paused(conversationId)).toBe(false);
   });
 
   it("disponibilidad y notificaciones: cada uno las suyas", async () => {

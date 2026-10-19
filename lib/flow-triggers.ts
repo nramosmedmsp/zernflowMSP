@@ -10,6 +10,7 @@ export const BUILDER_TRIGGER_TYPES = [
   "default",
   "comment_keyword",
   // Fase 2: eventos de gestión (lib/flow-engine/case-triggers.ts).
+  "case_opened",
   "case_stage_changed",
   "case_closed",
   "client_no_reply",
@@ -63,11 +64,25 @@ export function buildDesiredTriggers(
       } else if (type === "postback" || type === "quick_reply") {
         const payload = data.payload ?? nodeConfig.payload;
         if (payload !== undefined) config.payload = payload;
-      } else if (type === "case_stage_changed" || type === "case_closed" || type === "client_no_reply") {
-        // El panel guarda caseTypeId, stageId, outcome y minutes; la base los
-        // lee como case_type_id, stage_id, outcome y minutes (CaseTriggerConfig).
+      } else if (
+        type === "case_opened" ||
+        type === "case_stage_changed" ||
+        type === "case_closed" ||
+        type === "client_no_reply"
+      ) {
+        // El panel guarda caseTypeId, stageId, outcome, minutes, onlyUnclassified y
+        // contactTypeIds; la base los lee como case_type_id, stage_id, outcome,
+        // minutes, only_unclassified y contact_type_ids (CaseTriggerConfig).
         const caseTypeId = data.caseTypeId ?? nodeConfig.case_type_id;
         if (typeof caseTypeId === "string" && caseTypeId) config.case_type_id = caseTypeId;
+        if (type === "case_opened") {
+          if ((data.onlyUnclassified ?? nodeConfig.only_unclassified) === true) config.only_unclassified = true;
+          const contactTypeIds = data.contactTypeIds ?? nodeConfig.contact_type_ids;
+          if (Array.isArray(contactTypeIds)) {
+            const ids = contactTypeIds.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+            if (ids.length > 0) config.contact_type_ids = ids;
+          }
+        }
         if (type === "case_stage_changed") {
           const stageId = data.stageId ?? nodeConfig.stage_id;
           if (typeof stageId === "string" && stageId) config.stage_id = stageId;

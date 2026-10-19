@@ -3,8 +3,9 @@
 
 import type { Json } from "@/lib/types/database";
 import { assignCase, type AssignOutcome } from "./assign";
+import { pickSuggestedCaseTypeId, resolveReopenStageId } from "./decisions";
 import { runEventRules } from "./effects";
-import { emitStageChanged } from "./events";
+import { emitCaseOpened, emitStageChanged } from "./events";
 import { firstOpenStageId, loadContact, logActivity, type CaseRow, type Db } from "./io";
 import type { CaseMessenger } from "./messaging";
 import { sendOffHoursReply, type OffHoursReplyOutcome } from "./off-hours";
@@ -24,14 +25,10 @@ export async function suggestedCaseTypeId(db: Db, workspaceId: string, contactTy
   if (!contactTypeId) return null;
   const { data } = await db
     .from("case_types")
-    .select("id")
+    .select("id, position, suggested_for_contact_type_ids")
     .eq("workspace_id", workspaceId)
-    .is("archived_at", null)
-    .contains("suggested_for_contact_type_ids", [contactTypeId])
-    .order("position", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  return data?.id ?? null;
+    .is("archived_at", null);
+  return pickSuggestedCaseTypeId(data ?? [], contactTypeId);
 }
 
 /** Etapa a la que vuelve una gestión reabierta: la anterior al cierre si sigue abierta. */
@@ -45,18 +42,13 @@ async function reopenStageId(db: Db, row: CaseRow): Promise<string | null> {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (closed?.from_value) {
-    const { data: stage } = await db
-      .from("case_stages")
-      .select("id")
-      .eq("id", closed.from_value)
-      .eq("case_type_id", row.case_type_id)
-      .eq("kind", "open")
-      .is("archived_at", null)
-      .maybeSingle();
-    if (stage) return stage.id;
-  }
-  return firstOpenStageId(db, row.case_type_id);
+  const { data: openStages } = await db
+    .from("case_stages")
+    .select("id, position")
+    .eq("case_type_id", row.case_type_id)
+    .eq("kind", "open")
+    .is("archived_at", null);
+  return resolveReopenStageId(closed?.from_value, openStages ?? []);
 }
 
 function parseOpenResult(data: Json | null): { caseId: string; created: boolean } | null {
@@ -88,7 +80,7 @@ async function latestOpenCase(db: Db, contactId: string): Promise<CaseRow | null
  * 2. sella last_inbound_at y, si no había espera, waiting_since;
  * 3. si no tiene responsable, aplica el reparto (fuera de horario queda sin
  *    asignar y el cron la reparte al abrir);
- * 4. no pausa el bot;
+ * 4. no pausa el bot; si la gestión es nueva, emite case_opened para los flujos;
  * 5. fuera de horario, envía la respuesta automática si está activa.
  */
 export async function handleInbound(
@@ -230,6 +222,9 @@ export async function handleInbound(
           actorId: null,
         });
       }
+      // Los flujos "Gestión nueva" corren con el tipo de contacto que quedó tras las reglas.
+      const afterRules = await loadContact(db, contact.workspace_id, contact.id);
+      emitCaseOpened(db, row, afterRules?.contact_type_id ?? contactTypeId);
     }
   }
 

@@ -583,11 +583,31 @@ describe("client_no_reply", () => {
     expect(emitted("client_no_reply")).toHaveLength(2);
   });
 
-  it("si el cliente escribió o espera respuesta, no cuenta como sin responder", async () => {
+  it("si el cliente escribió después del último mensaje saliente, no cuenta como sin responder", async () => {
     setNoReplyTriggers(30);
     caseById(caseId).waiting_since = minutesAfter(OUT, 5);
     caseById(caseId).last_inbound_at = minutesAfter(OUT, 5);
     expect((await detect(minutesAfter(OUT, 60))).emitted).toBe(0);
+  });
+
+  it("también avisa si el cliente espera respuesta humana (waiting_since) y el último mensaje es del bot", async () => {
+    setNoReplyTriggers(30);
+    // El cliente escribió y el bot contestó: waiting_since sigue puesto (solo lo limpia una persona).
+    Object.assign(caseById(caseId), { waiting_since: minutesAfter(OUT, -10), last_inbound_at: minutesAfter(OUT, -10) });
+    expect((await detect(minutesAfter(OUT, 20))).emitted).toBe(0);
+    expect((await detect(minutesAfter(OUT, 40))).emitted).toBe(1);
+    expect(caseById(caseId)).toMatchObject({ no_reply_event_outbound_at: OUT, no_reply_event_minutes: 30 });
+    // No se repite para el mismo mensaje saliente.
+    expect((await detect(minutesAfter(OUT, 600))).emitted).toBe(0);
+    expect(emitted("client_no_reply")).toHaveLength(1);
+    // Y waiting_since no se tocó.
+    expect(caseById(caseId).waiting_since).toBe(minutesAfter(OUT, -10));
+  });
+
+  it("el aviso se emite aunque el bot esté en pausa (solo la espera del cliente y el mensaje saliente cuentan)", async () => {
+    setNoReplyTriggers(30);
+    fake.rows("conversations")[0].is_automation_paused = true;
+    expect((await detect(minutesAfter(OUT, 40))).emitted).toBe(1);
   });
 
   it("sin disparadores activos y publicados no emite nada", async () => {
@@ -626,6 +646,47 @@ describe("client_no_reply", () => {
 describe("eventos de gestión para los flujos", () => {
   beforeEach(async () => {
     await setup();
+  });
+
+  it("una gestión entrante nueva emite case_opened (clasificada según el tipo de contacto) y reutilizarla o reabrirla no", async () => {
+    // Prospecto (tipo por defecto): se abre como Venta.
+    const first = (await handleInbound(db(), { workspaceId: WS, contactId, conversationId }))!;
+    expect(first.opened).toBe(true);
+    expect(emitted("case_opened")).toEqual([
+      {
+        type: "case_opened",
+        workspaceId: WS,
+        caseId: first.caseId,
+        contactId,
+        caseTypeId: caseById(first.caseId).case_type_id,
+        stageId: caseById(first.caseId).stage_id,
+        contactTypeId: fake.rows("contacts")[0].contact_type_id,
+      },
+    ]);
+    expect(caseById(first.caseId).case_type_id).not.toBeNull();
+
+    // Segundo mensaje con la gestión abierta: se reutiliza, no hay evento.
+    flowEvents.mockClear();
+    await handleInbound(db(), { workspaceId: WS, contactId, conversationId });
+    expect(emitted("case_opened")).toHaveLength(0);
+
+    // Cerrada hace menos de 24 h: se reabre (case_stage_changed), no es una gestión nueva.
+    await closeCase(db(), { caseId: first.caseId, kind: "won", actorId: ANA });
+    flowEvents.mockClear();
+    const reopened = (await handleInbound(db(), { workspaceId: WS, contactId, conversationId }))!;
+    expect(reopened).toMatchObject({ reopened: true, opened: false });
+    expect(emitted("case_opened")).toHaveLength(0);
+  });
+
+  it("case_opened de un cliente que vuelve: sin tipo de gestión sugerido queda sin clasificar y lleva su tipo de contacto", async () => {
+    const customer = fake.rows("contact_types").find((t) => t.name === "Cliente")!;
+    fake.rows("contacts")[0].contact_type_id = customer.id;
+    const r = (await handleInbound(db(), { workspaceId: WS, contactId, conversationId }))!;
+    expect(r.opened).toBe(true);
+    expect(caseById(r.caseId).case_type_id).toBeNull();
+    expect(emitted("case_opened")).toEqual([
+      { type: "case_opened", workspaceId: WS, caseId: r.caseId, contactId, caseTypeId: null, stageId: null, contactTypeId: customer.id },
+    ]);
   });
 
   it("cambiar de etapa emite case_stage_changed con la etapa nueva", async () => {

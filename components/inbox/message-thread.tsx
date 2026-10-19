@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Paperclip, Bot, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical } from "lucide-react";
+import { Paperclip, Bot, BotOff, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import { formatDate, formatTime } from "@/lib/format";
-import type { CaseView } from "@/lib/actions/cases";
+import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
 import type { Database, ConversationStatus } from "@/lib/types/database";
 import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
@@ -213,6 +213,36 @@ export function MessageThread({
     setMessages(initialMessages);
   }, [initialMessages]);
 
+  // Pausar o reanudar el bot (solo quien puede editar la gestión activa). El valor
+  // local cubre el tiempo hasta que llega la actualización de la conversación.
+  const [botBusy, setBotBusy] = useState(false);
+  const [botPausedLocal, setBotPausedLocal] = useState<boolean | null>(null);
+  const serverBotPaused = conversation?.is_automation_paused ?? false;
+  useEffect(() => {
+    setBotPausedLocal(null);
+  }, [conversationId, serverBotPaused]);
+  const botPaused = botPausedLocal ?? serverBotPaused;
+  const canToggleBot = !!noteCase && noteCase.status === "open" && noteCase.permissions.canEdit;
+
+  const toggleBotPaused = useCallback(async () => {
+    if (!conversationId || !noteCase || botBusy) return;
+    const next = !botPaused;
+    setBotBusy(true);
+    try {
+      const result = await setConversationBotPaused(noteCase.id, conversationId, next);
+      if ("error" in result) {
+        alert(result.error);
+      } else {
+        setBotPausedLocal(result.paused);
+        onCaseActivity?.();
+      }
+    } catch {
+      alert("No se pudo cambiar el estado del bot");
+    } finally {
+      setBotBusy(false);
+    }
+  }, [conversationId, noteCase, botBusy, botPaused, onCaseActivity]);
+
   const refetchMessages = useCallback(async () => {
     if (!conversationId) return;
     try {
@@ -402,10 +432,31 @@ export function MessageThread({
           >
             {CONVERSATION_STATUS_LABELS[conversation.status]}
           </span>
-          {conversation.is_automation_paused && (
-            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-medium text-orange-700">
-              Bot en pausa
-            </span>
+          {canToggleBot ? (
+            <button
+              onClick={() => void toggleBotPaused()}
+              disabled={botBusy}
+              title={
+                botPaused
+                  ? "El bot no responde en este chat. Reanúdalo para que vuelva a atender los mensajes del cliente."
+                  : "Pausa el bot en este chat para que no responda mientras atiendes."
+              }
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50",
+                botPaused
+                  ? "border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-900/60 dark:bg-orange-950/30 dark:text-orange-300"
+                  : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              {botBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : botPaused ? <Bot className="h-3 w-3" /> : <BotOff className="h-3 w-3" />}
+              {botPaused ? "Reanudar bot" : "Pausar bot"}
+            </button>
+          ) : (
+            botPaused && (
+              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-medium text-orange-700">
+                Bot en pausa
+              </span>
+            )
           )}
           <div className="flex items-center gap-1">
             {conversation.status !== "closed" && (

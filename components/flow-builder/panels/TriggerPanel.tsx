@@ -23,6 +23,10 @@ interface TriggerPanelData {
   stageName?: string;
   outcome?: "won" | "lost" | "resolved";
   minutes?: number;
+  /** case_opened: solo gestiones sin tipo, y/o solo ciertos tipos de contacto. */
+  onlyUnclassified?: boolean;
+  contactTypeIds?: string[];
+  contactTypeNames?: string[];
   [key: string]: unknown;
 }
 
@@ -38,6 +42,7 @@ const triggerTypes: Array<{ value: TriggerType; label: string; description: stri
   { value: "welcome", label: "Bienvenida", description: "Se activa cuando el cliente inicia una conversación" },
   { value: "default", label: "Por defecto", description: "Se activa cuando ningún otro disparador coincide" },
   { value: "comment_keyword", label: "Palabra clave en comentario", description: "Se activa con palabras clave en los comentarios de una publicación" },
+  { value: "case_opened", label: "Gestión nueva", description: "Se activa cuando se abre una gestión entrante nueva: el primer mensaje de un cliente nuevo o el de un cliente que vuelve sin gestión abierta" },
   { value: "case_stage_changed", label: "Cambio de etapa", description: "Se activa cuando una gestión cambia de etapa" },
   { value: "case_closed", label: "Gestión cerrada", description: "Se activa cuando una gestión se gana, se pierde o se resuelve" },
   { value: "client_no_reply", label: "Cliente sin responder", description: "Se activa cuando el cliente no responde al último mensaje que le enviaste" },
@@ -66,9 +71,65 @@ function CaseTriggerOptions({
   const caseTypeId = data.caseTypeId || "";
   const type = catalog.caseTypes.find((t) => t.id === caseTypeId);
   const stages = openStages(type);
+  const contactTypeIds = data.contactTypeIds ?? [];
+
+  function toggleContactType(id: string, checked: boolean) {
+    const next = checked ? [...contactTypeIds, id] : contactTypeIds.filter((v) => v !== id);
+    onChange({
+      ...data,
+      contactTypeIds: next,
+      contactTypeNames: catalog.contactTypes.filter((t) => next.includes(t.id)).map((t) => t.name),
+    });
+  }
 
   return (
     <div className="space-y-4">
+      {triggerType === "case_opened" && (
+        <>
+          <label className="flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={data.onlyUnclassified === true}
+              onChange={(e) => onChange({ ...data, onlyUnclassified: e.target.checked })}
+              className="mt-0.5 h-4 w-4 rounded border-input text-emerald-500 focus:ring-emerald-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-foreground">Solo gestiones sin clasificar</span>
+              <span className="block text-xs text-muted-foreground">
+                Una gestión nueva queda sin clasificar cuando ningún tipo de gestión se sugiere para el tipo de contacto
+                del cliente (por ejemplo, un cliente que vuelve). Si lo dejas sin marcar, se activa con cualquier
+                gestión nueva.
+              </span>
+            </span>
+          </label>
+          <div>
+            <label className="mb-2 block text-xs font-semibold text-foreground">Tipos de contacto (opcional)</label>
+            {catalog.contactTypes.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{catalog.loading ? "Cargando..." : "No hay tipos de contacto."}</p>
+            ) : (
+              <div className="space-y-1.5">
+                {catalog.contactTypes.map((t) => (
+                  <label key={t.id} className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={contactTypeIds.includes(t.id)}
+                      onChange={(e) => toggleContactType(t.id, e.target.checked)}
+                      className="h-4 w-4 rounded border-input text-emerald-500 focus:ring-emerald-500"
+                    />
+                    {t.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Sin ninguno marcado, se activa para cualquier tipo de contacto. Solo cuenta la gestión que abre un mensaje
+              del cliente: reabrir una gestión cerrada hace menos de 24 h no la activa.
+            </p>
+          </div>
+        </>
+      )}
+
+      {triggerType !== "case_opened" && (
       <div>
         <label className="mb-2 block text-xs font-semibold text-foreground">Tipo de gestión (opcional)</label>
         <select
@@ -93,6 +154,7 @@ function CaseTriggerOptions({
           ))}
         </select>
       </div>
+      )}
 
       {triggerType === "case_stage_changed" && (
         <div>
@@ -155,15 +217,17 @@ function CaseTriggerOptions({
             className={caseSelectClass}
           />
           <p className="mt-1.5 text-xs text-muted-foreground">
-            Se activa cuando pasan estos minutos desde tu último mensaje sin que el cliente responda. Si lo dejas
-            vacío, son 60 minutos. Al enviar un mensaje desde este flujo, la cuenta no se reinicia.
+            Se activa cuando pasan estos minutos desde el último mensaje que recibió el cliente (del bot o de una
+            persona) sin que responda. Si lo dejas vacío, son 60 minutos. Al enviar un mensaje desde este flujo, la
+            cuenta no se reinicia.
           </p>
         </div>
       )}
 
       <p className="text-xs text-muted-foreground">
-        Estos flujos corren en la conversación más reciente del contacto, y no corren si pausaste la automatización
-        en ella. Un flujo no se vuelve a activar a sí mismo por los cambios que él mismo hace en la gestión.
+        Estos flujos corren en la conversación más reciente del contacto, incluso si pausaste el bot en ella (la pausa
+        solo evita que el bot responda a los mensajes del cliente). Un flujo no se vuelve a activar a sí mismo por los
+        cambios que él mismo hace en la gestión.
       </p>
     </div>
   );
@@ -216,7 +280,7 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
   const showKeywords = triggerType === "keyword" || triggerType === "comment_keyword";
   const showPayload = triggerType === "postback" || triggerType === "quick_reply";
   const showCaseOptions =
-    triggerType === "case_stage_changed" || triggerType === "case_closed" || triggerType === "client_no_reply";
+    triggerType === "case_opened" || triggerType === "case_stage_changed" || triggerType === "case_closed" || triggerType === "client_no_reply";
 
   return (
     <div className="space-y-5">

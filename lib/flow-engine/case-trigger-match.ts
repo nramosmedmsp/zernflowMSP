@@ -4,12 +4,13 @@
 
 import type { OutcomeKind } from "@/lib/types/database";
 
-export type CaseFlowEventType = "case_stage_changed" | "case_closed" | "client_no_reply";
+export type CaseFlowEventType = "case_opened" | "case_stage_changed" | "case_closed" | "client_no_reply";
 
 /** Umbral de client_no_reply cuando el disparador no indica `minutes`. */
 export const DEFAULT_NO_REPLY_MINUTES = 60;
 
 export const CASE_TRIGGER_TYPES: readonly CaseFlowEventType[] = [
+  "case_opened",
   "case_stage_changed",
   "case_closed",
   "client_no_reply",
@@ -25,6 +26,8 @@ export interface CaseEventLike {
   caseTypeId: string | null;
   stageId: string | null;
   outcome?: OutcomeKind;
+  /** case_opened: tipo de contacto del cliente al abrirse la gestión. */
+  contactTypeId?: string | null;
 }
 
 export interface TriggerLike {
@@ -34,6 +37,10 @@ export interface TriggerLike {
 
 function configObject(config: unknown): Record<string, unknown> {
   return config && typeof config === "object" && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
+}
+
+function idListOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.trim() !== "") : [];
 }
 
 function idOf(value: unknown): string | null {
@@ -50,6 +57,8 @@ export function triggerMinutes(config: unknown): number {
 /**
  * ¿La configuración del disparador coincide con el evento? Todas las claves
  * son opcionales: sin ellas aplica a cualquier tipo, etapa o resultado.
+ * case_opened admite además `only_unclassified` (solo gestiones sin tipo) y
+ * `contact_type_ids` (solo si el cliente es de alguno de esos tipos).
  * `stampedMinutes` es `cases.no_reply_event_minutes` (solo client_no_reply):
  * se ejecutan únicamente los disparadores con ese mismo `minutes`.
  */
@@ -63,6 +72,13 @@ export function matchesCaseEvent(
 
   const typeId = idOf(config.case_type_id);
   if (typeId && typeId !== event.caseTypeId) return false;
+
+  if (event.type === "case_opened") {
+    if (config.only_unclassified === true && event.caseTypeId) return false;
+    const contactTypes = idListOf(config.contact_type_ids);
+    if (contactTypes.length > 0 && !(event.contactTypeId && contactTypes.includes(event.contactTypeId))) return false;
+    return true;
+  }
 
   if (event.type === "case_stage_changed") {
     const stageId = idOf(config.stage_id);

@@ -461,6 +461,39 @@ export async function classifyCase(
   return engine.classifyCase(ctx.s.db, { caseId: ctx.access.row.id, caseTypeId, actorId: ctx.s.userId });
 }
 
+/**
+ * Pausa o reanuda el bot en una conversación del contacto de la gestión
+ * (botón de la cabecera del chat). Exige poder editar la gestión; queda en el
+ * registro de actividad.
+ */
+export async function setConversationBotPaused(
+  caseId: string,
+  conversationId: string,
+  paused: boolean,
+): Promise<CaseActionResult<{ paused: boolean }>> {
+  if (!isId(conversationId) || typeof paused !== "boolean") return { error: INVALID };
+  const ctx = await withCase(caseId, (p) => p.canEdit);
+  if ("error" in ctx) return ctx;
+  const { s, access } = ctx;
+  // La conversación debe ser del contacto de la gestión (en este espacio).
+  const { data: conversation } = await s.db
+    .from("conversations")
+    .select("id")
+    .eq("id", conversationId)
+    .eq("workspace_id", s.workspaceId)
+    .eq("contact_id", access.row.contact_id)
+    .maybeSingle();
+  if (!conversation) return { error: "Conversación no encontrada." };
+  const result = await engine.setConversationBotPaused(s.db, {
+    workspaceId: s.workspaceId,
+    conversationId,
+    paused,
+    actorId: s.userId,
+    caseId: access.row.id,
+  });
+  return "error" in result ? result : { ok: true, paused: result.paused };
+}
+
 /** Cambia a otra etapa abierta del tipo. */
 export async function changeCaseStage(caseId: string, stageId: string): Promise<CaseActionResult> {
   if (!isId(stageId)) return { error: INVALID };

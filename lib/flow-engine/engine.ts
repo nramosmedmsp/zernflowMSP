@@ -27,12 +27,14 @@ import { demoTemplateText, isDemoChannel } from "@/lib/demo";
 import { messagePreview } from "@/lib/message-preview";
 import { CASE_ACTION_TYPES, type CaseActionType } from "./types";
 import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
-import { evaluateCaseCondition, isCaseConditionField } from "./case-conditions";
-import { evaluateContactCondition, type FlowCondition } from "./condition-fields";
+import { isCaseConditionField } from "./case-conditions";
+import { evaluateConditionNode } from "./condition-eval";
+import { chooseABPath, delayDurationMs, selectNextEdge } from "./graph";
 import { interpolateVariables } from "./interpolate";
-import { nodeKind } from "./node-kind";
+import { MENU_VARIABLE, recordMenu } from "./menu-reply";
+import { nodeKind, persistsSessionVariables } from "./node-kind";
 import { findWaitingSession, smartDelayTimeoutMs } from "./waiting-session";
-import { decideSendMode, isWindowOpen, parseNodeTemplate, SKIP_REASON_LABELS } from "./send-mode";
+import { computeFlowWindowOpen, decideSendMode, messageHasContent, parseNodeTemplate, SKIP_REASON_LABELS } from "./send-mode";
 import { executeCaseAction, findTargetCase, loadCaseSnapshot } from "./nodes/case-actions";
 import { addSystemNote } from "@/lib/cases/changes";
 import { sendFlowTemplate } from "./nodes/send-template";
@@ -306,11 +308,7 @@ async function traverseNodes(
   // Persist variables written by output-producing nodes so they survive
   // pauses (resumeSession reloads them from the session row). Los nodos de
   // gestión guardan case_id (la gestión que abrieron).
-  if (
-    nodeKind(node) === "aiResponse" ||
-    nodeKind(node) === "httpRequest" ||
-    nodeKind(node) !== (node.type as string)
-  ) {
+  if (persistsSessionVariables(node)) {
     await supabase
       .from("flow_sessions")
       .update({ variables: (context.variables ?? {}) as Json })
@@ -321,20 +319,10 @@ async function traverseNodes(
   if (result === "pause") return;
 
   // Find next node(s)
-  let nextEdge: FlowEdge | undefined;
-
-  if (result && typeof result === "string" && result.startsWith("handle:")) {
-    // Condition/split nodes specify which handle to follow
-    const handle = result.replace("handle:", "");
-    // El lienzo dibuja las salidas de la condición como "yes"/"no" y las
-    // plantillas como "true"/"false": se aceptan ambas.
-    const accepted = conditionHandleAliases(handle);
-    nextEdge = edges.find(
-      (e) => e.source === node.id && !!e.sourceHandle && accepted.includes(e.sourceHandle)
-    );
-  } else {
-    nextEdge = edges.find((e) => e.source === node.id);
-  }
+  // Condition/split nodes specify which handle to follow ("handle:<nombre>").
+  const handle =
+    result && typeof result === "string" && result.startsWith("handle:") ? result.replace("handle:", "") : undefined;
+  const nextEdge = selectNextEdge(edges, node.id, handle);
 
   if (!nextEdge) {
     await completeSession(supabase, sessionId);
@@ -349,12 +337,6 @@ async function traverseNodes(
 
   // Continue to next node
   await traverseNodes(supabase, sessionId, nextNode, nodes, edges, context, depth + 1);
-}
-
-function conditionHandleAliases(handle: string): string[] {
-  if (handle === "true" || handle === "yes") return ["true", "yes"];
-  if (handle === "false" || handle === "no") return ["false", "no"];
-  return [handle];
 }
 
 async function executeNode(
@@ -492,12 +474,6 @@ async function stampFlowOutbound(
   await stampBotOutbound(supabase, { contactId: context.contactId });
 }
 
-/** ¿El mensaje lleva algo que enviar como mensaje libre (texto, media, botones o carrusel)? */
-function messageHasContent(msg: SendMessageNodeData["messages"][number]): boolean {
-  const raw = msg as { text?: string; mediaUrl?: string; imageUrl?: string };
-  return !!(raw.text?.trim() || raw.mediaUrl || raw.imageUrl || msg.carousel?.elements?.length);
-}
-
 /**
  * Ventana de 24 h de WhatsApp. Si el flujo nació de un mensaje del cliente está
  * abierta; si no (evento, espera que se reanuda), se mira el último mensaje
@@ -508,9 +484,8 @@ async function isFlowWindowOpen(
   context: FlowExecutionContext
 ): Promise<boolean> {
   const incoming = context.incomingMessage;
-  if (incoming.text || incoming.postbackPayload || incoming.quickReplyPayload || incoming.callbackData) {
-    return true;
-  }
+  // Con un mensaje del cliente la ventana está abierta: sin consultar la base.
+  if (computeFlowWindowOpen(incoming, null)) return true;
   const { data } = await supabase
     .from("cases")
     .select("last_inbound_at")
@@ -519,7 +494,7 @@ async function isFlowWindowOpen(
     .order("last_inbound_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  return isWindowOpen(data?.last_inbound_at);
+  return computeFlowWindowOpen(incoming, data?.last_inbound_at);
 }
 
 /** Envía la plantilla del nodo y deja el mensaje y la analítica registrados. */
@@ -579,6 +554,12 @@ async function executeSendMessage(
   data: SendMessageNodeData,
   context: FlowExecutionContext
 ) {
+  // El menú (botones o respuestas rápidas) del último mensaje queda en la
+  // sesión: la respuesta numérica o con el texto de una opción retoma la espera
+  // como esa opción (menu-reply.ts). Si no se envía texto, no hay menú.
+  context.variables ??= {};
+  recordMenu(context.variables, data.messages);
+
   // Resolve late_account_id from channel if not in context
   let lateAccountId = context.lateAccountId;
   if (!lateAccountId) {
@@ -641,6 +622,7 @@ async function executeSendMessage(
       hasTemplate: !!template,
     });
     if (decision.mode === "skip") {
+      delete context.variables[MENU_VARIABLE];
       const reason = SKIP_REASON_LABELS[decision.reason];
       console.warn(`[flows] mensaje no enviado (flujo ${context.flowId}): ${reason}`);
       await supabase.from("analytics_events").insert({
@@ -653,6 +635,7 @@ async function executeSendMessage(
       return;
     }
     if (decision.mode === "template" && template) {
+      delete context.variables[MENU_VARIABLE];
       await sendTemplateFromNode(supabase, context, template, lateAccountId);
       return;
     }
@@ -794,18 +777,7 @@ async function executeCondition(
     variables: context.variables ?? {},
   };
 
-  const results = data.conditions.map((condition) => {
-    if (caseSnapshot && isCaseConditionField(condition.field)) {
-      return evaluateCaseCondition(
-        { field: condition.field, operator: condition.operator, value: condition.value },
-        caseSnapshot
-      );
-    }
-    return evaluateContactCondition(condition as FlowCondition, facts);
-  });
-
-  const passed =
-    data.logic === "and" ? results.every(Boolean) : results.some(Boolean);
+  const { passed } = evaluateConditionNode(data, facts, caseSnapshot);
 
   return passed ? "handle:true" : "handle:false";
 }
@@ -817,15 +789,7 @@ async function executeDelay(
   nodeId: string,
   context: FlowExecutionContext
 ) {
-  const multipliers: Record<string, number> = {
-    seconds: 1000,
-    minutes: 60 * 1000,
-    hours: 60 * 60 * 1000,
-    days: 24 * 60 * 60 * 1000,
-  };
-
-  const delayMs = data.duration * (multipliers[data.unit] || 1000);
-  const runAt = new Date(Date.now() + delayMs).toISOString();
+  const runAt = new Date(Date.now() + delayDurationMs(data.duration, data.unit)).toISOString();
 
   // Schedule a job to resume the flow
   await supabase.from("scheduled_jobs").insert({
@@ -1029,18 +993,7 @@ async function executeSubscription(
 }
 
 function executeABSplit(data: ABSplitNodeData): string {
-  const totalWeight = data.paths.reduce((sum, p) => sum + p.weight, 0);
-  const random = Math.random() * totalWeight;
-
-  let cumulative = 0;
-  for (let i = 0; i < data.paths.length; i++) {
-    cumulative += data.paths[i].weight;
-    if (random <= cumulative) {
-      return `handle:${data.paths[i].name}`;
-    }
-  }
-
-  return `handle:${data.paths[0].name}`;
+  return `handle:${chooseABPath(data.paths).name}`;
 }
 
 /**

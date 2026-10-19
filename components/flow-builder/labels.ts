@@ -43,6 +43,7 @@ const TRIGGER_TYPE_LABELS: Record<string, string> = {
   welcome: "Bienvenida",
   default: "Por defecto",
   comment_keyword: "Palabra clave en comentario",
+  case_opened: "Gestión nueva",
   case_stage_changed: "Cambio de etapa",
   case_closed: "Gestión cerrada",
   client_no_reply: "Cliente sin responder",

@@ -218,6 +218,10 @@ export function describeTrigger(template: FlowTemplate): string {
   switch (type) {
     case "welcome":
       return "Primer mensaje del cliente";
+    case "case_opened":
+      return node.data.onlyUnclassified === true
+        ? "Se abre una gestión nueva que queda sin clasificar"
+        : "Se abre una gestión nueva (el primer mensaje del cliente o el de un cliente que vuelve)";
     case "default":
       return "Cualquier mensaje que no coincida con otro disparador";
     case "keyword": {

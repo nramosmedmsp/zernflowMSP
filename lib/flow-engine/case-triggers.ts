@@ -4,6 +4,11 @@
 // esperar su resultado y captura sus errores.
 //
 // Cuándo emite el motor cada evento:
+// - case_opened: al abrirse una gestión entrante nueva (no al reabrir una
+//   cerrada hace menos de 24 h ni al abrir gestiones manuales o programadas).
+//   `caseTypeId` es null si quedó sin clasificar y `contactTypeId` el tipo de
+//   contacto del cliente. Config del disparador: only_unclassified y
+//   contact_type_ids (ambos opcionales).
 // - case_stage_changed: cada cambio de etapa (persona, bot, cierre,
 //   reclasificación, reapertura y la plantilla automática). `stageId` es la
 //   etapa NUEVA (puede ser null en una gestión sin clasificar).
@@ -21,6 +26,12 @@
 //   `no_reply_event_minutes` (el umbral alcanzado). Aquí se lee
 //   `no_reply_event_minutes` de la gestión y se ejecutan solo los
 //   disparadores con ese mismo `minutes`.
+//
+// Bot en pausa: la pausa evita que el bot hable encima de un asesor cuando el
+// cliente escribe. Los flujos de estos eventos son intencionales (los
+// configuró la empresa para ese cambio de gestión) y se ejecutan aunque la
+// conversación tenga el bot en pausa. Los mensajes del cliente con el bot en
+// pausa siguen sin activar palabras clave ni bienvenida (inbound-pipeline.ts).
 //
 // Protección contra bucles: el evento puede traer `chain`, los ids de los
 // flujos que ya corrieron en la sucesión que lo provocó (lo rellenan los
@@ -52,6 +63,8 @@ export type CaseFlowEvent = {
   caseTypeId: string | null;
   stageId: string | null;
   outcome?: "won" | "lost" | "resolved";
+  /** case_opened: tipo de contacto del cliente. */
+  contactTypeId?: string | null;
   /** Ids de los flujos que ya corrieron en la cadena que provocó este evento. */
   chain?: string[];
 };
@@ -62,10 +75,9 @@ interface EventConversation {
   id: string;
   channel_id: string;
   late_conversation_id: string | null;
-  is_automation_paused: boolean;
 }
 
-const CONVERSATION_COLUMNS = "id, channel_id, late_conversation_id, is_automation_paused";
+const CONVERSATION_COLUMNS = "id, channel_id, late_conversation_id";
 
 /**
  * Conversación donde corre el flujo: la más reciente con la gestión (la del
@@ -105,8 +117,8 @@ async function pickConversation(service: Service, event: CaseFlowEvent): Promise
 /**
  * Ejecuta los flujos cuyos disparadores coinciden con el evento, como lo hace
  * el webhook con los mensajes entrantes. No hace nada si no hay disparadores
- * que coincidan, si el contacto no tiene conversación o si el bot está en
- * pausa en ella.
+ * que coincidan o si el contacto no tiene conversación. El bot en pausa no lo
+ * impide (ver arriba).
  */
 export async function runCaseEventFlows(service: Service, event: CaseFlowEvent): Promise<void> {
   if ((event.chain?.length ?? 0) >= MAX_CASE_FLOW_CHAIN) {
@@ -149,7 +161,6 @@ export async function runCaseEventFlows(service: Service, event: CaseFlowEvent):
     console.warn(`[flows] ${event.type}: el contacto ${event.contactId} no tiene conversación, no se ejecutan flujos`);
     return;
   }
-  if (conversation.is_automation_paused) return;
 
   const { executeFlow } = await import("./engine");
   for (const trigger of selected) {

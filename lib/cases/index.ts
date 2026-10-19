@@ -14,6 +14,7 @@ export {
   setNextAction,
   transferCase,
 } from "./changes";
+export { setConversationBotPaused } from "./bot-pause";
 export { closeCase, previewClose, type CloseCaseInput, type ClosePreview } from "./close";
 export {
   activateScheduledCases,

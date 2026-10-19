@@ -36,6 +36,20 @@ interface CaseRef {
   workspace_id: string;
   contact_id: string;
   case_type_id: string | null;
+  stage_id?: string | null;
+}
+
+/** case_opened: se abrió una gestión entrante nueva (no una reabierta). */
+export function emitCaseOpened(db: Db, row: CaseRef, contactTypeId: string | null): void {
+  emitCaseEvent(db, {
+    type: "case_opened",
+    workspaceId: row.workspace_id,
+    caseId: row.id,
+    contactId: row.contact_id,
+    caseTypeId: row.case_type_id,
+    stageId: row.stage_id ?? null,
+    contactTypeId,
+  });
 }
 
 /** case_stage_changed si la etapa cambió. */

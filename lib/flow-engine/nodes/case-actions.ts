@@ -18,7 +18,7 @@ import {
   extendFlowChain,
   parseFlowChain,
 } from "../case-trigger-match";
-import type { CaseConditionSnapshot } from "../case-conditions";
+import { buildCaseConditionSnapshot, type CaseConditionSnapshot } from "../case-conditions";
 import type {
   AssignTeamNodeData,
   CaseActionType,
@@ -247,12 +247,9 @@ export async function loadCaseSnapshot(
     row = await loadCase(db, context.variables[CASE_ID_VARIABLE]);
   }
   const ctx = await loadAssignmentContext(db, context.workspaceId);
-  return {
+  return buildCaseConditionSnapshot({
     contactTypeId,
-    caseTypeId: row?.case_type_id ?? null,
-    stageId: row?.stage_id ?? null,
-    teamId: row?.team_id ?? null,
-    hasAssignee: !!row?.assignee_id,
+    row,
     withinHours: isOpenAt(ctx.hours, row?.team_id ?? null, new Date()),
-  };
+  });
 }

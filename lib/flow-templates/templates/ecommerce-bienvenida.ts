@@ -3,7 +3,7 @@ import type { FlowTemplate } from "../types";
 
 const f = new FlowBuilder();
 
-const trigger = f.welcomeTrigger();
+const trigger = f.newCaseTrigger("Gestión nueva sin clasificar", { onlyUnclassified: true });
 const saludo = f.message("Saludo con opciones", {
   text: "¡Hola! Gracias por escribirnos. Soy el asistente virtual de la tienda. ¿En qué te puedo ayudar?",
   buttons: ["Quiero comprar", "Mi pedido", "Otra consulta"],
@@ -51,13 +51,16 @@ export const ecommerceBienvenida: FlowTemplate = {
   id: "ecommerce-bienvenida",
   name: "Bienvenida y clasificación",
   description:
-    "Saluda en el primer mensaje y ofrece tres opciones. Según lo que elija el cliente clasifica la gestión (Venta, Postventa o Consulta); en una venta pregunta qué producto busca y lo guarda. Al final reparte la gestión a un asesor.",
+    "Saluda cuando se abre una gestión nueva que queda sin clasificar (por ejemplo, un cliente que vuelve a escribir sin tener una gestión abierta) y ofrece tres opciones. Según lo que elija el cliente clasifica la gestión (Venta, Postventa o Consulta); en una venta pregunta qué producto busca y lo guarda. Al final reparte la gestión a un asesor.",
   business: "ecommerce",
   category: "Bienvenida",
   adjust: [
     "Cambia el saludo y los textos por el tono de tu tienda.",
     "Necesita los tipos de gestión Venta, Postventa y Consulta (los carga la plantilla de negocio E-commerce).",
-    "Si publicas también \"Bienvenida simple\", desactiva una de las dos: ambas se activan con el primer mensaje.",
+    "El disparador es \"Gestión nueva\" con \"Solo gestiones sin clasificar\": clasifica también a los clientes que vuelven y cuya gestión nueva queda sin tipo (el tipo de gestión solo se sugiere según el tipo de contacto; en E-commerce, Venta solo se sugiere para Prospecto).",
+    "Un prospecto nuevo se abre ya como Venta (clasificada), así que este flujo no lo saluda. Si quieres saludarlo, desmarca \"Solo gestiones sin clasificar\" (saludará a toda gestión nueva) o publica \"Bienvenida simple\".",
+    "Un mensaje que coincide con una palabra clave (por ejemplo \"precio\") dispara también este saludo cuando abre una gestión sin clasificar, porque abrir la gestión es un evento aparte.",
+    "Entiende que el cliente responda con el número de la opción (\"1\", \"2\") o escriba su texto.",
   ],
   customFields: [{ slug: "producto_interes", name: "Producto de interés" }],
   graph: f.build(),

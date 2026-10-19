@@ -80,3 +80,30 @@ export function previewTemplateParams(
     }),
   );
 }
+
+/** ¿El mensaje lleva algo que enviar como mensaje libre (texto, media, botones o carrusel)? */
+export function messageHasContent(msg: {
+  text?: string;
+  mediaUrl?: string;
+  imageUrl?: string;
+  carousel?: { elements?: readonly unknown[] };
+}): boolean {
+  return !!(msg.text?.trim() || msg.mediaUrl || msg.imageUrl || msg.carousel?.elements?.length);
+}
+
+/**
+ * Ventana de 24 h de WhatsApp de un flujo. Si nació de un mensaje del cliente
+ * (texto o pulsación de botón) está abierta; si no (evento de gestión, espera
+ * que se reanuda), se mira el último mensaje entrante de las gestiones del
+ * contacto (`lastInboundAt`: el más reciente de todas).
+ */
+export function computeFlowWindowOpen(
+  incoming: { text?: string; postbackPayload?: string; quickReplyPayload?: string; callbackData?: string },
+  lastInboundAt: string | null | undefined,
+  now: Date | number = Date.now(),
+): boolean {
+  if (incoming.text || incoming.postbackPayload || incoming.quickReplyPayload || incoming.callbackData) {
+    return true;
+  }
+  return isWindowOpen(lastInboundAt, now);
+}

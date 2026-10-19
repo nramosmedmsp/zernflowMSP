@@ -2,9 +2,8 @@
 // 3.6). La corre el cron.
 //
 // Criterio: gestión abierta cuyo último mensaje saliente (humano o bot) es
-// posterior al último entrante y sin pregunta pendiente del cliente
-// (waiting_since null: así una respuesta fuera de horario, que no corta la
-// espera, no cuenta). Los umbrales son los `config.minutes` de los
+// posterior al último entrante. No se mira waiting_since (que el cliente espere
+// respuesta humana no impide avisar de que no contestó el último mensaje). Los umbrales son los `config.minutes` de los
 // disparadores client_no_reply activos de flujos publicados del espacio.
 // Por cada mensaje saliente se emite un evento por umbral, del menor al mayor
 // (uno por vuelta del cron), y antes de emitirlo se sella en la gestión
@@ -12,10 +11,13 @@
 // (= umbral). Un mensaje saliente nuevo reinicia la cuenta; nunca se repite
 // un evento para el mismo mensaje y umbral.
 
-import { DEFAULT_NO_REPLY_MINUTES } from "@/lib/flow-engine/case-triggers";
 import type { Database } from "@/lib/types/database";
 import { emitCaseEvent } from "./events";
+import { nextNoReplyThreshold, noReplyMinutes } from "./no-reply-rules";
 import type { Db } from "./io";
+
+// La parte pura vive en no-reply-rules.ts; se re-exporta para no cambiar las importaciones.
+export { nextNoReplyThreshold, noReplyMinutes };
 
 type PendingRow = Database["public"]["Functions"]["cases_pending_no_reply"]["Returns"][number];
 
@@ -24,36 +26,6 @@ const MAX_PER_RUN = 500;
 
 function timeLeft(deadline: number): boolean {
   return Date.now() < deadline;
-}
-
-/** Minutos de un disparador (config.minutes entero positivo, o el valor por defecto). */
-export function noReplyMinutes(config: unknown): number {
-  const raw =
-    config && typeof config === "object" && !Array.isArray(config)
-      ? (config as Record<string, unknown>).minutes
-      : undefined;
-  const n = typeof raw === "string" ? Number(raw) : raw;
-  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : DEFAULT_NO_REPLY_MINUTES;
-}
-
-/**
- * Umbral que toca emitir ahora (sin E/S): el menor umbral alcanzado que aún
- * no se emitió para este mensaje saliente, o null.
- */
-export function nextNoReplyThreshold(params: {
-  thresholds: readonly number[];
-  lastOutboundAt: string;
-  stampedOutboundAt: string | null;
-  stampedMinutes: number | null;
-  now: Date;
-}): number | null {
-  const out = new Date(params.lastOutboundAt).getTime();
-  const sameMessage =
-    params.stampedOutboundAt !== null && new Date(params.stampedOutboundAt).getTime() === out;
-  const done = sameMessage ? (params.stampedMinutes ?? 0) : 0;
-  const elapsed = (params.now.getTime() - out) / 60_000;
-  const due = [...params.thresholds].sort((a, b) => a - b).find((t) => t > done && t <= elapsed);
-  return due ?? null;
 }
 
 /** Umbrales por espacio de los disparadores client_no_reply activos y publicados. */

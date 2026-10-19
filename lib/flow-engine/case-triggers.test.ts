@@ -75,13 +75,56 @@ describe("runCaseEventFlows", () => {
     });
   });
 
-  it("no ejecuta si el bot está en pausa en la conversación", async () => {
+  it("ejecuta aunque el bot esté en pausa en la conversación (los flujos de gestión son intencionales)", async () => {
     const service = fakeService({
       triggers: [trigger("tr1", "flowA")],
       conversations: [{ ...conversation, is_automation_paused: true }],
     });
     await runCaseEventFlows(service, event);
-    expect(executeFlow).not.toHaveBeenCalled();
+    expect(executeFlow).toHaveBeenCalledTimes(1);
+    expect(executeFlow.mock.calls[0][1]).toMatchObject({ flowId: "flowA", conversationId: "conv1", startFresh: true });
+  });
+
+  it("también corren con el bot en pausa los de gestión cerrada, cliente sin responder y gestión nueva", async () => {
+    const paused = { ...conversation, is_automation_paused: true };
+    await runCaseEventFlows(
+      fakeService({ triggers: [trigger("c1", "flowClosed", {}, "case_closed")], conversations: [paused] }),
+      { ...event, type: "case_closed", outcome: "won" },
+    );
+    await runCaseEventFlows(
+      fakeService({
+        triggers: [trigger("n1", "flowNoReply", { minutes: 30 }, "client_no_reply")],
+        cases: [{ status: "open", no_reply_event_minutes: 30 }],
+        conversations: [paused],
+      }),
+      { ...event, type: "client_no_reply" },
+    );
+    await runCaseEventFlows(
+      fakeService({ triggers: [trigger("o1", "flowOpened", {}, "case_opened")], conversations: [paused] }),
+      { ...event, type: "case_opened", caseTypeId: null, stageId: null, contactTypeId: "ct1" },
+    );
+    expect(executeFlow.mock.calls.map((c) => c[1].flowId)).toEqual(["flowClosed", "flowNoReply", "flowOpened"]);
+  });
+
+  it("gestión nueva: filtra por sin clasificar y por tipo de contacto, y pasa el evento a la sesión", async () => {
+    const opened = { ...event, type: "case_opened" as const, caseTypeId: null, stageId: null, contactTypeId: "ct1" };
+    const service = fakeService({
+      triggers: [
+        trigger("any", "flowAny", {}, "case_opened"),
+        trigger("uncl", "flowUnclassified", { only_unclassified: true }, "case_opened"),
+        trigger("ct1", "flowCt1", { contact_type_ids: ["ct1", "ct9"] }, "case_opened"),
+        trigger("ct2", "flowCt2", { contact_type_ids: ["ct2"] }, "case_opened"),
+      ],
+      conversations: [conversation],
+    });
+    await runCaseEventFlows(service, opened);
+    expect(executeFlow.mock.calls.map((c) => c[1].flowId)).toEqual(["flowAny", "flowUnclassified", "flowCt1"]);
+    expect(executeFlow.mock.calls[0][1].variables).toMatchObject({ case_id: "case1", __case_event: "case_opened" });
+
+    // Una gestión ya clasificada no activa «solo sin clasificar».
+    executeFlow.mockReset();
+    await runCaseEventFlows(service, { ...opened, caseTypeId: "t1" });
+    expect(executeFlow.mock.calls.map((c) => c[1].flowId)).toEqual(["flowAny", "flowCt1"]);
   });
 
   it("no ejecuta si el contacto no tiene conversación", async () => {

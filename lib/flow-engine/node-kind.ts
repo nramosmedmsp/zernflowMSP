@@ -38,3 +38,15 @@ export function nodeKind(node: { type?: string; data?: unknown }): string {
   }
   return type;
 }
+
+/**
+ * ¿Guarda el motor las variables de la sesión después de ejecutar este nodo?
+ * Solo tras los nodos que producen salidas (IA, HTTP) y los guardados como
+ * `action` (etiquetas, campos, gestiones, esperas...): así sobreviven a las
+ * pausas. Las variables que cambian en otros nodos no se guardan hasta el
+ * siguiente de estos.
+ */
+export function persistsSessionVariables(node: { type?: string; data?: unknown }): boolean {
+  const kind = nodeKind(node);
+  return kind === "aiResponse" || kind === "httpRequest" || kind !== (node.type as string);
+}

@@ -6,6 +6,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleInbound } from "@/lib/cases";
 import { executeFlow, FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
+import { resolveGlobalKeyword, type GlobalKeyword } from "@/lib/flow-engine/global-keywords";
+import { applyWaitingMenuReply } from "@/lib/flow-engine/menu-reply";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { claimWaitingSession, findWaitingSession } from "@/lib/flow-engine/waiting-session";
 import type { Database } from "@/lib/types/database";
@@ -51,6 +53,9 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
 
   // ── Flow engine ───────────────────────────────────────────────────────────
 
+  // Con el bot en pausa (hay un asesor atendiendo) el mensaje del cliente no
+  // activa palabras clave, bienvenida ni retoma esperas. Los flujos de eventos
+  // de gestión (lib/flow-engine/case-triggers.ts) sí corren.
   if (conversation.is_automation_paused) return;
 
   const incomingMessage = {
@@ -75,6 +80,9 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
   const waiting = await findWaitingSession(supabase, { contactId, channelId: channel.id });
   if (waiting) {
     if (!(await claimWaitingSession(supabase, waiting.id))) return; // otro mensaje la retomó
+    // "1", "2." o el texto exacto de una opción del último menú del bot retoman la
+    // espera como esa opción: el mensaje pasa a ser el título (y la carga) del botón.
+    const reply = applyWaitingMenuReply(waiting.variables, incomingMessage);
     try {
       await resumeSession(supabase, waiting, {
         triggerId: "",
@@ -83,7 +91,7 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
         contactId,
         conversationId: conversation.id,
         workspaceId: channel.workspace_id,
-        incomingMessage,
+        incomingMessage: reply.incoming,
         lateConversationId: input.lateConversationId,
         lateAccountId: input.lateAccountId,
       });
@@ -141,27 +149,12 @@ async function handleGlobalKeywords(
 
   if (!workspace?.global_keywords) return false;
 
-  const keywords = workspace.global_keywords as Array<{
-    keyword: string;
-    action?: string;
-    flowId?: string;
-  }>;
+  const result = resolveGlobalKeyword(text, workspace.global_keywords as unknown as GlobalKeyword[]);
+  if (!result.handled) return false;
 
-  const normalizedText = text.toLowerCase().trim();
-
-  for (const kw of keywords) {
-    if (normalizedText === kw.keyword.toLowerCase()) {
-      if (kw.action === "unsubscribe") {
-        await supabase.from("contacts").update({ is_subscribed: false }).eq("id", contactId);
-        return true;
-      }
-      if (kw.action === "subscribe") {
-        await supabase.from("contacts").update({ is_subscribed: true }).eq("id", contactId);
-        return true;
-      }
-      return false;
-    }
-  }
-
-  return false;
+  await supabase
+    .from("contacts")
+    .update({ is_subscribed: result.action === "subscribe" })
+    .eq("id", contactId);
+  return true;
 }

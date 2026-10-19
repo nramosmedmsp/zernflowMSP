@@ -81,6 +81,7 @@ const DEFAULTS: Record<string, () => Row> = {
   workspace_members: () => ({ role: "member", availability: "available", last_assigned_at: null }),
   workspaces: () => ({ settings: {} }),
   conversations: () => ({ is_automation_paused: false }),
+  flow_sessions: () => ({ waiting_for_input: false, waiting_until: null, current_node_id: null, human_takeover_at: null, variables: {} }),
   case_notes: () => ({ mentions: [], conversation_id: null }),
   notifications: () => ({ body: null, link: null, read_at: null }),
   activity: () => ({ contact_id: null, case_id: null, conversation_id: null, actor_id: null, from_value: null, to_value: null, meta: {} }),
@@ -98,7 +99,8 @@ function compare(a: unknown, b: unknown): number {
 }
 
 class Query implements PromiseLike<{ data: unknown; error: unknown; count?: number | null }> {
-  private op: "select" | "insert" | "update" | "delete" | null = null;
+  private op: "select" | "insert" | "update" | "delete" | "upsert" | null = null;
+  private conflict: string[] | null = null;
   private filters: Filter[] = [];
   private orders: { col: string; asc: boolean; nullsFirst: boolean }[] = [];
   private limitN: number | null = null;
@@ -125,6 +127,13 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     this.payload = rows;
     return this;
   }
+  /** Inserta, o actualiza la fila que coincide en `onConflict` (sin él, en todas las columnas enviadas). */
+  upsert(rows: Row[] | Row, opts?: { onConflict?: string }) {
+    this.op = "upsert";
+    this.payload = rows;
+    this.conflict = opts?.onConflict ? opts.onConflict.split(",").map((c) => c.trim()) : null;
+    return this;
+  }
   update(patch: Row) {
     this.op = "update";
     this.payload = patch;
@@ -135,7 +144,28 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     return this;
   }
   eq(col: string, v: unknown) {
+    // "flows.status": columna de la fila relacionada (la relación "flows" sale de la columna flow_id).
+    if (col.includes(".")) {
+      const [rel, field] = col.split(".");
+      const fk = `${rel.replace(/s$/, "")}_id`;
+      this.filters.push((r) => this.db.rows(rel).find((x) => x.id === r[fk])?.[field] === v);
+      return this;
+    }
     this.filters.push((r) => r[col] === v);
+    return this;
+  }
+  /** Solo condiciones `col.eq.valor` y `col.is.null` separadas por comas. */
+  or(expr: string) {
+    const parts = expr.split(",").map((p) => {
+      const [col, op, ...rest] = p.split(".");
+      const value = rest.join(".");
+      return (r: Row) => {
+        if (op === "eq") return String(r[col]) === value;
+        if (op === "is" && value === "null") return (r[col] ?? null) === null;
+        throw new Error(`or(${op}) no soportado`);
+      };
+    });
+    this.filters.push((r) => parts.some((f) => f(r)));
     return this;
   }
   neq(col: string, v: unknown) {
@@ -245,6 +275,23 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         const inserted = list.map((r) => this.db.insertRow(this.table, r));
         if (!this.returning) return { data: null, error: null };
         return this.finish(inserted);
+      }
+      case "upsert": {
+        const list = Array.isArray(this.payload) ? this.payload : [this.payload as Row];
+        const keys = this.conflict;
+        const out: Row[] = [];
+        for (const r of list) {
+          const cols = keys ?? Object.keys(r);
+          const existing = this.db.rows(this.table).find((x) => cols.every((c) => x[c] === r[c]));
+          if (existing) {
+            Object.assign(existing, clone(r));
+            out.push(existing);
+          } else {
+            out.push(this.db.insertRow(this.table, r));
+          }
+        }
+        if (!this.returning) return { data: null, error: null };
+        return this.finish(out);
       }
       case "update": {
         const rows = this.matching();
@@ -374,7 +421,6 @@ export class FakeDb {
           return (
             c.workspace_id === args.p_workspace_id &&
             c.status === "open" &&
-            c.waiting_since === null &&
             out !== null &&
             out <= older &&
             (inn === null || inn < out) &&

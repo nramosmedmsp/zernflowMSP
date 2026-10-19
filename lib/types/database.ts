@@ -28,7 +28,8 @@ export type TriggerType =
   | "welcome"
   | "default"
   | "comment_keyword"
-  // Fase 2 (00021): eventos de gestión (lib/flow-engine/case-triggers.ts).
+  // Fase 2 (00021) y 00022: eventos de gestión (lib/flow-engine/case-triggers.ts).
+  | "case_opened"
   | "case_stage_changed"
   | "case_closed"
   | "client_no_reply";
@@ -43,6 +44,10 @@ export interface CaseTriggerConfig {
   outcome?: "won" | "lost" | "resolved";
   /** client_no_reply: minutos sin respuesta del cliente (por defecto 60). */
   minutes?: number;
+  /** case_opened: solo gestiones que quedaron sin tipo de gestión. */
+  only_unclassified?: boolean;
+  /** case_opened: solo si el cliente es de alguno de estos tipos de contacto. */
+  contact_type_ids?: string[];
 }
 export type FlowSessionStatus =
   | "active"
@@ -250,6 +255,8 @@ export type ActivityType =
   | "note_added"
   | "first_response"
   | "next_action_set"
+  | "automation_paused"
+  | "automation_resumed"
   | "config_changed"
   // Fase 2 (00021)
   | "off_hours_reply_sent"

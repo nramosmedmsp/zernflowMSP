@@ -4,14 +4,17 @@
 // ventana de 24 h está abierta porque el cliente acaba de escribir), una vez
 // por gestión o de nuevo si pasaron `min_hours_between` horas.
 
-import { formatOpening, isWithinHours } from "@/lib/business-hours";
+import { isWithinHours } from "@/lib/business-hours";
 import { messagePreview } from "@/lib/message-preview";
-import { applyReplyVariables } from "@/lib/saved-replies";
 import { loadAssignmentContext, type AssignmentContextCache } from "./assign";
 import { nextOpeningFor, scheduleForTeam } from "./hours";
+import { offHoursReplyDue, renderOffHoursReply } from "./off-hours-text";
 import { botOutboundPatch } from "./rules";
 import { loadCase, logActivity, type Db } from "./io";
 import { zernioMessenger, type CaseMessenger } from "./messaging";
+
+// La parte pura vive en off-hours-text.ts; se re-exporta para no cambiar las importaciones.
+export { offHoursReplyDue, renderOffHoursReply };
 
 export type OffHoursReplyOutcome =
   | { status: "sent"; text: string }
@@ -20,31 +23,6 @@ export type OffHoursReplyOutcome =
       reason: "disabled" | "not_open" | "within_hours" | "already_sent" | "no_conversation" | "race";
     }
   | { status: "failed"; error: string };
-
-const HOUR_MS = 3_600_000;
-
-/**
- * Reemplaza {apertura} (próxima apertura, p. ej. "lunes 9:00") y las
- * variables de las respuestas guardadas: {nombre}, {empresa} y {sede}.
- */
-export function renderOffHoursReply(
-  text: string,
-  vars: { contactName?: string | null; workspaceName?: string | null; teamName?: string | null; opening: Date | null; now: Date },
-): string {
-  const apertura = vars.opening ? formatOpening(vars.opening, vars.now) : "pronto";
-  return applyReplyVariables(text.replace(/\{apertura\}/gi, apertura), {
-    contactName: vars.contactName ?? undefined,
-    workspaceName: vars.workspaceName ?? undefined,
-    teamName: vars.teamName ?? undefined,
-  }).trim();
-}
-
-/** ¿Toca enviar? (sin E/S): nunca enviada, o pasaron las horas mínimas. */
-export function offHoursReplyDue(lastSentAt: string | null, minHoursBetween: number | null, at: string): boolean {
-  if (!lastSentAt) return true;
-  if (!minHoursBetween) return false;
-  return new Date(at).getTime() - new Date(lastSentAt).getTime() >= minHoursBetween * HOUR_MS;
-}
 
 export async function sendOffHoursReply(
   db: Db,

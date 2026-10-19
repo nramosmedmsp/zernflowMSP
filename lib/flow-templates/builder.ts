@@ -61,6 +61,18 @@ export class FlowBuilder {
     return this.add("trigger", { label, triggerType: "welcome" });
   }
 
+  /**
+   * Gestión nueva (case_opened): se abre una gestión entrante, sea el primer mensaje de un cliente
+   * nuevo o el de uno que vuelve sin gestión abierta. Con `onlyUnclassified` solo si quedó sin clasificar.
+   */
+  newCaseTrigger(label = "Gestión nueva", opts: { onlyUnclassified?: boolean } = {}): string {
+    return this.add("trigger", {
+      label,
+      triggerType: "case_opened",
+      ...(opts.onlyUnclassified ? { onlyUnclassified: true } : {}),
+    });
+  }
+
   defaultTrigger(label = "Cualquier otro mensaje"): string {
     return this.add("trigger", { label, triggerType: "default" });
   }

@@ -109,3 +109,24 @@ export function evaluateCaseCondition(
 ): boolean {
   return compareCondition(actualValue(condition.field, snapshot), condition.operator, condition.value);
 }
+
+/**
+ * Datos de la gestión para las condiciones (sin E/S): la gestión del evento o
+ * la abierta más reciente (sin ninguna, todo vacío) y si el horario efectivo de
+ * su equipo o de la empresa está abierto.
+ */
+export function buildCaseConditionSnapshot(params: {
+  contactTypeId: string | null;
+  row: { case_type_id: string | null; stage_id: string | null; team_id: string | null; assignee_id: string | null } | null;
+  withinHours: boolean;
+}): CaseConditionSnapshot {
+  const { row } = params;
+  return {
+    contactTypeId: params.contactTypeId,
+    caseTypeId: row?.case_type_id ?? null,
+    stageId: row?.stage_id ?? null,
+    teamId: row?.team_id ?? null,
+    hasAssignee: !!row?.assignee_id,
+    withinHours: params.withinHours,
+  };
+}

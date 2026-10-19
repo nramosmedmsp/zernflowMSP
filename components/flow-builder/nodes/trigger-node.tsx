@@ -13,6 +13,8 @@ export interface TriggerNodeProps {
   stageName?: string;
   outcome?: string;
   minutes?: number;
+  onlyUnclassified?: boolean;
+  contactTypeNames?: string[];
 }
 
 const triggerLabels: Record<string, string> = {
@@ -22,6 +24,7 @@ const triggerLabels: Record<string, string> = {
   welcome: "Bienvenida",
   default: "Por defecto",
   comment_keyword: "Palabra clave en comentario",
+  case_opened: "Gestión nueva",
   case_stage_changed: "Cambio de etapa",
   case_closed: "Gestión cerrada",
   client_no_reply: "Cliente sin responder",
@@ -32,6 +35,11 @@ const outcomeLabels: Record<string, string> = { won: "Ganada", lost: "Perdida", 
 /** Resumen de los filtros de un disparador de gestión. */
 function caseTriggerSummary(data: TriggerNodeProps, triggerType: string): string | null {
   const parts: string[] = [];
+  if (triggerType === "case_opened") {
+    parts.push(data.onlyUnclassified ? "Sin clasificar" : "Cualquier gestión nueva");
+    if (data.contactTypeNames && data.contactTypeNames.length > 0) parts.push(data.contactTypeNames.join(", "));
+    return parts.join(" · ");
+  }
   if (data.caseTypeName) parts.push(data.caseTypeName);
   if (triggerType === "case_stage_changed" && data.stageName) parts.push(data.stageName);
   if (triggerType === "case_closed" && data.outcome) parts.push(outcomeLabels[data.outcome] ?? data.outcome);

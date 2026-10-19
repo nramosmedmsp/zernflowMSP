@@ -264,6 +264,43 @@ describe("condiciones de gestión", () => {
   });
 });
 
+describe("matchesCaseEvent: gestión nueva", () => {
+  const opened = (over: Partial<CaseEventLike> = {}): CaseEventLike => ({
+    type: "case_opened",
+    caseTypeId: null,
+    stageId: null,
+    contactTypeId: "ct1",
+    ...over,
+  });
+  const trigger = (config: unknown) => ({ type: "case_opened", config });
+
+  it("sin configurar aplica a cualquier gestión nueva", () => {
+    expect(matchesCaseEvent(trigger({}), opened())).toBe(true);
+    expect(matchesCaseEvent(trigger(null), opened({ caseTypeId: "t1" }))).toBe(true);
+  });
+
+  it("solo sin clasificar", () => {
+    expect(matchesCaseEvent(trigger({ only_unclassified: true }), opened())).toBe(true);
+    expect(matchesCaseEvent(trigger({ only_unclassified: true }), opened({ caseTypeId: "t1" }))).toBe(false);
+    expect(matchesCaseEvent(trigger({ only_unclassified: false }), opened({ caseTypeId: "t1" }))).toBe(true);
+  });
+
+  it("solo para ciertos tipos de contacto", () => {
+    expect(matchesCaseEvent(trigger({ contact_type_ids: ["ct1", "ct2"] }), opened())).toBe(true);
+    expect(matchesCaseEvent(trigger({ contact_type_ids: ["ct2"] }), opened())).toBe(false);
+    expect(matchesCaseEvent(trigger({ contact_type_ids: ["ct1"] }), opened({ contactTypeId: null }))).toBe(false);
+    expect(matchesCaseEvent(trigger({ contact_type_ids: [] }), opened({ contactTypeId: null }))).toBe(true);
+  });
+
+  it("las dos condiciones se suman y no se mezcla con otros tipos de evento", () => {
+    const both = trigger({ only_unclassified: true, contact_type_ids: ["ct1"] });
+    expect(matchesCaseEvent(both, opened())).toBe(true);
+    expect(matchesCaseEvent(both, opened({ contactTypeId: "ct2" }))).toBe(false);
+    expect(matchesCaseEvent(both, opened({ caseTypeId: "t1" }))).toBe(false);
+    expect(matchesCaseEvent(trigger({}), stageEvent)).toBe(false);
+  });
+});
+
 describe("buildDesiredTriggers con disparadores de gestión", () => {
   const node = (data: Record<string, unknown>) => ({ id: "n1", type: "trigger", data });
 
@@ -282,6 +319,23 @@ describe("buildDesiredTriggers con disparadores de gestión", () => {
       { minutes: 45 },
     ]);
     expect(rows.every((r) => r.channel_id === null && r.is_active)).toBe(true);
+  });
+
+  it("gestión nueva: guarda solo sin clasificar y los tipos de contacto", () => {
+    const rows = buildDesiredTriggers(
+      [
+        node({ triggerType: "case_opened", onlyUnclassified: true, contactTypeIds: ["ct1", "", "ct2"], caseTypeId: "t1" }),
+        node({ triggerType: "case_opened", onlyUnclassified: false, contactTypeIds: [] }),
+        node({ triggerType: "case_opened" }),
+      ],
+      "flow-1",
+    );
+    expect(rows.map((r) => r.type)).toEqual(["case_opened", "case_opened", "case_opened"]);
+    expect(rows.map((r) => r.config)).toEqual([
+      { case_type_id: "t1", only_unclassified: true, contact_type_ids: ["ct1", "ct2"] },
+      {},
+      {},
+    ]);
   });
 
   it("sin configurar publica el disparador sin filtros", () => {
