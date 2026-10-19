@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Flag, GitBranch, ListTree, Workflow, Zap } from "lucide-react";
+import { AlertTriangle, Flag, GitBranch, ListTree, Route, Workflow, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowCard, MapStage } from "@/lib/flow-lab/map/types";
 
@@ -128,6 +129,15 @@ export function FlowCardNode({ data }: NodeProps) {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground">
+            <Link
+              href={`/dashboard/flows/explorer?flow=${card.id}`}
+              onClick={(e) => e.stopPropagation()}
+              title="Genera todos los caminos posibles de este flujo y cómo termina cada uno"
+              className="nodrag nopan inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 font-medium text-foreground hover:bg-accent"
+            >
+              <Route className="h-3 w-3" />
+              Explorar caminos
+            </Link>
             {card.warningCount > 0 && (
               <span
                 className="inline-flex items-center gap-0.5 rounded-md bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"

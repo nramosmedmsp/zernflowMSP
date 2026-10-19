@@ -20,7 +20,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical } from "lucide-react";
+import { ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
 import { flowStatusLabel } from "./labels";
@@ -355,6 +355,15 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
           >
             <FlaskConical className="h-3.5 w-3.5" />
             Probar en el laboratorio
+          </Link>
+          <Link
+            href={`/dashboard/flows/explorer?flow=${flow.id}`}
+            target="_blank"
+            title="Genera todos los caminos posibles de este flujo y cómo termina cada uno (usa la versión guardada)"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent transition-colors"
+          >
+            <Route className="h-3.5 w-3.5" />
+            Explorar caminos
           </Link>
           <button
             onClick={() => {

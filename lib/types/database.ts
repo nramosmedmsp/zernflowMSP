@@ -1722,6 +1722,52 @@ export interface Database {
           },
         ];
       };
+      // ── Laboratorio de flujos (00023): escenarios guardados ─────────────
+      lab_scenarios: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          name: string;
+          description: string;
+          /** Ver ScenarioDefinition (lib/flow-lab/scenarios/types.ts). */
+          definition: Json;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+          last_run_at: string | null;
+          /** Ver ScenarioResult (lib/flow-lab/scenarios/types.ts). */
+          last_result: Json | null;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          name: string;
+          description?: string;
+          definition: Json;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          last_run_at?: string | null;
+          last_result?: Json | null;
+        };
+        Update: {
+          name?: string;
+          description?: string;
+          definition?: Json;
+          updated_at?: string;
+          last_run_at?: string | null;
+          last_result?: Json | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lab_scenarios_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       // ── Fase 1 (00019): gestiones y registro ────────────────────────────
       cases: {
         Row: {

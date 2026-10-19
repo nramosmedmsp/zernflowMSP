@@ -4,6 +4,7 @@
 // (el almacenamiento se recibe por parámetro) para poder probarla.
 
 import { caseTypeName, contactTypeName, memberName, stageName, teamName } from "@/lib/flow-lab/catalog";
+import type { ScenarioStep } from "@/lib/flow-lab/scenarios/types";
 import { currentCase, emptyContact, newCaseTemplate } from "@/lib/flow-lab/state";
 import { LAB_CHANNEL_LABELS, type LabCatalog, type LabChannel, type LabMessage, type LabProfile, type LabState, type LabTrace, type TraceStep, type TriggerCandidateTrace } from "@/lib/flow-lab/types";
 import { formatDateTime, formatTime } from "@/lib/format";
@@ -341,6 +342,8 @@ export interface LabEntry {
   trace: LabTrace;
   /** Datos del contacto y la gestión después de esta acción. */
   snapshot: SnapshotField[];
+  /** La acción como paso de escenario (para «Guardar como escenario»). Las pruebas guardadas antes no lo traen. */
+  step?: ScenarioStep;
 }
 
 export const MAX_ENTRIES = 60;

@@ -1,41 +1,34 @@
 import type { Metadata } from "next";
 import { getWorkspace } from "@/lib/workspace";
 import { isAdminRole } from "@/lib/permissions";
-import { createServiceClient } from "@/lib/supabase/server";
-import { displayName } from "@/lib/team-rules";
 import { loadLabCatalog } from "@/lib/flow-lab/load-catalog";
+import { parseScenarioDefinition } from "@/lib/flow-lab/scenarios/validate";
+import { readMemberNames } from "@/lib/flow-lab/scenarios/server";
 import type { LabCatalog } from "@/lib/flow-lab/types";
+import type { WorkspaceSettings } from "@/lib/types/database";
 import { NoPermission } from "@/components/settings/cases/no-permission";
-import { LabScreen } from "@/components/flow-lab/lab/lab-screen";
+import { LabScreen, type LabReplay } from "@/components/flow-lab/lab/lab-screen";
 
 export const metadata: Metadata = { title: "Laboratorio de conversaciones" };
 
-/** Nombres de las personas (la base no los guarda): se leen de Auth con el cliente de servicio. Si falla, el laboratorio usa "Asesor 1"... */
-async function readMemberNames(workspaceId: string): Promise<Record<string, string>> {
-  try {
-    const service = await createServiceClient();
-    const { data: members } = await service.from("workspace_members").select("user_id").eq("workspace_id", workspaceId);
-    const entries = await Promise.all(
-      (members ?? []).map(async (m) => {
-        const {
-          data: { user },
-        } = await service.auth.admin.getUserById(m.user_id);
-        return [m.user_id, displayName(user)] as const;
-      }),
-    );
-    return Object.fromEntries(entries);
-  } catch {
-    return {};
-  }
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export default async function FlowLabPage({ searchParams }: { searchParams: Promise<{ flow?: string | string[] }> }) {
-  const { workspace, role } = await getWorkspace();
+export default async function FlowLabPage({ searchParams }: { searchParams: Promise<{ flow?: string | string[]; scenario?: string | string[] }> }) {
+  const { workspace, role, supabase } = await getWorkspace();
   if (!isAdminRole(role)) {
     return <NoPermission title="Laboratorio de conversaciones" message="Solo el Dueño o un Administrador pueden usar el laboratorio." />;
   }
   const params = await searchParams;
   const flow = Array.isArray(params.flow) ? params.flow[0] : params.flow;
+  const scenarioId = Array.isArray(params.scenario) ? params.scenario[0] : params.scenario;
+
+  // ?scenario=: un escenario guardado que el laboratorio reproduce al abrir.
+  let replay: LabReplay | null = null;
+  if (scenarioId && UUID_RE.test(scenarioId)) {
+    const { data } = await supabase.from("lab_scenarios").select("id, name, definition").eq("id", scenarioId).eq("workspace_id", workspace.id).maybeSingle();
+    const parsed = data ? parseScenarioDefinition(data.definition) : null;
+    if (data && parsed?.ok) replay = { id: data.id, name: data.name, definition: parsed.value };
+  }
 
   let catalog: LabCatalog;
   try {
@@ -48,5 +41,6 @@ export default async function FlowLabPage({ searchParams }: { searchParams: Prom
       </div>
     );
   }
-  return <LabScreen catalog={catalog} workspaceId={workspace.id} focusFlowId={flow ?? null} />;
+  const settings = ((workspace as { settings?: unknown }).settings ?? {}) as WorkspaceSettings;
+  return <LabScreen catalog={catalog} workspaceId={workspace.id} focusFlowId={flow ?? null} replay={replay} business={settings.business_template ?? null} />;
 }
