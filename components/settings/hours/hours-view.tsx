@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Check, Copy, Loader2, Plus, Trash2, X } from "lucide-react";
@@ -228,6 +229,7 @@ function HolidaysEditor({ teamId, holidays }: { teamId: string | null; holidays:
   const [year, setYear] = useState(thisYear);
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
@@ -244,13 +246,15 @@ function HolidaysEditor({ teamId, holidays }: { teamId: string | null; holidays:
       const r = await fn();
       if ("error" in r) {
         setMessage({ kind: "error", text: r.error });
+        toast.error(r.error);
         return false;
       }
-      if (okText) setMessage({ kind: "ok", text: okText(r) });
+      if (okText) toast.success(okText(r));
       router.refresh();
       return true;
     } catch {
       setMessage({ kind: "error", text: "No se pudo completar la operación. Inténtalo de nuevo." });
+      toast.error("No se pudo completar la operación. Inténtalo de nuevo.");
       return false;
     } finally {
       setBusy(false);
@@ -393,6 +397,7 @@ function ScopeCard({
   const initialDraft = draftFromHours(initial);
   const [draft, setDraft] = useState<HoursDraft>(initialDraft);
   const [useCompany, setUseCompany] = useState(useCompanyOption && initial === null);
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -412,13 +417,16 @@ function ScopeCard({
       const r = await onSave(payload);
       if ("error" in r) {
         setError(r.error);
+        toast.error(r.error);
         return;
       }
+      toast.success("Horario guardado");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       router.refresh();
     } catch {
       setError("No se pudo guardar el horario. Inténtalo de nuevo.");
+      toast.error("No se pudo guardar el horario. Inténtalo de nuevo.");
     } finally {
       setSaving(false);
     }

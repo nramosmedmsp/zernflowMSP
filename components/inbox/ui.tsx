@@ -45,13 +45,13 @@ export function Modal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="animate-fade-in fixed inset-0 bg-black/50" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "relative z-10 flex max-h-[90vh] w-full max-w-md flex-col rounded-xl border border-border bg-card shadow-lg",
+          "animate-pop-in relative z-10 flex max-h-[90vh] w-full max-w-md flex-col rounded-xl border border-border bg-card shadow-lg",
           className,
         )}
       >
@@ -121,7 +121,7 @@ export function Popover({
       {open && (
         <div
           className={cn(
-            "absolute top-full z-40 mt-1 w-64 rounded-lg border border-border bg-card p-2 shadow-lg",
+            "animate-pop-in absolute top-full z-40 mt-1 w-64 rounded-lg border border-border bg-card p-2 shadow-lg",
             align === "right" ? "right-0" : "left-0",
             className,
           )}

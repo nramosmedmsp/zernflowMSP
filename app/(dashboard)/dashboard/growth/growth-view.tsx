@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { useToast } from "@/components/ui/toast";
 import type { Database, Json } from "@/lib/types/database";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { formatNumber, formatRelative } from "@/lib/format";
@@ -87,6 +88,7 @@ export function GrowthView({
   });
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const toast = useToast();
 
   const conversionRate = formatNumber(
     stats.totalComments > 0
@@ -103,12 +105,15 @@ export function GrowthView({
       .update({ is_active: !trigger.is_active })
       .eq("id", trigger.id);
 
-    if (!error) {
+    if (error) {
+      toast.error("No se pudo cambiar el estado de la regla.");
+    } else {
       setTriggers((prev) =>
         prev.map((t) =>
           t.id === trigger.id ? { ...t, is_active: !t.is_active } : t
         )
       );
+      toast.success(trigger.is_active ? "Regla pausada" : "Regla activada");
     }
     setTogglingId(null);
   }
@@ -123,8 +128,11 @@ export function GrowthView({
       .delete()
       .eq("id", triggerId);
 
-    if (!error) {
+    if (error) {
+      toast.error("No se pudo eliminar la regla.");
+    } else {
       setTriggers((prev) => prev.filter((t) => t.id !== triggerId));
+      toast.success("Regla eliminada");
     }
     setDeletingId(null);
   }
@@ -186,9 +194,11 @@ export function GrowthView({
           replyText: "",
           postIds: "",
         });
+        toast.success("Regla creada");
       }
     } catch (err) {
       console.error("Failed to create comment rule:", err);
+      toast.error("No se pudo crear la regla.");
     } finally {
       setCreating(false);
     }

@@ -44,8 +44,8 @@ export function ConfirmDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50" onClick={onCancel} />
-      <div className="relative z-10 w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-lg">
+      <div className="animate-fade-in fixed inset-0 bg-black/50" onClick={onCancel} />
+      <div className="animate-pop-in relative z-10 w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-lg">
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         <p className="mt-2 text-sm text-muted-foreground">{message}</p>
         <div className="mt-4 flex justify-end gap-2">

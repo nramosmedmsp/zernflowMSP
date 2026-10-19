@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
 import { flowStatusLabel } from "./labels";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
+import { startRouteProgress } from "@/components/ui/route-progress";
 import { createClient } from "@/lib/supabase/client";
 import type { Database, FlowStatus, Json } from "@/lib/types/database";
 
@@ -93,6 +95,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const toast = useToast();
   const [flowName, setFlowName] = useState(flow.name);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -195,7 +198,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   );
 
   const saveFlow = useCallback(
-    async (status?: FlowStatus) => {
+    async (status?: FlowStatus, quiet = false): Promise<boolean> => {
       if (status === "published") {
         setPublishing(true);
       } else {
@@ -225,21 +228,24 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
         if (error) {
           console.error("Failed to save flow:", error);
           setSaveError("No se pudo guardar");
+          toast.error("No se pudo guardar el flujo. Inténtalo de nuevo.");
           setTimeout(() => setSaveError(null), 3000);
-          return;
+          return false;
         }
 
         setSaveError(null);
         setLastSaved(new Date());
+        if (!quiet) toast.success("Flujo guardado");
+        return true;
       } finally {
         setSaving(false);
         setPublishing(false);
       }
     },
-    [flowName, nodes, edges, flow.id, supabase]
+    [flowName, nodes, edges, flow.id, supabase, toast]
   );
 
-  const handleSave = useCallback(() => saveFlow(), [saveFlow]);
+  const handleSave = useCallback(() => void saveFlow(), [saveFlow]);
   const handleDelete = useCallback(async () => {
     setDeleting(true);
     try {
@@ -249,23 +255,27 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       if (!res.ok) {
         console.error("Failed to delete flow");
         setSaveError("No se pudo eliminar");
+        toast.error("No se pudo eliminar el flujo.");
         setTimeout(() => setSaveError(null), 3000);
         setDeleting(false);
         return;
       }
+      toast.success("Flujo eliminado");
+      startRouteProgress();
       router.push("/dashboard/flows");
     } catch (err) {
       console.error("Failed to delete flow:", err);
       setSaveError("No se pudo eliminar");
+      toast.error("No se pudo eliminar el flujo.");
       setTimeout(() => setSaveError(null), 3000);
       setDeleting(false);
     }
-  }, [flow.id, router]);
+  }, [flow.id, router, toast]);
   const handlePublish = useCallback(async () => {
     setPublishing(true);
     try {
       // First save the current state
-      await saveFlow();
+      if (!(await saveFlow(undefined, true))) return;
       // Then call the publish API which increments version and saves snapshot
       const res = await fetch(`/api/v1/flows/${flow.id}/publish`, {
         method: "POST",
@@ -273,16 +283,20 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       if (!res.ok) {
         console.error("Failed to publish flow");
         setSaveError("No se pudo publicar");
+        toast.error("No se pudo publicar el flujo.");
         setTimeout(() => setSaveError(null), 3000);
         return;
       }
       setSaveError(null);
       setLastSaved(new Date());
+      toast.success("Flujo publicado");
       router.refresh();
+    } catch {
+      toast.error("No se pudo publicar el flujo. Revisa tu conexión.");
     } finally {
       setPublishing(false);
     }
-  }, [saveFlow, flow.id]);
+  }, [saveFlow, flow.id, router, toast]);
 
   return (
     <div className="flex h-full flex-col">
@@ -290,7 +304,10 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => router.push("/dashboard/flows")}
+            onClick={() => {
+              startRouteProgress();
+              router.push("/dashboard/flows");
+            }}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -417,7 +434,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             ) : (
               <Save className="h-3.5 w-3.5" />
             )}
-            Guardar
+            {saving ? "Guardando…" : "Guardar"}
           </button>
           <button
             onClick={handlePublish}
@@ -429,7 +446,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             ) : (
               <Rocket className="h-3.5 w-3.5" />
             )}
-            Publicar
+            {publishing ? "Publicando…" : "Publicar"}
           </button>
           <button
             onClick={() => setConfirmDelete(true)}

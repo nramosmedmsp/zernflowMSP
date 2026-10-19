@@ -32,6 +32,8 @@ import Link from "next/link";
 import { saveWorkspaceSettings } from "@/lib/actions/settings";
 import { isAdminRole } from "@/lib/permissions";
 import { settingsLinksFor, type SettingsLinkKey } from "./settings-nav";
+import { useToast } from "@/components/ui/toast";
+import { Spinner } from "@/components/ui/spinner";
 
 const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
   general: Settings,
@@ -117,6 +119,7 @@ export function SettingsView({
   const [showAiKey, setShowAiKey] = useState(false);
   const [keywords, setKeywords] = useState<string[]>(workspace.globalKeywords);
   const [newKeyword, setNewKeyword] = useState("");
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,6 +170,7 @@ export function SettingsView({
         success: true,
         accountCount: accounts.length,
       });
+      toast.success("Conexión verificada y clave guardada");
 
       // Key was saved and channels synced server-side
       setApiKey("");
@@ -202,13 +206,16 @@ export function SettingsView({
       }
 
       setSaved(true);
+      toast.success("Configuración guardada");
       setApiKey("");
       setAiKey("");
       setTestResult(null);
       setTimeout(() => setSaved(false), 3000);
     } catch (err) {
       console.error("Failed to save settings:", err);
-      setError(err instanceof Error ? err.message : "No se pudo guardar la configuración. Inténtalo de nuevo.");
+      const message = err instanceof Error ? err.message : "No se pudo guardar la configuración. Inténtalo de nuevo.";
+      setError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -506,8 +513,8 @@ export function SettingsView({
             >
               {saving ? (
                 <>
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                  Guardando...
+                  <Spinner />
+                  Guardando…
                 </>
               ) : (
                 <>

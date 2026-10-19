@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { useToast } from "@/components/ui/toast";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,7 @@ export function RepliesView({
   const [tab, setTab] = useState<Tab>("workspace");
   const [teamId, setTeamId] = useState<string>(manageableTeams[0]?.id ?? "");
   const [form, setForm] = useState<FormState | null>(null);
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<SavedReplyView | null>(null);
@@ -114,6 +116,7 @@ export function RepliesView({
         form.id ? prev.map((r) => (r.id === result.reply.id ? result.reply : r)) : [...prev, result.reply],
       );
       setForm(null);
+      toast.success(form.id ? "Respuesta actualizada" : "Respuesta guardada");
     } catch {
       setError("No se pudo guardar la respuesta. Inténtalo de nuevo.");
     } finally {
@@ -134,6 +137,7 @@ export function RepliesView({
       invalidateSavedRepliesCache();
       setReplies((prev) => prev.filter((r) => r.id !== target.id));
       setToDelete(null);
+      toast.success("Respuesta borrada");
     } catch {
       setDeleteError("No se pudo borrar la respuesta. Inténtalo de nuevo.");
     }

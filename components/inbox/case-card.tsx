@@ -32,10 +32,11 @@ import { limaDateOf } from "@/lib/cases/dates";
 import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { formatDate, formatRelative, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/toast";
 import { CloseCaseDialog } from "./close-case-dialog";
 import { NewCaseDialog } from "./new-case-dialog";
 import { memberName, type InboxMember } from "./inbox-model";
-import { ErrorText, Popover, inputClass, primaryButtonClass, secondaryButtonClass, selectClass } from "./ui";
+import { Popover, inputClass, primaryButtonClass, secondaryButtonClass, selectClass } from "./ui";
 
 const chipButton =
   "inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60";
@@ -57,8 +58,7 @@ export function CaseCard({
   onChanged: () => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const [closing, setClosing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -73,25 +73,23 @@ export function CaseCard({
   const run = useCallback(
     async (key: string, action: () => Promise<CaseActionResult<object>>, success?: string) => {
       setBusy(key);
-      setError(null);
-      setNotice(null);
       try {
         const result = await action();
         if ("error" in result) {
-          setError(result.error);
+          toast.error(result.error);
           return false;
         }
-        if (success) setNotice(success);
+        if (success) toast.success(success);
         await onChanged();
         return true;
       } catch {
-        setError("No se pudo guardar el cambio. Inténtalo de nuevo.");
+        toast.error("No se pudo guardar el cambio. Inténtalo de nuevo.");
         return false;
       } finally {
         setBusy(null);
       }
     },
-    [onChanged],
+    [onChanged, toast],
   );
 
   const closeAssign = useCallback(() => setAssignOpen(false), []);
@@ -113,7 +111,7 @@ export function CaseCard({
           onCancel={() => setCreating(false)}
           onCreated={async (caseId, message) => {
             setCreating(false);
-            setNotice(message);
+            toast.success(message);
             await onChanged();
             onSelectCase(caseId);
           }}
@@ -126,7 +124,7 @@ export function CaseCard({
           onCancel={() => setClosing(false)}
           onClosed={async (message) => {
             setClosing(false);
-            setNotice(message);
+            toast.success(message);
             await onChanged();
           }}
         />
@@ -140,8 +138,6 @@ export function CaseCard({
         <BriefcaseBusiness className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-muted-foreground">Sin gestión abierta</span>
         {newCaseButton}
-        {notice && <span className="text-green-700">{notice}</span>}
-        <ErrorText>{error}</ErrorText>
         {dialogs}
       </div>
     );
@@ -226,9 +222,9 @@ export function CaseCard({
                 if (e.target.value) {
                   void run("type", async () => {
                     const r = await classifyCase(active.id, e.target.value);
-                    if ("ok" in r && r.rerouted) setNotice("La gestión se envió a otro equipo según su tipo.");
+                    if ("ok" in r && r.rerouted) toast.success("La gestión se envió a otro equipo según su tipo.");
                     return r;
-                  });
+                  }, "Tipo de gestión actualizado.");
                 }
               }}
               className={selectClass}
@@ -249,7 +245,7 @@ export function CaseCard({
                 value={active.stageId ?? ""}
                 disabled={!perms.canEdit || busy !== null}
                 onChange={(e) => {
-                  if (e.target.value) void run("stage", () => changeCaseStage(active.id, e.target.value));
+                  if (e.target.value) void run("stage", () => changeCaseStage(active.id, e.target.value), "Etapa actualizada.");
                 }}
                 className={selectClass}
                 aria-label="Etapa"
@@ -268,7 +264,7 @@ export function CaseCard({
               <select
                 value={active.categoryId ?? ""}
                 disabled={!perms.canEdit || busy !== null}
-                onChange={(e) => void run("category", () => setCaseCategory(active.id, e.target.value || null))}
+                onChange={(e) => void run("category", () => setCaseCategory(active.id, e.target.value || null), "Categoría actualizada.")}
                 className={selectClass}
                 aria-label="Categoría"
               >
@@ -421,8 +417,6 @@ export function CaseCard({
       {active.nextActionNote && active.nextActionAt && !isClosed && (
         <p className="truncate text-[11px] text-muted-foreground">Nota: {active.nextActionNote}</p>
       )}
-      {notice && <p className="text-xs text-green-700">{notice}</p>}
-      <ErrorText>{error}</ErrorText>
       {dialogs}
     </div>
   );

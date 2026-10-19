@@ -35,6 +35,7 @@ import {
 import type { Database, Platform } from "@/lib/types/database";
 import { useContactCases } from "./use-contact-cases";
 import { selectClass } from "./ui";
+import { useToast } from "@/components/ui/toast";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
 type TagRow = Database["public"]["Tables"]["tags"]["Row"];
@@ -135,6 +136,7 @@ export function ContactPanel({
   const [addingTag, setAddingTag] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
   const [loadedMembers, setLoadedMembers] = useState<MemberOption[]>([]);
 
   // Sin datos de la bandeja, el panel los pide por su cuenta.
@@ -209,8 +211,10 @@ export function ContactPanel({
     setSaving(null);
     if ("error" in result) {
       setError(result.error);
+      toast.error(result.error);
       return;
     }
+    toast.success("Contacto actualizado");
     await loadContact(details.contact.id);
     onContactChanged?.();
     if (providedCases === undefined) void own.reload();
@@ -230,8 +234,10 @@ export function ContactPanel({
     setAddingTag(false);
     if ("error" in result) {
       setError(result.error);
+      toast.error(result.error);
       return;
     }
+    toast.success("Etiqueta agregada");
     await loadContact(details.contact.id);
   }
 
@@ -248,8 +254,10 @@ export function ContactPanel({
     setSaving(null);
     if ("error" in result) {
       setError(result.error);
+      toast.error(result.error);
       return;
     }
+    toast.success("Etiqueta quitada");
     await loadContact(details.contact.id);
   }
 
@@ -263,7 +271,7 @@ export function ContactPanel({
   const availableTags = workspaceTags.filter((t) => !details?.tags.some((x) => x.id === t.id));
 
   return (
-    <div className="flex h-full w-80 flex-col border-l border-border bg-background">
+    <div className="animate-slide-in-right flex h-full w-80 flex-col border-l border-border bg-background">
       {/* Header */}
       <div className="flex h-14 items-center justify-between border-b border-border px-4">
         <h3 className="text-sm font-semibold">Información del contacto</h3>

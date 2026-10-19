@@ -3,9 +3,12 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Loader2 } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
+import { startRouteProgress } from "@/components/ui/route-progress";
 
 export function CreateFlowButton() {
   const router = useRouter();
+  const toast = useToast();
   const [creating, setCreating] = useState(false);
   const pendingRef = useRef(false);
 
@@ -23,15 +26,17 @@ export function CreateFlowButton() {
 
       if (!res.ok) {
         console.error("Failed to create flow");
-        alert("No se pudo crear el flujo. Inténtalo de nuevo.");
+        toast.error("No se pudo crear el flujo. Inténtalo de nuevo.");
         return;
       }
 
       const flow = await res.json();
+      toast.success("Flujo creado");
+      startRouteProgress();
       router.push(`/dashboard/flows/${flow.id}`);
     } catch (err) {
       console.error("Failed to create flow:", err);
-      alert("No se pudo crear el flujo. Inténtalo de nuevo.");
+      toast.error("No se pudo crear el flujo. Inténtalo de nuevo.");
     } finally {
       pendingRef.current = false;
       setCreating(false);
@@ -49,7 +54,7 @@ export function CreateFlowButton() {
       ) : (
         <Plus className="h-4 w-4" />
       )}
-      {creating ? "Creando..." : "Nuevo flujo"}
+      {creating ? "Creando…" : "Nuevo flujo"}
     </button>
   );
 }

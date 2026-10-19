@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -17,6 +17,8 @@ import {
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { startRouteProgress } from "@/components/ui/route-progress";
+import { Spinner } from "@/components/ui/spinner";
 import { formatNumber, formatRelative } from "@/lib/format";
 import { NO_VALUE_FILTER } from "@/components/contacts/contact-filters";
 import {
@@ -85,6 +87,7 @@ export function ContactsView({
   canImport: boolean;
 }) {
   const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState(params.search);
   const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
   const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>(
@@ -97,14 +100,16 @@ export function ContactsView({
 
   // Los filtros viven en la URL: cada cambio vuelve a pedir la lista al servidor.
   function go(patch: Partial<ContactListParams>) {
-    router.replace(contactListHref({ ...params, page: 1, ...patch }));
+    startRouteProgress();
+    startTransition(() => router.replace(contactListHref({ ...params, page: 1, ...patch })));
   }
 
   // Búsqueda con espera, para no consultar en cada tecla.
   useEffect(() => {
     if (search.trim() === params.search) return;
     const timer = setTimeout(() => {
-      router.replace(contactListHref({ ...params, search: search.trim(), page: 1 }));
+      startRouteProgress();
+      startTransition(() => router.replace(contactListHref({ ...params, search: search.trim(), page: 1 })));
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [search, params, router]);
@@ -155,8 +160,11 @@ export function ContactsView({
               placeholder="Buscar por nombre, correo o teléfono..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-9 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
+            {(pending || search.trim() !== params.search) && (
+              <Spinner className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            )}
           </div>
           <select
             aria-label="Tipo de contacto"
@@ -315,7 +323,7 @@ export function ContactsView({
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto">
+      <div className={cn("flex-1 overflow-auto transition-opacity", pending && "opacity-60")} aria-busy={pending}>
         {contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Users className="h-10 w-10 text-muted-foreground/40" />

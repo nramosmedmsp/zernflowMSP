@@ -253,7 +253,7 @@ export function ConversationList({
       )}
 
       {/* Conversation list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="stagger-list flex-1 overflow-y-auto">
         {rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
             <MessageSquare className="h-8 w-8 text-muted-foreground/50" />

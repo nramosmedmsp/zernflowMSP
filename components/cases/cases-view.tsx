@@ -19,6 +19,7 @@ import {
   type CaseListParams,
 } from "@/components/cases/case-filters";
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
+import { startRouteProgress } from "@/components/ui/route-progress";
 import type { CaseListRow } from "@/app/(dashboard)/dashboard/cases/load-cases";
 import type { CaseStatus } from "@/lib/types/database";
 
@@ -105,6 +106,7 @@ export function CasesView(props: CasesViewProps) {
   const teamName = useMemo(() => new Map(teams.map((t) => [t.id, t.name])), [teams]);
 
   function go(next: Partial<CaseListParams>) {
+    startRouteProgress();
     startTransition(() => router.push(buildCasesHref({ ...params, page: 1, ...next })));
   }
 
@@ -346,7 +348,10 @@ export function CasesView(props: CasesViewProps) {
                 return (
                   <tr
                     key={row.id}
-                    onClick={() => router.push(href)}
+                    onClick={() => {
+                      startRouteProgress();
+                      router.push(href);
+                    }}
                     className="cursor-pointer border-b border-border transition-colors hover:bg-accent/50"
                   >
                     <td className="px-8 py-3">
@@ -433,7 +438,10 @@ export function CasesView(props: CasesViewProps) {
           <div className="flex items-center gap-2">
             <button
               disabled={page <= 1 || pending}
-              onClick={() => startTransition(() => router.push(buildCasesHref({ ...params, page: page - 1 })))}
+              onClick={() => {
+                startRouteProgress();
+                startTransition(() => router.push(buildCasesHref({ ...params, page: page - 1 })));
+              }}
               className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-accent disabled:opacity-40"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -444,7 +452,10 @@ export function CasesView(props: CasesViewProps) {
             </span>
             <button
               disabled={page >= pages || pending}
-              onClick={() => startTransition(() => router.push(buildCasesHref({ ...params, page: page + 1 })))}
+              onClick={() => {
+                startRouteProgress();
+                startTransition(() => router.push(buildCasesHref({ ...params, page: page + 1 })));
+              }}
               className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-accent disabled:opacity-40"
             >
               Siguiente

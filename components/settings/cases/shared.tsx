@@ -42,6 +42,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/toast";
 import type { ConfigResult } from "@/lib/actions/case-config";
 import {
   CASE_TYPE_ICONS,
@@ -101,6 +102,7 @@ export function useRunner(): {
   clearNotice: () => void;
 } {
   const router = useRouter();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -112,20 +114,22 @@ export function useRunner(): {
         const result = await action();
         if ("error" in result) {
           setNotice({ kind: "error", text: result.error });
+          toast.error(result.error);
           return false;
         }
         const text = typeof okMessage === "function" ? okMessage(result) : okMessage;
-        setNotice(text ? { kind: "ok", text } : null);
+        if (text) toast.success(text);
         router.refresh();
         return true;
       } catch {
         setNotice({ kind: "error", text: "No se pudo completar la operación. Inténtalo de nuevo." });
+        toast.error("No se pudo completar la operación. Inténtalo de nuevo.");
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [router],
+    [router, toast],
   );
 
   return { run, busy, notice, setNotice, clearNotice: () => setNotice(null) };
@@ -252,7 +256,7 @@ export function ColorPicker({
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-9 z-50 w-44 rounded-lg border border-border bg-card p-2 shadow-lg">
+          <div className="animate-pop-in absolute left-0 top-9 z-50 w-44 rounded-lg border border-border bg-card p-2 shadow-lg">
             <div className="grid grid-cols-6 gap-1.5">
               {COLOR_SWATCHES.map((c) => (
                 <button
@@ -342,12 +346,12 @@ export function Modal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="animate-fade-in fixed inset-0 bg-black/50" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={cn("relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-lg", wide ? "max-w-3xl" : "max-w-md")}
+        className={cn("animate-pop-in relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-lg", wide ? "max-w-3xl" : "max-w-md")}
       >
         <div className="mb-3 flex items-start justify-between gap-3">
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>

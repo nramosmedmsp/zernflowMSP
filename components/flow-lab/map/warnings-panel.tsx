@@ -23,7 +23,7 @@ export function WarningsPanel({ warnings, flowNames, selectedId, onSelect }: War
     .filter((g) => g.items.length > 0);
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-l border-border bg-card">
+    <aside className="animate-slide-in-right flex h-full w-80 shrink-0 flex-col border-l border-border bg-card">
       <div className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold">Avisos</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">

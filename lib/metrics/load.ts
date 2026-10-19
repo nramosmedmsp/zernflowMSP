@@ -69,37 +69,13 @@ export async function loadMetrics(
     filters: MetricFilters;
     /** Administrador o supervisor: ve los mensajes entrantes de todo el espacio. */
     canSeeOthers: boolean;
-    members: MetricMember[];
+    /** Puede venir como promesa: se espera al final, para no frenar las consultas. */
+    members: MetricMember[] | Promise<MetricMember[]>;
     now: Date;
   },
 ): Promise<LoadedMetrics> {
   const { workspaceId, filters, now } = params;
   const range = periodRange(filters, now);
-
-  const [typesRes, teamsRes, contactTypesRes, holidaysRes] = await Promise.all([
-    db
-      .from("case_types")
-      .select("id, name, is_proactive, sla_first_response_minutes, sla_resolution_hours")
-      .eq("workspace_id", workspaceId),
-    db.from("teams").select("id, name, business_hours").eq("workspace_id", workspaceId),
-    db.from("contact_types").select("id, name").eq("workspace_id", workspaceId).order("position", { ascending: true }),
-    db
-      .from("holidays")
-      .select("date, team_id")
-      .eq("workspace_id", workspaceId)
-      .gte("date", addDays(range.startDay, -7)),
-  ]);
-
-  const caseTypes = (typesRes.data ?? []) as MetricCaseType[];
-  const teamRows = teamsRes.data ?? [];
-  const typeIds = caseTypes.map((t) => t.id);
-
-  const [stagesRes, reasonsRes] = typeIds.length
-    ? await Promise.all([
-        db.from("case_stages").select("id, case_type_id, name, position, kind").in("case_type_id", typeIds),
-        db.from("case_outcome_reasons").select("id, case_type_id, name, kind").in("case_type_id", typeIds),
-      ])
-    : [{ data: [] }, { data: [] }];
 
   // Gestiones del periodo (abiertas, cerradas o con primera respuesta en él) y todas las abiertas.
   const dbFilters = <T extends { eq: (c: string, v: string) => T }>(q: T): T => {
@@ -114,16 +90,79 @@ export async function loadMetrics(
   const e = range.endIso;
   const periodOr = `and(opened_at.gte.${s},opened_at.lt.${e}),and(closed_at.gte.${s},closed_at.lt.${e}),and(first_response_at.gte.${s},first_response_at.lt.${e})`;
 
-  const [periodRes, openRes] = await Promise.all([
-    dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId))
-      .or(periodOr)
-      .order("created_at", { ascending: false })
-      .limit(MAX_CASES + 1),
-    dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId))
-      .eq("status", "open")
-      .order("created_at", { ascending: false })
-      .limit(MAX_CASES + 1),
-  ]);
+  // Mensajes entrantes: solo para administradores y supervisores (el evento no
+  // guarda a quién se asignó, así que no se puede recortar por asesor). No
+  // depende de las gestiones: corre en paralelo con todo lo demás. La primera
+  // página trae el total y el resto de páginas se piden a la vez.
+  const loadInbound = async () => {
+    const inbound: MetricInboundEvent[] = [];
+    let truncatedInbound = false;
+    if (!params.canSeeOthers) return { inbound, truncatedInbound };
+    const page = (from: number, withCount: boolean) =>
+      db
+        .from("analytics_events")
+        .select("created_at, metadata", withCount ? { count: "exact" } : undefined)
+        .eq("workspace_id", workspaceId)
+        .eq("event_type", "message_received")
+        .gte("created_at", s)
+        .lt("created_at", e)
+        .order("created_at", { ascending: true })
+        .range(from, from + PAGE - 1);
+    const first = await page(0, true);
+    const pages = [first.data ?? []];
+    const total = Math.min(first.count ?? pages[0].length, MAX_INBOUND_EVENTS);
+    if ((first.count ?? 0) > MAX_INBOUND_EVENTS) truncatedInbound = true;
+    const rest: number[] = [];
+    for (let from = PAGE; from < total; from += PAGE) rest.push(from);
+    const others = await Promise.all(rest.map((from) => page(from, false)));
+    for (const r of others) pages.push(r.data ?? []);
+    for (const rows of pages) {
+      for (const row of rows) {
+        const md = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {};
+        const platform = (md as Record<string, Json | undefined>).platform;
+        inbound.push({ created_at: row.created_at, platform: typeof platform === "string" ? platform : null });
+      }
+    }
+    return { inbound, truncatedInbound };
+  };
+
+  // Todo lo que depende solo del espacio, en una sola ronda. Etapas y motivos
+  // se piden con join al tipo para no esperar a la lista de tipos.
+  const [typesRes, teamsRes, contactTypesRes, holidaysRes, stagesRes, reasonsRes, periodRes, openRes, inboundResult] =
+    await Promise.all([
+      db
+        .from("case_types")
+        .select("id, name, is_proactive, sla_first_response_minutes, sla_resolution_hours")
+        .eq("workspace_id", workspaceId),
+      db.from("teams").select("id, name, business_hours").eq("workspace_id", workspaceId),
+      db.from("contact_types").select("id, name").eq("workspace_id", workspaceId).order("position", { ascending: true }),
+      db
+        .from("holidays")
+        .select("date, team_id")
+        .eq("workspace_id", workspaceId)
+        .gte("date", addDays(range.startDay, -7)),
+      db
+        .from("case_stages")
+        .select("id, case_type_id, name, position, kind, case_types!inner(workspace_id)")
+        .eq("case_types.workspace_id", workspaceId),
+      db
+        .from("case_outcome_reasons")
+        .select("id, case_type_id, name, kind, case_types!inner(workspace_id)")
+        .eq("case_types.workspace_id", workspaceId),
+      dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId))
+        .or(periodOr)
+        .order("created_at", { ascending: false })
+        .limit(MAX_CASES + 1),
+      dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId))
+        .eq("status", "open")
+        .order("created_at", { ascending: false })
+        .limit(MAX_CASES + 1),
+      loadInbound(),
+    ]);
+
+  const caseTypes = (typesRes.data ?? []) as MetricCaseType[];
+  const teamRows = teamsRes.data ?? [];
+  const members = await params.members;
 
   const periodRows = (periodRes.data ?? []) as unknown as CaseQueryRow[];
   const openRows = (openRes.data ?? []) as unknown as CaseQueryRow[];
@@ -138,7 +177,7 @@ export async function loadMetrics(
 
   // Actividad de esas gestiones (con paginación) y plataforma del contacto.
   const activity: MetricActivity[] = [];
-  await Promise.all(
+  const activityDone = Promise.all(
     chunks(caseIds, CHUNK).map(async (ids) => {
       for (let from = 0; ; from += PAGE) {
         const { data } = await db
@@ -156,7 +195,7 @@ export async function loadMetrics(
   );
 
   const platformByContact = new Map<string, string>();
-  await Promise.all(
+  const platformDone = Promise.all(
     chunks(contactIds, 200).map(async (ids) => {
       const { data } = await db
         .from("conversations")
@@ -172,32 +211,7 @@ export async function loadMetrics(
       for (const [id, v] of latest) platformByContact.set(id, v.platform);
     }),
   );
-
-  // Mensajes entrantes: solo para administradores y supervisores (el evento no
-  // guarda a quién se asignó, así que no se puede recortar por asesor).
-  const inbound: MetricInboundEvent[] = [];
-  let truncatedInbound = false;
-  if (params.canSeeOthers) {
-    for (let from = 0; from < MAX_INBOUND_EVENTS; from += PAGE) {
-      const { data } = await db
-        .from("analytics_events")
-        .select("created_at, metadata")
-        .eq("workspace_id", workspaceId)
-        .eq("event_type", "message_received")
-        .gte("created_at", s)
-        .lt("created_at", e)
-        .order("created_at", { ascending: true })
-        .range(from, from + PAGE - 1);
-      const rows = data ?? [];
-      for (const row of rows) {
-        const md = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {};
-        const platform = (md as Record<string, Json | undefined>).platform;
-        inbound.push({ created_at: row.created_at, platform: typeof platform === "string" ? platform : null });
-      }
-      if (rows.length < PAGE) break;
-      if (from + PAGE >= MAX_INBOUND_EVENTS) truncatedInbound = true;
-    }
-  }
+  await Promise.all([activityDone, platformDone]);
 
   // Horarios: el del equipo si tiene uno; si no, el de la empresa.
   const info = buildHoursInfo({
@@ -227,9 +241,9 @@ export async function loadMetrics(
       stages: (stagesRes.data ?? []) as MetricStage[],
       caseTypes,
       reasons: (reasonsRes.data ?? []) as MetricReason[],
-      members: params.members,
+      members,
       teams,
-      inbound,
+      inbound: inboundResult.inbound,
       platformByContact,
       scheduleFor,
       staleStageDays: staleStageDaysFromSettings(params.workspaceSettings),
@@ -237,6 +251,6 @@ export async function loadMetrics(
     contactTypes: (contactTypesRes.data ?? []).map((c) => ({ id: c.id, name: c.name })),
     channels,
     truncatedCases,
-    truncatedInbound,
+    truncatedInbound: inboundResult.truncatedInbound,
   };
 }

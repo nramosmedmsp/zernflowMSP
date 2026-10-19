@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
 import {
@@ -22,6 +22,7 @@ import {
   KeyRound,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { Spinner } from "@/components/ui/spinner";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -39,6 +40,12 @@ interface WorkspaceItem {
   name: string;
   slug: string;
   role: string;
+}
+
+/** Icono del ítem: mientras la página carga muestra un indicador (useLinkStatus). */
+function NavIcon({ Icon }: { Icon: LucideIcon }) {
+  const { pending } = useLinkStatus();
+  return pending ? <Spinner /> : <Icon className="h-4 w-4" />;
 }
 
 function subscribeToThemeClass(callback: () => void) {
@@ -151,6 +158,9 @@ export function Sidebar({
   workspaces: WorkspaceItem[];
 }) {
   const pathname = usePathname();
+  // Ítem pulsado: se marca al instante, antes de que el servidor responda.
+  const [clicked, setClicked] = useState<{ href: string; from: string } | null>(null);
+  const optimisticHref = clicked && clicked.from === pathname ? clicked.href : null;
   const router = useRouter();
   const supabase = createClient();
   const dark = useSyncExternalStore(
@@ -189,12 +199,16 @@ export function Sidebar({
 
       <nav className="flex-1 space-y-1 p-3">
         {navigationFor(role).map((item) => {
-          const isActive = isNavActive(pathname, item.href);
+          const isActive = optimisticHref ? item.href === optimisticHref : isNavActive(pathname, item.href);
           const Icon = NAV_ICONS[item.key];
           return (
             <Link
               key={item.name}
               href={item.href}
+              onClick={() => {
+                if (!isNavActive(pathname, item.href)) setClicked({ href: item.href, from: pathname });
+              }}
+              aria-current={isActive ? "page" : undefined}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 isActive
@@ -202,7 +216,7 @@ export function Sidebar({
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               )}
             >
-              <Icon className="h-4 w-4" />
+              <NavIcon Icon={Icon} />
               {item.name}
             </Link>
           );

@@ -15,7 +15,8 @@ export default async function CasesPage({
   const isAdmin = isAdminRole(role);
   const now = new Date();
 
-  const [typesRes, teamsRes, membersRes] = await Promise.all([
+  // Etapas por join con el tipo (sin esperar a la lista de tipos) y el resto en paralelo.
+  const [typesRes, teamsRes, membersRes, stagesRes] = await Promise.all([
     supabase
       .from("case_types")
       .select("id, name, color, archived_at")
@@ -28,31 +29,21 @@ export default async function CasesPage({
       .is("archived_at", null)
       .order("name", { ascending: true }),
     listCaseMembers(),
+    supabase
+      .from("case_stages")
+      .select("id, case_type_id, name, color, archived_at, position, case_types!inner(workspace_id)")
+      .eq("case_types.workspace_id", workspace.id)
+      .order("position", { ascending: true }),
   ]);
 
   const caseTypes = typesRes.data ?? [];
   const teams = teamsRes.data ?? [];
   const members = "members" in membersRes ? membersRes.members : [];
 
-  const typeIds = caseTypes.map((t) => t.id);
-  const [stagesRes, myTeamsRes] = await Promise.all([
-    typeIds.length
-      ? supabase
-          .from("case_stages")
-          .select("id, case_type_id, name, color, archived_at, position")
-          .in("case_type_id", typeIds)
-          .order("position", { ascending: true })
-      : Promise.resolve({ data: [] as { id: string; case_type_id: string; name: string; color: string | null; archived_at: string | null; position: number }[] }),
-    teams.length
-      ? supabase
-          .from("team_members")
-          .select("team_id, role")
-          .eq("user_id", user.id)
-          .in("team_id", teams.map((t) => t.id))
-      : Promise.resolve({ data: [] as { team_id: string; role: string }[] }),
-  ]);
-
-  const supervisedTeamIds = (myTeamsRes.data ?? []).filter((m) => m.role === "supervisor").map((m) => m.team_id);
+  // Equipos que superviso: ya vienen en la lista de miembros (equipos activos).
+  const supervisedTeamIds = (members.find((m) => m.userId === user.id)?.teams ?? [])
+    .filter((t) => t.role === "supervisor")
+    .map((t) => t.teamId);
   const isSupervisor = supervisedTeamIds.length > 0;
   const canSeeOthers = isAdmin || isSupervisor;
 

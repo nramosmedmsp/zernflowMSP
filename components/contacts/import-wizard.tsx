@@ -5,9 +5,11 @@
 
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, CheckCircle2, Download, FileUp, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, Download, FileUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatNumber } from "@/lib/format";
+import { Spinner } from "@/components/ui/spinner";
+import { useToast } from "@/components/ui/toast";
 import {
   findExistingContacts,
   finishImport,
@@ -43,6 +45,7 @@ import {
 } from "@/lib/import/validate";
 
 type Step = "upload" | "map" | "preview" | "running" | "done";
+type RunPhase = "starting" | "importing" | "finishing";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "upload", label: "Archivo" },
@@ -85,6 +88,9 @@ export function ImportWizard({ context }: { context: ImportContext }) {
   const [step, setStep] = useState<Step>("upload");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [phase, setPhase] = useState<RunPhase>("starting");
+  const toast = useToast();
 
   const [fileName, setFileName] = useState("");
   const [encoding, setEncoding] = useState("");
@@ -135,6 +141,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
   async function onFile(file: File | undefined) {
     if (!file) return;
     setError(null);
+    setReading(true);
     try {
       const decoded = decodeCsvBytes(new Uint8Array(await file.arrayBuffer()));
       const rows = parseCsv(decoded.text, detectDelimiter(decoded.text));
@@ -157,6 +164,8 @@ export function ImportWizard({ context }: { context: ImportContext }) {
       setStep("map");
     } catch {
       setError("No se pudo leer el archivo. Comprueba que sea un CSV.");
+    } finally {
+      setReading(false);
     }
   }
 
@@ -193,15 +202,18 @@ export function ImportWizard({ context }: { context: ImportContext }) {
     setError(null);
     setBusy(true);
     setStep("running");
+    setPhase("starting");
     const rows = inputRows;
     setProgress({ done: 0, total: rows.length });
     try {
       const started = await startImport({ fileName, total: rows.length, options });
       if ("error" in started) {
         setError(started.error);
+        toast.error(started.error);
         setStep("preview");
         return;
       }
+      setPhase("importing");
       let scheduled = 0;
       let linked = 0;
       for (let i = 0; i < rows.length; i += IMPORT_BATCH_SIZE) {
@@ -209,23 +221,30 @@ export function ImportWizard({ context }: { context: ImportContext }) {
         const res = await processImportBatch({ batchId: started.batchId, rows: part, options });
         if ("error" in res) {
           setError(`${res.error} Las filas anteriores ya se importaron (ver el resultado).`);
+          toast.error(res.error);
           break;
         }
         scheduled += res.result.scheduled;
         linked += res.result.linked;
         setProgress({ done: Math.min(i + part.length, rows.length), total: rows.length });
       }
+      setPhase("finishing");
       const finished = await finishImport(started.batchId);
       if ("error" in finished) {
         setError(finished.error);
+        toast.error(finished.error);
         setStep("preview");
         return;
       }
       setExtra({ scheduled, linked });
       setResult(finished.result);
       setStep("done");
+      toast.success(
+        `Importación terminada: ${formatNumber(finished.result.created)} creados, ${formatNumber(finished.result.updated)} actualizados.`,
+      );
     } catch {
       setError("Se interrumpió la importación. Revisa tus contactos antes de volver a intentarlo.");
+      toast.error("Se interrumpió la importación. Revisa tus contactos antes de volver a intentarlo.");
       setStep("preview");
     } finally {
       setBusy(false);
@@ -300,11 +319,18 @@ export function ImportWizard({ context }: { context: ImportContext }) {
               <p className="mt-1 text-xs text-muted-foreground">
                 UTF-8 o Latin-1, separado por comas o punto y coma. La primera fila debe ser el encabezado.
               </p>
+              {reading && (
+                <p role="status" className="mt-3 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <Spinner className="h-3.5 w-3.5" />
+                  Leyendo el archivo…
+                </p>
+              )}
               <input
                 ref={fileInput}
                 type="file"
                 accept=".csv,text/csv"
                 onChange={(e) => onFile(e.target.files?.[0])}
+                disabled={reading}
                 className="mt-4 block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-medium file:text-primary-foreground"
               />
             </div>
@@ -384,8 +410,8 @@ export function ImportWizard({ context }: { context: ImportContext }) {
                 Cambiar archivo
               </button>
               <button type="button" disabled={!canContinueMap || busy} onClick={toPreview} className={BUTTON_PRIMARY}>
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                Ver vista previa
+                {busy && <Spinner />}
+                {busy ? "Validando contactos…" : "Ver vista previa"}
               </button>
             </div>
           </div>
@@ -550,6 +576,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
                 onClick={runImport}
                 className={BUTTON_PRIMARY}
               >
+                {busy && <Spinner />}
                 Importar {formatNumber(summary.create + summary.update)} contactos
               </button>
             </div>
@@ -557,20 +584,56 @@ export function ImportWizard({ context }: { context: ImportContext }) {
         )}
 
         {step === "running" && (
-          <div className="max-w-md space-y-3">
-            <p className="flex items-center gap-2 text-sm font-medium">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Importando... no cierres esta página.
-            </p>
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
+          <div role="status" className="max-w-md space-y-4 animate-fade-in">
+            <p className="text-sm font-medium">Importando contactos… no cierres esta página.</p>
+            <ol className="space-y-2 text-sm">
+              {(
+                [
+                  ["starting", "Preparando la importación"],
+                  ["importing", "Importando filas"],
+                  ["finishing", "Cerrando y armando el resumen"],
+                ] as [RunPhase, string][]
+              ).map(([key, label], i) => {
+                const order = ["starting", "importing", "finishing"];
+                const state = order.indexOf(phase) > i ? "done" : order.indexOf(phase) === i ? "active" : "todo";
+                return (
+                  <li
+                    key={key}
+                    className={cn(
+                      "flex items-center gap-2",
+                      state === "todo" && "text-muted-foreground/60",
+                      state === "active" && "font-medium",
+                    )}
+                  >
+                    {state === "done" ? (
+                      <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    ) : state === "active" ? (
+                      <Spinner />
+                    ) : (
+                      <span className="h-4 w-4 rounded-full border border-border" />
+                    )}
+                    {label}
+                  </li>
+                );
+              })}
+            </ol>
+            <div>
               <div
-                className="h-full bg-primary transition-all"
-                style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
-              />
+                className="h-2 overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={progress.total}
+                aria-valuenow={progress.done}
+              >
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {formatNumber(progress.done)} de {formatNumber(progress.total)} {progress.total === 1 ? "fila" : "filas"}
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {formatNumber(progress.done)} de {formatNumber(progress.total)} filas
-            </p>
           </div>
         )}
 

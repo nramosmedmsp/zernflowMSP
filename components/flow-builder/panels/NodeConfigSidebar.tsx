@@ -175,7 +175,7 @@ export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDel
   return (
     <div
       className={cn(
-        "flex w-80 flex-col border-l bg-card",
+        "animate-slide-in-right flex w-80 flex-col border-l bg-card",
         config.borderColor
       )}
       style={{ borderLeftWidth: "3px" }}

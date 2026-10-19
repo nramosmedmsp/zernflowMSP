@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useToast } from "@/components/ui/toast";
 import {
   Check,
   Copy,
@@ -61,6 +62,7 @@ export function ChannelsView({
   channels: Channel[];
   workspaceId: string;
 }) {
+  const toast = useToast();
   const [channels, setChannels] = useState(initialChannels);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -171,12 +173,15 @@ export function ChannelsView({
       .update({ is_active: !channel.is_active })
       .eq("id", channel.id);
 
-    if (!error) {
+    if (error) {
+      toast.error("No se pudo cambiar el estado del canal.");
+    } else {
       setChannels((prev) =>
         prev.map((c) =>
           c.id === channel.id ? { ...c, is_active: !c.is_active } : c
         )
       );
+      toast.success(channel.is_active ? "Canal desactivado" : "Canal activado");
     }
     setTogglingId(null);
   }
@@ -198,6 +203,7 @@ export function ChannelsView({
       }
 
       setChannels((prev) => prev.filter((c) => c.id !== id));
+      toast.success("Canal eliminado");
     } catch {
       setSyncMessage("No se pudo eliminar el canal. Revisa tu conexión.");
       setTimeout(() => setSyncMessage(null), 4000);
@@ -243,7 +249,7 @@ export function ChannelsView({
                 Conectar canal
               </button>
               {showPlatformPicker && (
-                <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-border bg-card p-2 shadow-lg">
+                <div className="animate-pop-in absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-border bg-card p-2 shadow-lg">
                   {PLATFORMS.map((p) => (
                     <button
                       key={p}
@@ -287,7 +293,7 @@ export function ChannelsView({
             </button>
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="stagger-list grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {channels.map((channel) => {
               const label = platformLabel(channel.platform);
               return (
