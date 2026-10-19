@@ -264,7 +264,10 @@ export type ActivityType =
   | "auto_template_failed"
   | "auto_template_skipped"
   | "contacts_imported"
-  | "sequence_step_failed";
+  | "sequence_step_failed"
+  // Fase 3 (00024)
+  | "human_reply"
+  | "sla_breached";
 
 export interface Database {
   public: {
@@ -1814,6 +1817,11 @@ export interface Database {
           no_reply_event_outbound_at: string | null;
           /** client_no_reply: umbral (minutos) del último evento emitido. */
           no_reply_event_minutes: number | null;
+          // ── Fase 3 (00024) ──
+          /** Cuándo el cron avisó que se superó el objetivo de primera respuesta. */
+          sla_first_response_breached_at: string | null;
+          /** Cuándo el cron avisó que se superó el objetivo de resolución. */
+          sla_resolution_breached_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -1851,6 +1859,8 @@ export interface Database {
           wait_alerted_at?: string | null;
           no_reply_event_outbound_at?: string | null;
           no_reply_event_minutes?: number | null;
+          sla_first_response_breached_at?: string | null;
+          sla_resolution_breached_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1884,6 +1894,8 @@ export interface Database {
           wait_alerted_at?: string | null;
           no_reply_event_outbound_at?: string | null;
           no_reply_event_minutes?: number | null;
+          sla_first_response_breached_at?: string | null;
+          sla_resolution_breached_at?: string | null;
           updated_at?: string;
         };
         Relationships: [

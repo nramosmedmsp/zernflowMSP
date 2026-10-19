@@ -70,6 +70,8 @@ function kase(overrides: Partial<InboxCase>): InboxCase {
     wait_alerted_at: null,
     no_reply_event_outbound_at: null,
     no_reply_event_minutes: null,
+    sla_first_response_breached_at: null,
+    sla_resolution_breached_at: null,
     created_at: "2026-10-10T10:00:00Z",
     updated_at: "2026-10-10T10:00:00Z",
     ...overrides,

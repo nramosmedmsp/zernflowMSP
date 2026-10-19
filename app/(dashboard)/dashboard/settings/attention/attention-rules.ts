@@ -4,6 +4,9 @@
 
 import type { AgentVisibility, AssignmentMode } from "@/lib/types/database";
 import { AGENT_VISIBILITIES, DEFAULT_AGENT_VISIBILITY } from "@/lib/permissions";
+import { DEFAULT_STALE_STAGE_DAYS, MAX_STALE_STAGE_DAYS, staleStageDaysFromSettings } from "@/lib/metrics/overdue";
+
+export { DEFAULT_STALE_STAGE_DAYS, MAX_STALE_STAGE_DAYS };
 
 export const ASSIGNMENT_MODE_DEFAULT: AssignmentMode = "round_robin";
 
@@ -11,6 +14,8 @@ export interface AttentionSettings {
   agentVisibility: AgentVisibility;
   assignmentMode: AssignmentMode;
   agentCanReturnToQueue: boolean;
+  /** Días en la misma etapa a partir de los cuales una gestión abierta se marca como atrasada. */
+  staleStageDays: number;
 }
 
 export const AGENT_VISIBILITY_OPTIONS: readonly {
@@ -57,6 +62,7 @@ export function attentionFromSettings(settings: unknown): AttentionSettings {
       ? (s.assignment_mode as AssignmentMode)
       : ASSIGNMENT_MODE_DEFAULT,
     agentCanReturnToQueue: s.agent_can_return_to_queue === true,
+    staleStageDays: staleStageDaysFromSettings(s),
   };
 }
 
@@ -72,17 +78,22 @@ export function parseAttentionInput(input: unknown): { value: AttentionSettings 
   if (typeof i.agentCanReturnToQueue !== "boolean") {
     return { error: "La opción de devolver gestiones a la cola no es válida." };
   }
+  const days = i.staleStageDays === undefined ? DEFAULT_STALE_STAGE_DAYS : i.staleStageDays;
+  if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > MAX_STALE_STAGE_DAYS) {
+    return { error: `Los días en la misma etapa deben ser un número entero entre 1 y ${MAX_STALE_STAGE_DAYS}.` };
+  }
   return {
     value: {
       agentVisibility: i.agentVisibility as AgentVisibility,
       assignmentMode: i.assignmentMode as AssignmentMode,
       agentCanReturnToQueue: i.agentCanReturnToQueue,
+      staleStageDays: days,
     },
   };
 }
 
 /**
- * Settings nuevos: los actuales con solo las tres claves de atención
+ * Settings nuevos: los actuales con solo las cuatro claves de atención
  * cambiadas. Conserva `business_template`, `key_date_label` y cualquier clave
  * desconocida.
  */
@@ -95,5 +106,6 @@ export function mergeAttentionSettings(
     agent_visibility: next.agentVisibility,
     assignment_mode: next.assignmentMode,
     agent_can_return_to_queue: next.agentCanReturnToQueue,
+    stale_stage_days: next.staleStageDays,
   };
 }

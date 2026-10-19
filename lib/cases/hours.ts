@@ -4,6 +4,7 @@
 // espacio en el cron.
 
 import {
+  businessMinutesBetween,
   effectiveBusinessHours,
   holidayDatesFor,
   isWithinHours,
@@ -71,6 +72,40 @@ export async function loadHolidayRows(db: Db, workspaceId: string, now: Date = n
   // Sin la migración 00021 la tabla no existe: se trabaja sin feriados.
   if (error) console.error("[cases] holidays", error.message);
   return data ?? [];
+}
+
+/**
+ * Segundos hábiles entre dos instantes con el horario efectivo de la gestión
+ * (el del equipo, o el de la empresa). Sin horario son los segundos de reloj.
+ * Nunca lanza: ante un fallo de lectura devuelve los segundos de reloj.
+ */
+export async function businessSecondsBetween(
+  db: Db,
+  params: { workspaceId: string; teamId: string | null; from: string; to: string },
+): Promise<number> {
+  const clock = Math.max(0, Math.round((new Date(params.to).getTime() - new Date(params.from).getTime()) / 1000));
+  try {
+    const [{ data: ws }, { data: team }, holidays] = await Promise.all([
+      db.from("workspaces").select("name, settings").eq("id", params.workspaceId).maybeSingle(),
+      params.teamId
+        ? db
+            .from("teams")
+            .select("id, name, business_hours")
+            .eq("id", params.teamId)
+            .eq("workspace_id", params.workspaceId)
+            .is("archived_at", null)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      loadHolidayRows(db, params.workspaceId, new Date(params.to)),
+    ]);
+    const info = buildHoursInfo({ workspace: ws, teams: team ? [team] : [], holidays });
+    const schedule = scheduleForTeam(info, params.teamId);
+    const minutes = businessMinutesBetween(params.from, params.to, schedule.hours, schedule.holidays);
+    return Math.min(clock, Math.max(0, Math.round(minutes * 60)));
+  } catch (err) {
+    console.error("[cases] business seconds", err);
+    return clock;
+  }
 }
 
 /** Horario y feriados que rigen para un equipo (o para la empresa si teamId es null o no está activo). */

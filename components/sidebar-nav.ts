@@ -13,6 +13,7 @@ export type NavKey =
   | "contacts"
   | "broadcasts"
   | "sequences"
+  | "metrics"
   | "analytics"
   | "growth"
   | "channels"
@@ -33,7 +34,9 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { key: "contacts", name: "Contactos", href: "/dashboard/contacts", adminOnly: false },
   { key: "broadcasts", name: "Difusiones", href: "/dashboard/broadcasts", adminOnly: true },
   { key: "sequences", name: "Secuencias", href: "/dashboard/sequences", adminOnly: true },
-  { key: "analytics", name: "Analítica", href: "/dashboard/analytics", adminOnly: true },
+  // Cada persona ve lo que le deja ver RLS: un asesor lo suyo, un supervisor su equipo.
+  { key: "metrics", name: "Métricas", href: "/dashboard/metrics", adminOnly: false },
+  { key: "analytics", name: "Analítica del bot", href: "/dashboard/analytics", adminOnly: true },
   { key: "growth", name: "Crecimiento", href: "/dashboard/growth", adminOnly: true },
   { key: "channels", name: "Canales", href: "/dashboard/channels", adminOnly: true },
   // Los miembros la ven para su contraseña y sus respuestas guardadas.

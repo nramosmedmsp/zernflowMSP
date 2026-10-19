@@ -6,6 +6,7 @@ import { assignCase, type AssignOutcome } from "./assign";
 import { pickSuggestedCaseTypeId, resolveReopenStageId } from "./decisions";
 import { runEventRules } from "./effects";
 import { emitCaseOpened, emitStageChanged } from "./events";
+import { businessSecondsBetween } from "./hours";
 import { firstOpenStageId, loadContact, logActivity, type CaseRow, type Db } from "./io";
 import type { CaseMessenger } from "./messaging";
 import { sendOffHoursReply, type OffHoursReplyOutcome } from "./off-hours";
@@ -268,19 +269,40 @@ export async function handleHumanOutbound(
   const at = params.at ?? new Date().toISOString();
   const { data: row } = await db
     .from("cases")
-    .select("id, workspace_id, contact_id, status, waiting_since, first_response_at")
+    .select("id, workspace_id, contact_id, status, team_id, waiting_since, first_response_at")
     .eq("id", params.caseId)
     .maybeSingle();
   if (!row) return;
 
   if (row.status === "open") {
-    const { patch, firstResponseSeconds } = humanOutboundPatch(row, at);
+    const { patch, firstResponseSeconds, replySeconds } = humanOutboundPatch(row, at);
     // first_response_at solo se fija si sigue vacío (dos respuestas simultáneas).
     let query = db.from("cases").update(patch).eq("id", row.id);
     if (patch.first_response_at) query = query.is("first_response_at", null);
+    // La espera la cierra una sola respuesta: dos simultáneas no registran dos veces.
+    if (row.waiting_since !== null) query = query.eq("waiting_since", row.waiting_since);
     const { data: updated, error } = await query.select("id");
     if (error) console.error("[cases] human outbound", error.message);
-    if (firstResponseSeconds !== null && updated && updated.length > 0) {
+    const won = !!updated && updated.length > 0;
+    if (won && replySeconds !== null && row.waiting_since !== null) {
+      // Fase 3: cada respuesta humana que cierra una espera (la primera incluida).
+      const businessSeconds = await businessSecondsBetween(db, {
+        workspaceId: row.workspace_id,
+        teamId: row.team_id,
+        from: row.waiting_since,
+        to: at,
+      });
+      await logActivity(db, {
+        workspace_id: row.workspace_id,
+        type: "human_reply",
+        case_id: row.id,
+        contact_id: row.contact_id,
+        conversation_id: params.conversationId ?? null,
+        actor_id: params.userId,
+        meta: { seconds: replySeconds, business_seconds: businessSeconds, waiting_since: row.waiting_since },
+      });
+    }
+    if (firstResponseSeconds !== null && won) {
       await logActivity(db, {
         workspace_id: row.workspace_id,
         type: "first_response",

@@ -51,6 +51,20 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
     console.error("Case engine (handleInbound) error:", err);
   }
 
+  // ── Volumen de mensajes entrantes (fase 3) ───────────────────────────────
+  // Un evento por mensaje del cliente; un fallo no corta el flujo.
+  try {
+    const { error } = await supabase.from("analytics_events").insert({
+      workspace_id: channel.workspace_id,
+      contact_id: contactId,
+      event_type: "message_received",
+      metadata: { platform: channel.platform },
+    });
+    if (error) console.error("message_received analytics error:", error.message);
+  } catch (err) {
+    console.error("message_received analytics error:", err);
+  }
+
   // ── Flow engine ───────────────────────────────────────────────────────────
 
   // Con el bot en pausa (hay un asesor atendiendo) el mensaje del cliente no

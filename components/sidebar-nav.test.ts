@@ -12,7 +12,8 @@ describe("navigationFor", () => {
       "Contactos",
       "Difusiones",
       "Secuencias",
-      "Analítica",
+      "Métricas",
+      "Analítica del bot",
       "Crecimiento",
       "Canales",
       "Configuración",
@@ -21,13 +22,13 @@ describe("navigationFor", () => {
     expect(names("admin")).toEqual(all);
   });
 
-  it("el Miembro ve solo Bandeja, Gestiones, Contactos y Configuración", () => {
-    expect(names("member")).toEqual(["Bandeja", "Gestiones", "Contactos", "Configuración"]);
+  it("el Miembro ve solo Bandeja, Gestiones, Contactos, Métricas y Configuración", () => {
+    expect(names("member")).toEqual(["Bandeja", "Gestiones", "Contactos", "Métricas", "Configuración"]);
   });
 
   it("un rol desconocido o ausente se trata como Miembro", () => {
     for (const role of [null, undefined, "", "superadmin"]) {
-      expect(names(role)).toEqual(["Bandeja", "Gestiones", "Contactos", "Configuración"]);
+      expect(names(role)).toEqual(["Bandeja", "Gestiones", "Contactos", "Métricas", "Configuración"]);
     }
   });
 
@@ -37,6 +38,7 @@ describe("navigationFor", () => {
       "/dashboard/inbox",
       "/dashboard/cases",
       "/dashboard/contacts",
+      "/dashboard/metrics",
       "/dashboard/settings",
     ]);
   });

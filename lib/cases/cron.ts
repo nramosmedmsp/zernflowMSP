@@ -7,12 +7,14 @@ import type { CaseRouting } from "@/lib/types/database";
 import { assignCase, loadAssignmentContext, type AssignmentContextCache } from "./assign";
 import { sendAutoTemplate } from "./auto-template";
 import { planActivation } from "./decisions";
-import { isOpenAt, nextOpeningFor } from "./hours";
+import { businessMinutesBetween } from "@/lib/business-hours";
+import { isOpenAt, nextOpeningFor, scheduleForTeam } from "./hours";
 import {
   caseLink,
   contactName,
   logActivity,
   notify,
+  supervisorsOrAdmins,
   workspaceAdminIds,
   type Db,
   type NotificationInput,
@@ -35,6 +37,8 @@ export interface CaseTaskStats {
   waitAlerts: number;
   overdueNotified: number;
   noReplyEvents: number;
+  /** Fase 3: avisos de objetivo de tiempo superado (primera respuesta y resolución). */
+  slaAlerts: number;
   stoppedEarly: boolean;
 }
 
@@ -331,6 +335,130 @@ export async function notifyOverdueNextActions(
 }
 
 
+const SLA_MAX_SCAN = 1000;
+
+type SlaKind = "first_response" | "resolution";
+
+/**
+ * Alertas por objetivo de tiempo (docs/FASE-3-TECNICO.md 2). Una sola vez por
+ * gestión y tipo: sella cases.sla_*_breached_at, registra `sla_breached` y
+ * avisa al responsable y a los supervisores del equipo (sin equipo o sin
+ * supervisores, al dueño y administradores).
+ *
+ * - Primera respuesta: abierta, sin first_response_at, con espera del cliente
+ *   y más minutos hábiles que sla_first_response_minutes desde waiting_since.
+ * - Resolución: abierta, con más horas hábiles que sla_resolution_hours desde
+ *   opened_at.
+ * Los minutos hábiles nunca superan a los de reloj: la base filtra por reloj y
+ * el horario efectivo de la gestión decide.
+ */
+export async function notifySlaBreaches(
+  db: Db,
+  opts: { deadline: number; now?: Date; cache?: AssignmentContextCache },
+): Promise<{ alerted: number; stoppedEarly: boolean }> {
+  const cache: AssignmentContextCache = opts.cache ?? new Map();
+  const now = opts.now ?? new Date();
+  const nowIso = now.toISOString();
+  let alerted = 0;
+  let scanned = 0;
+
+  const { data: types, error } = await db
+    .from("case_types")
+    .select("id, name, workspace_id, sla_first_response_minutes, sla_resolution_hours");
+  if (error) {
+    console.error("[cases cron] sla types", error.message);
+    return { alerted, stoppedEarly: false };
+  }
+
+  const jobs: { kind: SlaKind; type: NonNullable<typeof types>[number]; limitMinutes: number }[] = [];
+  for (const t of types ?? []) {
+    if (t.sla_first_response_minutes && t.sla_first_response_minutes > 0) {
+      jobs.push({ kind: "first_response", type: t, limitMinutes: t.sla_first_response_minutes });
+    }
+    if (t.sla_resolution_hours && t.sla_resolution_hours > 0) {
+      jobs.push({ kind: "resolution", type: t, limitMinutes: t.sla_resolution_hours * 60 });
+    }
+  }
+
+  for (const job of jobs) {
+    const cutoff = new Date(now.getTime() - job.limitMinutes * 60_000).toISOString();
+    const stampColumn = job.kind === "first_response" ? "sla_first_response_breached_at" : "sla_resolution_breached_at";
+    const sinceColumn = job.kind === "first_response" ? "waiting_since" : "opened_at";
+    let lastId: string | null = null;
+
+    while (scanned < SLA_MAX_SCAN) {
+      if (!timeLeft(opts.deadline)) return { alerted, stoppedEarly: true };
+      let query = db
+        .from("cases")
+        .select("id, workspace_id, contact_id, team_id, assignee_id, waiting_since, opened_at")
+        .eq("status", "open")
+        .eq("case_type_id", job.type.id)
+        .is(stampColumn, null)
+        .not(sinceColumn, "is", null)
+        .lte(sinceColumn, cutoff)
+        .order("id", { ascending: true })
+        .limit(BATCH);
+      if (job.kind === "first_response") query = query.is("first_response_at", null);
+      if (lastId) query = query.gt("id", lastId);
+      const { data: rows, error: rowsError } = await query;
+      if (rowsError) {
+        console.error("[cases cron] sla cases", rowsError.message);
+        break;
+      }
+      if (!rows || rows.length === 0) break;
+      lastId = rows[rows.length - 1].id;
+
+      for (const row of rows) {
+        if (!timeLeft(opts.deadline)) return { alerted, stoppedEarly: true };
+        scanned++;
+        const since = job.kind === "first_response" ? row.waiting_since : row.opened_at;
+        if (!since) continue;
+        const ctx = await loadAssignmentContext(db, row.workspace_id, cache);
+        const schedule = scheduleForTeam(ctx.hours, row.team_id);
+        const minutes = businessMinutesBetween(since, now, schedule.hours, schedule.holidays);
+        if (minutes <= job.limitMinutes) continue;
+
+        // Reclamo condicional: solo avisa quien selló la fila.
+        const { data: claimed } = await db
+          .from("cases")
+          .update({ [stampColumn]: nowIso })
+          .eq("id", row.id)
+          .eq("status", "open")
+          .is(stampColumn, null)
+          .select("id");
+        if (!claimed || claimed.length === 0) continue;
+        alerted++;
+
+        await logActivity(db, {
+          workspace_id: row.workspace_id,
+          type: "sla_breached",
+          case_id: row.id,
+          contact_id: row.contact_id,
+          meta: { kind: job.kind },
+        });
+
+        const contacts = await names(db, [row.contact_id]);
+        const recipients = new Set<string>(await supervisorsOrAdmins(db, row.workspace_id, row.team_id));
+        if (row.assignee_id) recipients.add(row.assignee_id);
+        const objective = job.kind === "first_response" ? "primera respuesta" : "resolución";
+        await notify(
+          db,
+          [...recipients].map((userId) => ({
+            workspace_id: row.workspace_id,
+            user_id: userId,
+            type: "sla_breached" as const,
+            title: "Gestión fuera de tiempo",
+            body: `${contacts.get(row.contact_id) ?? "Contacto sin nombre"} · ${job.type.name}: se superó el objetivo de ${objective}.`,
+            link: caseLink(row.contact_id, row.id),
+          })),
+        );
+      }
+      if (rows.length < BATCH) break;
+    }
+  }
+  return { alerted, stoppedEarly: false };
+}
+
 /** Todas las tareas en orden, compartiendo la memoria de reparto y la fecha límite. */
 export async function runCaseTasks(
   db: Db,
@@ -347,6 +475,7 @@ export async function runCaseTasks(
     waitAlerts: 0,
     overdueNotified: 0,
     noReplyEvents: 0,
+    slaAlerts: 0,
     stoppedEarly: false,
   };
 
@@ -397,6 +526,14 @@ export async function runCaseTasks(
       async () => {
         const r = await detectClientNoReply(db, { deadline: opts.deadline, now: opts.now });
         stats.noReplyEvents = r.emitted;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "sla",
+      async () => {
+        const r = await notifySlaBreaches(db, { deadline: opts.deadline, cache, now: opts.now });
+        stats.slaAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],

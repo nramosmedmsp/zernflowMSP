@@ -43,6 +43,8 @@ const DEFAULTS: Record<string, () => Row> = {
     wait_alerted_at: null,
     no_reply_event_outbound_at: null,
     no_reply_event_minutes: null,
+    sla_first_response_breached_at: null,
+    sla_resolution_breached_at: null,
   }),
   contacts: () => ({
     display_name: null,

@@ -182,6 +182,43 @@ describe("entrada de mensajes: retomar la conversación", () => {
     expect(handleInbound).toHaveBeenCalledTimes(1);
   });
 
+  it("registra un message_received por mensaje entrante, con la plataforma, incluso con el bot en pausa", async () => {
+    const withPlatform = (paused: boolean): InboundPipelineInput => {
+      const base = input({}, paused);
+      return { ...base, channel: { ...base.channel, platform: "instagram" } };
+    };
+    await runInboundPipeline(fake.asDb(), withPlatform(false));
+    await runInboundPipeline(fake.asDb(), withPlatform(true));
+    const events = fake.rows("analytics_events").filter((e) => e.event_type === "message_received");
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ workspace_id: WS, contact_id: contactId, metadata: { platform: "instagram" } });
+  });
+
+  it("si el registro de message_received falla, el mensaje sigue su camino", async () => {
+    const db = fake.asDb();
+    const original = db.from.bind(db);
+    const failing = new Proxy(db, {
+      get: (target, prop) =>
+        prop === "from"
+          ? (table: string) => {
+              const query = original(table as never);
+              if (table !== "analytics_events") return query;
+              // Solo falla el registro del mensaje entrante; el motor de flujos usa la misma tabla.
+              return new Proxy(query, {
+                get: (q, p) =>
+                  p === "insert"
+                    ? (row: Record<string, unknown>) =>
+                        row.event_type === "message_received" ? Promise.reject(new Error("caída")) : q.insert(row as never)
+                    : Reflect.get(q, p),
+              });
+            }
+          : Reflect.get(target, prop),
+    });
+    await startWaitingFlow();
+    await runInboundPipeline(failing, input({ text: "Sede 2" }));
+    expect(notes()).toEqual(["Respuesta: Sede 2"]);
+  });
+
   it("las palabras clave globales (baja) tienen prioridad sobre la espera", async () => {
     await startWaitingFlow();
     await run({ text: "Baja" });

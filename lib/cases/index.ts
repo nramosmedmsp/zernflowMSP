@@ -19,6 +19,7 @@ export { closeCase, previewClose, type CloseCaseInput, type ClosePreview } from 
 export {
   activateScheduledCases,
   notifyOverdueNextActions,
+  notifySlaBreaches,
   retryUnassignedCases,
   runCaseTasks,
   type CaseTaskStats,

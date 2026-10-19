@@ -64,7 +64,9 @@ export type NotificationType =
   // Fase 2
   | "case_reassigned"
   | "wait_exceeded"
-  | "auto_template_failed";
+  | "auto_template_failed"
+  // Fase 3
+  | "sla_breached";
 
 export interface NotificationInput {
   workspace_id: string;

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { saveAttentionSettings } from "@/lib/actions/settings";
 import { ASSIGNMENT_MODE_OPTIONS } from "@/components/settings/teams/team-rules";
 import type { BusinessHours } from "@/lib/types/database";
-import { AGENT_VISIBILITY_OPTIONS, type AttentionSettings } from "./attention-rules";
+import { AGENT_VISIBILITY_OPTIONS, MAX_STALE_STAGE_DAYS, type AttentionSettings } from "./attention-rules";
 import type { AutomationForm } from "./automation-rules";
 import { AutomationSection } from "./automation-section";
 
@@ -31,6 +31,7 @@ export function AttentionView({
   const [visibility, setVisibility] = useState(initial.agentVisibility);
   const [mode, setMode] = useState(initial.assignmentMode);
   const [canReturn, setCanReturn] = useState(initial.agentCanReturnToQueue);
+  const [staleDays, setStaleDays] = useState(String(initial.staleStageDays));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,10 +40,16 @@ export function AttentionView({
   const dirty =
     visibility !== initial.agentVisibility ||
     mode !== initial.assignmentMode ||
-    canReturn !== initial.agentCanReturnToQueue;
+    canReturn !== initial.agentCanReturnToQueue ||
+    staleDays.trim() !== String(initial.staleStageDays);
 
   async function handleSave() {
     if (saving) return;
+    const days = Number(staleDays);
+    if (staleDays.trim() === "" || !Number.isInteger(days) || days < 1 || days > MAX_STALE_STAGE_DAYS) {
+      setError(`Escribe los días en la misma etapa como un número entero entre 1 y ${MAX_STALE_STAGE_DAYS}.`);
+      return;
+    }
     setSaving(true);
     setSaved(false);
     setError(null);
@@ -51,6 +58,7 @@ export function AttentionView({
         agentVisibility: visibility,
         assignmentMode: mode,
         agentCanReturnToQueue: canReturn,
+        staleStageDays: days,
       });
       if ("error" in result) {
         setError(result.error);
@@ -173,6 +181,30 @@ export function AttentionView({
                   asignar.
                 </span>
               </span>
+            </label>
+          </section>
+
+          <hr className="border-border" />
+
+          <section>
+            <h2 className="text-sm font-semibold">Gestiones atrasadas</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              En Métricas → Atrasados aparecen las gestiones abiertas con la próxima acción vencida o que llevan
+              demasiados días en la misma etapa.
+            </p>
+            <label className="mt-3 flex items-center gap-2 text-sm">
+              Marcar como atrasada tras
+              <input
+                type="number"
+                min={1}
+                max={MAX_STALE_STAGE_DAYS}
+                step={1}
+                value={staleDays}
+                onChange={(e) => setStaleDays(e.target.value)}
+                aria-label="Días en la misma etapa"
+                className="w-20 rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              días en la misma etapa
             </label>
           </section>
 

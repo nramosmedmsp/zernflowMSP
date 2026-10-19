@@ -54,14 +54,20 @@ export function humanOutboundPatch(current: CaseTimestamps, at: string) {
   } = { last_outbound_at: at, waiting_since: null };
 
   let firstResponseSeconds: number | null = null;
-  if (current.first_response_at === null && current.waiting_since !== null) {
-    patch.first_response_at = at;
-    firstResponseSeconds = Math.max(
+  // Fase 3: segundos de cada espera del cliente que esta respuesta cierra (la
+  // primera incluida); es lo que registra la actividad human_reply.
+  let replySeconds: number | null = null;
+  if (current.waiting_since !== null) {
+    replySeconds = Math.max(
       0,
       Math.round((new Date(at).getTime() - new Date(current.waiting_since).getTime()) / 1000),
     );
   }
-  return { patch, firstResponseSeconds };
+  if (current.first_response_at === null && current.waiting_since !== null) {
+    patch.first_response_at = at;
+    firstResponseSeconds = replySeconds;
+  }
+  return { patch, firstResponseSeconds, replySeconds };
 }
 
 /** 3.2: el bot solo sella la salida (no cuenta como respuesta ni corta la espera). */

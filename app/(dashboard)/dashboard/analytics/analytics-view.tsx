@@ -87,7 +87,7 @@ function getDateRange(range: TimeRange): { start: string; end: string } {
 
 // --- Gráfico de barras simple con tooltip ---
 
-function MiniBarChart({
+export function MiniBarChart({
   data,
   labels,
   maxVal,
@@ -411,7 +411,7 @@ export function AnalyticsView({
       <div className="border-b border-border px-8 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">Analítica</h1>
+            <h1 className="text-2xl font-bold">Analítica del bot</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Revisa el rendimiento de tu espacio de trabajo
             </p>
