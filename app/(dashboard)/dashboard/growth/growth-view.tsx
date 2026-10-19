@@ -17,6 +17,8 @@ import {
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
+import { Spinner } from "@/components/ui/spinner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import type { Database, Json } from "@/lib/types/database";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { formatNumber, formatRelative } from "@/lib/format";
@@ -88,6 +90,7 @@ export function GrowthView({
   });
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const toast = useToast();
 
   const conversionRate = formatNumber(
@@ -98,43 +101,52 @@ export function GrowthView({
 
   async function handleToggle(trigger: TriggerWithFlow) {
     setTogglingId(trigger.id);
-    const supabase = createClient();
+    try {
+      const supabase = createClient();
 
-    const { error } = await supabase
-      .from("triggers")
-      .update({ is_active: !trigger.is_active })
-      .eq("id", trigger.id);
+      const { error } = await supabase
+        .from("triggers")
+        .update({ is_active: !trigger.is_active })
+        .eq("id", trigger.id);
 
-    if (error) {
+      if (error) {
+        toast.error("No se pudo cambiar el estado de la regla.");
+      } else {
+        setTriggers((prev) =>
+          prev.map((t) =>
+            t.id === trigger.id ? { ...t, is_active: !t.is_active } : t
+          )
+        );
+        toast.success(trigger.is_active ? "Regla pausada" : "Regla activada");
+      }
+    } catch {
       toast.error("No se pudo cambiar el estado de la regla.");
-    } else {
-      setTriggers((prev) =>
-        prev.map((t) =>
-          t.id === trigger.id ? { ...t, is_active: !t.is_active } : t
-        )
-      );
-      toast.success(trigger.is_active ? "Regla pausada" : "Regla activada");
+    } finally {
+      setTogglingId(null);
     }
-    setTogglingId(null);
   }
 
   async function handleDelete(triggerId: string) {
-    if (!confirm("¿Eliminar esta regla de comentarios? Esta acción no se puede deshacer.")) return;
     setDeletingId(triggerId);
-    const supabase = createClient();
+    try {
+      const supabase = createClient();
 
-    const { error } = await supabase
-      .from("triggers")
-      .delete()
-      .eq("id", triggerId);
+      const { error } = await supabase
+        .from("triggers")
+        .delete()
+        .eq("id", triggerId);
 
-    if (error) {
+      if (error) {
+        toast.error("No se pudo eliminar la regla.");
+      } else {
+        setTriggers((prev) => prev.filter((t) => t.id !== triggerId));
+        toast.success("Regla eliminada");
+      }
+    } catch {
       toast.error("No se pudo eliminar la regla.");
-    } else {
-      setTriggers((prev) => prev.filter((t) => t.id !== triggerId));
-      toast.success("Regla eliminada");
+    } finally {
+      setDeletingId(null);
     }
-    setDeletingId(null);
   }
 
   async function handleCreate() {
@@ -274,9 +286,11 @@ export function GrowthView({
           replyText: "",
           postIds: "",
         });
+        toast.success("Cambios guardados");
       }
     } catch (err) {
       console.error("Failed to update comment rule:", err);
+      toast.error("No se pudieron guardar los cambios.");
     } finally {
       setSaving(false);
     }
@@ -499,9 +513,10 @@ export function GrowthView({
                   disabled={
                     !form.keywords.trim() || !form.channelId || !form.flowId || saving
                   }
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
-                  {saving ? "Guardando..." : "Guardar cambios"}
+                  {saving && <Spinner className="h-3.5 w-3.5" />}
+                  {saving ? "Guardando…" : "Guardar cambios"}
                 </button>
               ) : (
                 <button
@@ -509,9 +524,10 @@ export function GrowthView({
                   disabled={
                     !form.keywords.trim() || !form.channelId || !form.flowId || creating
                   }
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
-                  {creating ? "Creando..." : "Crear regla"}
+                  {creating && <Spinner className="h-3.5 w-3.5" />}
+                  {creating ? "Creando…" : "Crear regla"}
                 </button>
               )}
             </div>
@@ -687,12 +703,12 @@ export function GrowthView({
                           )}
                         </button>
                         <button
-                          onClick={() => handleDelete(trigger.id)}
+                          onClick={() => setConfirmDeleteId(trigger.id)}
                           disabled={deletingId === trigger.id}
-                          className="rounded-lg p-2 text-muted-foreground/60 transition-colors hover:bg-red-50 hover:text-red-600"
+                          className="rounded-lg p-2 text-muted-foreground/60 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
                           title="Eliminar regla"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          {deletingId === trigger.id ? <Spinner /> : <Trash2 className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>
@@ -796,6 +812,19 @@ export function GrowthView({
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        title="Eliminar regla"
+        message="¿Eliminar esta regla de comentarios? Esta acción no se puede deshacer."
+        confirmLabel="Eliminar"
+        destructive
+        onConfirm={() => {
+          const id = confirmDeleteId;
+          setConfirmDeleteId(null);
+          if (id) void handleDelete(id);
+        }}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
     </div>
   );
 }

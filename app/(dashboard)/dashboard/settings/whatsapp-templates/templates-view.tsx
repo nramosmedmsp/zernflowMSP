@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/toast";
 import {
   TEMPLATE_BODY_MAX,
   extractPlaceholders,
@@ -86,8 +87,7 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
   const [reloadKey, setReloadKey] = useState(0);
   const [form, setForm] = useState<CreateForm | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -135,7 +135,6 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
   async function create() {
     if (!form || saving) return;
     setSaving(true);
-    setError(null);
     try {
       const res = await fetch("/api/v1/templates", {
         method: "POST",
@@ -144,18 +143,18 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(typeof data.error === "string" ? data.error : "No se pudo crear la plantilla.");
+        toast.error(typeof data.error === "string" ? data.error : "No se pudo crear la plantilla.");
         return;
       }
       setForm(null);
-      setNotice(
+      toast.success(
         data.template?.status === "APPROVED"
           ? "Plantilla creada y aprobada."
           : "Plantilla enviada a Meta para revisión. Podrás usarla cuando quede aprobada (suele tardar unos minutos).",
       );
       reload();
     } catch {
-      setError("No se pudo crear la plantilla. Revisa tu conexión e inténtalo de nuevo.");
+      toast.error("No se pudo crear la plantilla. Revisa tu conexión e inténtalo de nuevo.");
     } finally {
       setSaving(false);
     }
@@ -176,7 +175,6 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
                     setChannelId(e.target.value);
                     setState({ status: "loading" });
                     setForm(null);
-                    setNotice(null);
                   }}
                   className="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                   aria-label="Canal de WhatsApp"
@@ -204,8 +202,6 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
               <button
                 onClick={() => {
                   setForm({ ...EMPTY_FORM });
-                  setError(null);
-                  setNotice(null);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
               >
@@ -214,8 +210,6 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
               </button>
             )}
           </div>
-
-          {notice && <p className="rounded-lg bg-muted px-4 py-3 text-sm">{notice}</p>}
 
           {canCreate && form && (
             <div className="space-y-4 rounded-xl border border-border bg-card p-5">
@@ -303,8 +297,6 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
                 </div>
               )}
 
-              {error && <p className="text-sm text-destructive">{error}</p>}
-
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => setForm(null)}
@@ -319,7 +311,7 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
                   {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Enviar a revisión
+                  {saving ? "Enviando…" : "Enviar a revisión"}
                 </button>
               </div>
             </div>
@@ -328,7 +320,7 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
           {state.status === "loading" ? (
             <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Cargando plantillas...
+              Cargando plantillas…
             </div>
           ) : state.status === "error" ? (
             <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-destructive">

@@ -29,6 +29,7 @@ import {
   sendAccessEmail,
 } from "@/lib/actions/team";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
 import { roleLabel } from "@/lib/auth-helpers";
 import {
@@ -125,36 +126,45 @@ function AccessLinkButton({
   const [loading, setLoading] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
 
   async function handleGenerate() {
     if (loading) return;
     setLoading(true);
-    setError(null);
     setCopied(null);
-    const result = await copyAccessLink(workspaceId, userId);
-    if ("error" in result) {
-      setError(result.error);
+    try {
+      const result = await copyAccessLink(workspaceId, userId);
+      if ("error" in result) {
+        toast.error(result.error);
+        setUrl(null);
+      } else {
+        setUrl(result.url);
+        const ok = await copyText(result.url);
+        setCopied(ok);
+        if (ok) toast.success("Enlace copiado");
+      }
+    } catch {
+      toast.error("No se pudo generar el enlace. Inténtalo de nuevo.");
       setUrl(null);
-    } else {
-      setUrl(result.url);
-      setCopied(await copyText(result.url));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function handleCopyAgain() {
-    if (url) setCopied(await copyText(url));
+    if (!url) return;
+    const ok = await copyText(url);
+    setCopied(ok);
+    if (ok) toast.success("Enlace copiado");
+    else toast.error("No se pudo copiar. Cópialo a mano.");
   }
 
   return (
     <div className="w-full space-y-2">
       <button type="button" onClick={handleGenerate} disabled={loading} className={smallButtonClass}>
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
-        {loading ? "Generando..." : label}
+        {loading ? "Generando…" : label}
       </button>
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
 
       {url && (
         <div className="space-y-1.5 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
@@ -200,6 +210,7 @@ export function TeamView({
   mailConfigured: boolean;
 }) {
   const isManager = canManageTeam(currentUserRole);
+  const toast = useToast();
 
   const [members, setMembers] = useState(initialMembers);
   const [legacyInvites, setLegacyInvites] = useState(initialLegacyInvites);
@@ -209,13 +220,11 @@ export function TeamView({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ userId: string; notice: Notice } | null>(null);
 
   // Acciones por fila
   const [busy, setBusy] = useState<Record<string, string | undefined>>({});
   const [rowNotices, setRowNotices] = useState<Record<string, Notice | undefined>>({});
-  const [actionError, setActionError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<{ userId: string; name: string } | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
 
@@ -227,77 +236,96 @@ export function TeamView({
     e.preventDefault();
     if (creating) return;
     setCreating(true);
-    setCreateError(null);
     setCreated(null);
 
-    const result = await createTeamUser(workspaceId, { fullName, email, role });
+    try {
+      const result = await createTeamUser(workspaceId, { fullName, email, role });
 
-    if ("error" in result) {
-      setCreateError(result.error);
-    } else {
-      setMembers((prev) => [...prev, result.member]);
-      setFullName("");
-      setEmail("");
-      setRole("member");
-      if (result.outcome === "existing") {
-        setCreated({ userId: result.member.userId, notice: { kind: "ok", text: result.message } });
-      } else if (result.delivery.sent) {
-        setCreated({
-          userId: result.member.userId,
-          notice: { kind: "ok", text: result.delivery.message },
-        });
+      if ("error" in result) {
+        toast.error(result.error);
       } else {
-        setCreated({
-          userId: result.member.userId,
-          notice: { kind: "warn", text: result.delivery.message, offerCopy: true },
-        });
+        toast.success("Usuario creado");
+        setMembers((prev) => [...prev, result.member]);
+        setFullName("");
+        setEmail("");
+        setRole("member");
+        if (result.outcome === "existing") {
+          setCreated({ userId: result.member.userId, notice: { kind: "ok", text: result.message } });
+        } else if (result.delivery.sent) {
+          setCreated({
+            userId: result.member.userId,
+            notice: { kind: "ok", text: result.delivery.message },
+          });
+        } else {
+          setCreated({
+            userId: result.member.userId,
+            notice: { kind: "warn", text: result.delivery.message, offerCopy: true },
+          });
+        }
       }
+    } catch {
+      toast.error("No se pudo crear el usuario. Inténtalo de nuevo.");
+    } finally {
+      setCreating(false);
     }
-    setCreating(false);
   }
 
   async function handleSendAccess(member: TeamMemberView) {
     setRowBusy(member.userId, "send");
     setRowNotices((prev) => ({ ...prev, [member.userId]: undefined }));
 
-    const result = await sendAccessEmail(workspaceId, member.userId);
-    let notice: Notice;
-    if ("error" in result) {
-      notice = { kind: "error", text: result.error };
-    } else if (result.delivery.sent) {
-      notice = { kind: "ok", text: result.delivery.message };
-    } else {
-      notice = { kind: "warn", text: result.delivery.message, offerCopy: true };
+    try {
+      const result = await sendAccessEmail(workspaceId, member.userId);
+      let notice: Notice | undefined;
+      if ("error" in result) {
+        toast.error(result.error);
+      } else if (result.delivery.sent) {
+        notice = { kind: "ok", text: result.delivery.message };
+        toast.success("Correo enviado");
+      } else {
+        notice = { kind: "warn", text: result.delivery.message, offerCopy: true };
+      }
+      setRowNotices((prev) => ({ ...prev, [member.userId]: notice }));
+    } catch {
+      toast.error("No se pudo enviar el correo. Inténtalo de nuevo.");
+    } finally {
+      setRowBusy(member.userId, undefined);
     }
-    setRowNotices((prev) => ({ ...prev, [member.userId]: notice }));
-    setRowBusy(member.userId, undefined);
   }
 
   async function handleRemove(userId: string) {
     setRowBusy(userId, "remove");
-    setActionError(null);
-
-    const result = await removeTeamMember(workspaceId, userId);
-    if (result.error) {
-      setActionError(result.error);
-    } else {
-      setMembers((prev) => prev.filter((m) => m.userId !== userId));
-      setCreated((prev) => (prev?.userId === userId ? null : prev));
+    try {
+      const result = await removeTeamMember(workspaceId, userId);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        setMembers((prev) => prev.filter((m) => m.userId !== userId));
+        setCreated((prev) => (prev?.userId === userId ? null : prev));
+        toast.success("Miembro quitado");
+      }
+    } catch {
+      toast.error("No se pudo quitar al miembro. Inténtalo de nuevo.");
+    } finally {
+      setRowBusy(userId, undefined);
     }
-    setRowBusy(userId, undefined);
   }
 
   async function handleRevoke(inviteId: string) {
     setRowBusy(inviteId, "revoke");
-    setActionError(null);
-
-    const result = await revokeInvite(workspaceId, inviteId);
-    if (result.error) {
-      setActionError(result.error);
-    } else {
-      setLegacyInvites((prev) => prev.filter((i) => i.id !== inviteId));
+    try {
+      const result = await revokeInvite(workspaceId, inviteId);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        setLegacyInvites((prev) => prev.filter((i) => i.id !== inviteId));
+        toast.success("Invitación eliminada");
+      }
+    } catch {
+      toast.error("No se pudo eliminar la invitación. Inténtalo de nuevo.");
+    } finally {
+      setRowBusy(inviteId, undefined);
     }
-    setRowBusy(inviteId, undefined);
   }
 
   return (
@@ -323,12 +351,6 @@ export function TeamView({
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-2xl space-y-8 px-8 py-8">
-          {actionError && (
-            <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {actionError}
-            </p>
-          )}
-
           {/* Crear usuario (Dueño y Administradores) */}
           {isManager && (
             <section>
@@ -349,7 +371,6 @@ export function TeamView({
                     value={fullName}
                     onChange={(e) => {
                       setFullName(e.target.value);
-                      setCreateError(null);
                     }}
                     placeholder="Nombre y apellido"
                     required
@@ -363,7 +384,6 @@ export function TeamView({
                     value={email}
                     onChange={(e) => {
                       setEmail(e.target.value);
-                      setCreateError(null);
                     }}
                     placeholder="correo@ejemplo.com"
                     required
@@ -388,12 +408,10 @@ export function TeamView({
                     className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                   >
                     {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-                    {creating ? "Creando..." : "Crear usuario"}
+                    {creating ? "Creando…" : "Crear usuario"}
                   </button>
                 </div>
               </form>
-
-              {createError && <p className="mt-2 text-xs text-destructive">{createError}</p>}
 
               {created && (
                 <div className="mt-4 space-y-2">

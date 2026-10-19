@@ -29,6 +29,9 @@ import {
   sortTeams,
 } from "./team-rules";
 import type { AssignmentMode, TeamRole } from "@/lib/types/database";
+import { useToast } from "@/components/ui/toast";
+
+type RunFn = (key: string, action: () => Promise<TeamActionResult>, successMessage?: string) => Promise<boolean>;
 
 export interface TeamsViewData {
   workspaceId: string;
@@ -109,7 +112,7 @@ function AddMemberRow({
   team: TeamsViewData["teams"][number];
   data: TeamsViewData;
   busy: boolean;
-  run: (key: string, action: () => Promise<TeamActionResult>) => Promise<boolean>;
+  run: RunFn;
 }) {
   const candidates = membersAvailableToAdd(
     data.workspaceMembers,
@@ -133,7 +136,7 @@ function AddMemberRow({
 
   async function add() {
     if (!userId) return;
-    const ok = await run(`add:${team.id}`, () => addTeamMember(team.id, userId, { role, caseTypeIds }));
+    const ok = await run(`add:${team.id}`, () => addTeamMember(team.id, userId, { role, caseTypeIds }), "Persona agregada al equipo");
     if (ok) {
       setUserId("");
       setRole("agent");
@@ -193,7 +196,7 @@ function MemberRow({
   member: TeamsViewData["teams"][number]["members"][number];
   data: TeamsViewData;
   busyKey: string | null;
-  run: (key: string, action: () => Promise<TeamActionResult>) => Promise<boolean>;
+  run: RunFn;
 }) {
   const info = data.workspaceMembers.find((m) => m.userId === member.userId);
   const [editingTypes, setEditingTypes] = useState(false);
@@ -202,8 +205,10 @@ function MemberRow({
   const busy = busyKey === key;
 
   async function saveTypes() {
-    const ok = await run(key, () =>
-      updateTeamMember(team.id, member.userId, { role: member.role, caseTypeIds: draft }),
+    const ok = await run(
+      key,
+      () => updateTeamMember(team.id, member.userId, { role: member.role, caseTypeIds: draft }),
+      "Tipos de gestión guardados",
     );
     if (ok) setEditingTypes(false);
   }
@@ -223,11 +228,14 @@ function MemberRow({
           disabled={busyKey !== null}
           onChange={(e) =>
             isTeamRole(e.target.value) &&
-            run(key, () =>
-              updateTeamMember(team.id, member.userId, {
-                role: e.target.value as TeamRole,
-                caseTypeIds: member.caseTypeIds,
-              }),
+            run(
+              key,
+              () =>
+                updateTeamMember(team.id, member.userId, {
+                  role: e.target.value as TeamRole,
+                  caseTypeIds: member.caseTypeIds,
+                }),
+              "Rol actualizado",
             )
           }
           aria-label={`Rol de ${info?.name ?? "la persona"} en el equipo`}
@@ -241,7 +249,7 @@ function MemberRow({
         </select>
         <button
           type="button"
-          onClick={() => run(key, () => removeTeamMember(team.id, member.userId))}
+          onClick={() => run(key, () => removeTeamMember(team.id, member.userId), "Persona quitada del equipo")}
           disabled={busyKey !== null}
           className={cn(buttonClass, "text-red-600 hover:text-red-700")}
           title="Quitar del equipo"
@@ -307,7 +315,7 @@ function TeamCard({
   team: TeamsViewData["teams"][number];
   data: TeamsViewData;
   busyKey: string | null;
-  run: (key: string, action: () => Promise<TeamActionResult>) => Promise<boolean>;
+  run: RunFn;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(team.name);
@@ -315,7 +323,7 @@ function TeamCard({
   const teamBusy = busyKey !== null && busyKey.startsWith(`team:${team.id}`);
 
   async function saveName() {
-    const ok = await run(`team:${team.id}:rename`, () => renameTeam(team.id, name));
+    const ok = await run(`team:${team.id}:rename`, () => renameTeam(team.id, name), "Nombre del equipo guardado");
     if (ok) setRenaming(false);
   }
 
@@ -381,7 +389,7 @@ function TeamCard({
               {!team.archived && !team.isDefault && (
                 <button
                   type="button"
-                  onClick={() => run(`team:${team.id}:default`, () => setDefaultTeam(team.id))}
+                  onClick={() => run(`team:${team.id}:default`, () => setDefaultTeam(team.id), "Equipo marcado por defecto")}
                   disabled={busyKey !== null}
                   className={buttonClass}
                   title="Los contactos sin sede caen en el equipo por defecto"
@@ -393,7 +401,7 @@ function TeamCard({
               {team.isDefault && (
                 <button
                   type="button"
-                  onClick={() => run(`team:${team.id}:default`, () => setDefaultTeam(null))}
+                  onClick={() => run(`team:${team.id}:default`, () => setDefaultTeam(null), "Equipo por defecto quitado")}
                   disabled={busyKey !== null}
                   className={buttonClass}
                 >
@@ -403,7 +411,13 @@ function TeamCard({
               )}
               <button
                 type="button"
-                onClick={() => run(`team:${team.id}:archive`, () => setTeamArchived(team.id, !team.archived))}
+                onClick={() =>
+                  run(
+                    `team:${team.id}:archive`,
+                    () => setTeamArchived(team.id, !team.archived),
+                    team.archived ? "Equipo reactivado" : "Equipo archivado",
+                  )
+                }
                 disabled={busyKey !== null}
                 className={buttonClass}
               >
@@ -427,7 +441,11 @@ function TeamCard({
               disabled={busyKey !== null}
               onChange={(e) =>
                 isAssignmentMode(e.target.value) &&
-                run(`team:${team.id}:mode`, () => setTeamAssignmentMode(team.id, e.target.value as AssignmentMode))
+                run(
+                  `team:${team.id}:mode`,
+                  () => setTeamAssignmentMode(team.id, e.target.value as AssignmentMode),
+                  "Modo de reparto guardado",
+                )
               }
               className={cn(inputClass, "mt-1.5 block w-full max-w-xs py-1.5")}
             >
@@ -477,23 +495,23 @@ function TeamCard({
 
 export function TeamsView({ data }: { data: TeamsViewData }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
   const [newName, setNewName] = useState("");
 
   /** Ejecuta una acción, muestra el error si lo hay y devuelve si salió bien. */
-  async function run(key: string, action: () => Promise<TeamActionResult>): Promise<boolean> {
+  async function run(key: string, action: () => Promise<TeamActionResult>, successMessage?: string): Promise<boolean> {
     if (busyKey !== null) return false;
     setBusyKey(key);
-    setError(null);
     try {
       const result = await action();
       if ("error" in result) {
-        setError(result.error);
+        toast.error(result.error);
         return false;
       }
+      toast.success(successMessage ?? "Cambio guardado");
       return true;
     } catch {
-      setError("No se pudo guardar el cambio. Inténtalo de nuevo.");
+      toast.error("No se pudo guardar el cambio. Inténtalo de nuevo.");
       return false;
     } finally {
       setBusyKey(null);
@@ -502,7 +520,7 @@ export function TeamsView({ data }: { data: TeamsViewData }) {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    const ok = await run("create", () => createTeam(data.workspaceId, newName));
+    const ok = await run("create", () => createTeam(data.workspaceId, newName), "Equipo creado");
     if (ok) setNewName("");
   }
 
@@ -546,12 +564,6 @@ export function TeamsView({ data }: { data: TeamsViewData }) {
               Crear equipo
             </button>
           </form>
-
-          {error && (
-            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-              {error}
-            </p>
-          )}
 
           {teams.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">

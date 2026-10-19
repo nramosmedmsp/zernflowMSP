@@ -20,6 +20,7 @@ import type { ScenarioRun } from "@/lib/flow-lab/scenarios/types";
 import type { LabCatalog } from "@/lib/flow-lab/types";
 import { formatDateTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { primaryButtonClass, secondaryButtonClass } from "@/components/inbox/ui";
 import { ResultView } from "./result-view";
 import { ScenarioFormDialog, type ScenarioDraft } from "./scenario-form-dialog";
@@ -34,11 +35,6 @@ const DOT: Record<ScenarioStatus, string> = { passed: "bg-emerald-500", failed: 
 
 const iconButton = "rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50";
 
-interface Notice {
-  kind: "ok" | "error";
-  text: string;
-}
-
 export function ScenariosScreen({ catalog, initialScenarios, hasExamples }: { catalog: LabCatalog; initialScenarios: LabScenarioRow[]; hasExamples: boolean }) {
   const [scenarios, setScenarios] = useState(initialScenarios);
   const [runs, setRuns] = useState<Record<string, ScenarioRun>>({});
@@ -46,7 +42,7 @@ export function ScenariosScreen({ catalog, initialScenarios, hasExamples }: { ca
   const [editing, setEditing] = useState<LabScenarioRow | null>(null);
   const [deleting, setDeleting] = useState<LabScenarioRow | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // "all", "examples", o el id
-  const [notice, setNotice] = useState<Notice | null>(null);
+  const toast = useToast();
 
   const statuses = scenarios.map((s) => statusOf(s.lastResult));
 
@@ -72,17 +68,20 @@ export function ScenariosScreen({ catalog, initialScenarios, hasExamples }: { ca
   }
 
   async function saveResults(items: { id: string; run: ScenarioRun }[]) {
-    const saved = await saveLabScenarioResults(items.map((i) => ({ id: i.id, result: i.run.result })));
-    return "error" in saved ? saved.error : null;
+    try {
+      const saved = await saveLabScenarioResults(items.map((i) => ({ id: i.id, result: i.run.result })));
+      return "error" in saved ? saved.error : null;
+    } catch {
+      return "revisa tu conexión e inténtalo de nuevo";
+    }
   }
 
   async function testOne(row: LabScenarioRow) {
     setBusy(row.id);
-    setNotice(null);
     const run = runRow(row);
     if (!run) {
       setBusy(null);
-      setNotice({ kind: "error", text: `El escenario «${row.name}» está dañado: ${row.definitionError ?? "no se entiende su definición"}.` });
+      toast.error(`El escenario «${row.name}» está dañado: ${row.definitionError ?? "no se entiende su definición"}.`);
       return;
     }
     setRuns((r) => ({ ...r, [row.id]: run }));
@@ -90,12 +89,13 @@ export function ScenariosScreen({ catalog, initialScenarios, hasExamples }: { ca
     setOpen(row.id);
     const failure = await saveResults([{ id: row.id, run }]);
     setBusy(null);
-    setNotice(failure ? { kind: "error", text: `Se corrió, pero no se pudo guardar el resultado: ${failure}` } : null);
+    if (failure) toast.error(`Se corrió, pero no se pudo guardar el resultado: ${failure}`);
+    else if (run.result.ok) toast.success("El escenario pasó");
+    else toast.error("El escenario falló. Mira el detalle de cada expectativa.");
   }
 
   async function testAll() {
     setBusy("all");
-    setNotice(null);
     const done: { id: string; run: ScenarioRun }[] = [];
     let damaged = 0;
     for (const row of scenarios) {
@@ -114,60 +114,78 @@ export function ScenariosScreen({ catalog, initialScenarios, hasExamples }: { ca
     setBusy(null);
     const totals = totalsText(done.map((d) => (d.run.result.ok ? "passed" : "failed")));
     const extra = damaged > 0 ? ` ${damaged} no se pudo${damaged === 1 ? "" : "ieron"} correr por estar dañado${damaged === 1 ? "" : "s"}.` : "";
-    setNotice(
-      failure
-        ? { kind: "error", text: `Se corrieron (${totals}), pero no se pudieron guardar los resultados: ${failure}` }
-        : { kind: done.some((d) => !d.run.result.ok) ? "error" : "ok", text: `Listo: ${totals}.${extra}` },
-    );
+    if (failure) toast.error(`Se corrieron (${totals}), pero no se pudieron guardar los resultados: ${failure}`);
+    else if (done.some((d) => !d.run.result.ok)) toast.error(`Listo: ${totals}.${extra}`);
+    else toast.success(`Listo: ${totals}.${extra}`);
   }
 
   async function addExamples() {
     setBusy("examples");
-    setNotice(null);
-    const res = await addExampleLabScenarios();
-    setBusy(null);
-    if ("error" in res) {
-      setNotice({ kind: "error", text: res.error });
-      return;
+    try {
+      const res = await addExampleLabScenarios();
+      if ("error" in res) {
+        toast.error(res.error);
+        return;
+      }
+      setScenarios((list) => [...list, ...res.scenarios]);
+      toast.success(
+        res.added === 0 ? "Ya tienes todos los escenarios de ejemplo." : `Se agregaron ${res.added} escenarios de ejemplo${res.skipped ? ` (${res.skipped} ya existían con ese nombre)` : ""}. Pulsa «Probar todos» para correrlos.`,
+      );
+    } catch {
+      toast.error("No se pudieron agregar los escenarios de ejemplo. Inténtalo de nuevo.");
+    } finally {
+      setBusy(null);
     }
-    setScenarios((list) => [...list, ...res.scenarios]);
-    setNotice({
-      kind: "ok",
-      text: res.added === 0 ? "Ya tienes todos los escenarios de ejemplo." : `Se agregaron ${res.added} escenarios de ejemplo${res.skipped ? ` (${res.skipped} ya existían con ese nombre)` : ""}. Pulsa «Probar todos» para correrlos.`,
-    });
   }
 
   async function duplicate(row: LabScenarioRow) {
     if (!row.definition) return;
     setBusy(row.id);
-    setNotice(null);
-    const res = await createLabScenario({ name: copyName(row.name, scenarios.map((s) => s.name)), description: row.description, definition: row.definition });
-    setBusy(null);
-    if ("error" in res) setNotice({ kind: "error", text: res.error });
-    else setScenarios((list) => [...list, res.scenario]);
+    try {
+      const res = await createLabScenario({ name: copyName(row.name, scenarios.map((s) => s.name)), description: row.description, definition: row.definition });
+      if ("error" in res) toast.error(res.error);
+      else {
+        setScenarios((list) => [...list, res.scenario]);
+        toast.success("Escenario duplicado");
+      }
+    } catch {
+      toast.error("No se pudo duplicar el escenario. Inténtalo de nuevo.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function remove(row: LabScenarioRow) {
     setDeleting(null);
     setBusy(row.id);
-    const res = await deleteLabScenario(row.id);
-    setBusy(null);
-    if ("error" in res) {
-      setNotice({ kind: "error", text: res.error });
-      return;
+    try {
+      const res = await deleteLabScenario(row.id);
+      if ("error" in res) {
+        toast.error(res.error);
+        return;
+      }
+      setScenarios((list) => list.filter((s) => s.id !== row.id));
+      setRuns(({ [row.id]: _gone, ...rest }) => rest);
+      toast.success(`Se borró «${row.name}».`);
+    } catch {
+      toast.error("No se pudo borrar el escenario. Inténtalo de nuevo.");
+    } finally {
+      setBusy(null);
     }
-    setScenarios((list) => list.filter((s) => s.id !== row.id));
-    setRuns(({ [row.id]: _gone, ...rest }) => rest);
-    setNotice({ kind: "ok", text: `Se borró «${row.name}».` });
   }
 
   async function saveEdit(row: LabScenarioRow, draft: ScenarioDraft): Promise<string | null> {
-    const res = await updateLabScenario(row.id, { name: draft.name, description: draft.description, definition: draft.definition });
+    let res: Awaited<ReturnType<typeof updateLabScenario>>;
+    try {
+      res = await updateLabScenario(row.id, { name: draft.name, description: draft.description, definition: draft.definition });
+    } catch {
+      return "No se pudo guardar. Inténtalo de nuevo.";
+    }
     if ("error" in res) return res.error;
     setScenarios((list) => list.map((s) => (s.id === row.id ? res.scenario : s)));
     setRuns(({ [row.id]: _stale, ...rest }) => rest);
     setEditing(null);
-    setNotice({ kind: "ok", text: "Se guardaron los cambios. El resultado anterior se borró: vuelve a probar el escenario." });
+    toast.success("Se guardaron los cambios. El resultado anterior se borró: vuelve a probar el escenario.");
     return null;
   }
 
@@ -206,12 +224,6 @@ export function ScenariosScreen({ catalog, initialScenarios, hasExamples }: { ca
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto p-8">
-        {notice && (
-          <p role={notice.kind === "error" ? "alert" : "status"} className={`rounded-lg border px-3 py-2 text-sm ${notice.kind === "error" ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-emerald-500/30 bg-emerald-500/10"}`}>
-            {notice.text}
-          </p>
-        )}
-
         {scenarios.length === 0 && (
           <div className="mx-auto mt-10 max-w-md space-y-2 text-center">
             <p className="text-sm font-medium">Todavía no tienes escenarios</p>

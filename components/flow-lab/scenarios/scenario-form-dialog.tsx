@@ -51,9 +51,14 @@ export function ScenarioFormDialog({
   async function save() {
     setSaving(true);
     setError(null);
-    const failure = await onSave({ name: name.trim(), description: description.trim(), definition: { ...initial.definition, expectations } });
-    setSaving(false);
-    if (failure) setError(failure);
+    try {
+      const failure = await onSave({ name: name.trim(), description: description.trim(), definition: { ...initial.definition, expectations } });
+      if (failure) setError(failure);
+    } catch {
+      setError("No se pudo guardar. Inténtalo de nuevo.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
