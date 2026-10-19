@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useTransition, type FormEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { startRouteProgress } from "@/components/ui/route-progress";
+import { Spinner } from "@/components/ui/spinner";
 import { formatNumber } from "@/lib/format";
 import type { MetricsReport } from "@/lib/metrics/compute";
 import type { TimeMode } from "@/lib/metrics/export";
@@ -74,6 +76,7 @@ export function MetricsView({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const [filtering, startTransition] = useTransition();
   const visibleTabs = TABS.filter((t) => canSeeOthers || !t.supervisorOnly);
   const [tab, setTab] = useState<TabKey>(visibleTabs.some((t) => t.key === initialTab) ? initialTab : "summary");
   const [mode, setMode] = useState<TimeMode>(report.hasSchedule ? "business" : "clock");
@@ -95,7 +98,8 @@ export function MetricsView({
     const next = { ...current, ...patch };
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(next)) if (v) qs.set(k, v);
-    router.push(`${pathname}?${qs.toString()}`);
+    startRouteProgress();
+    startTransition(() => router.push(`${pathname}?${qs.toString()}`));
   }
 
   function selectTab(key: TabKey) {
@@ -254,7 +258,13 @@ export function MetricsView({
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-8">
+      <div className={cn("relative flex-1 overflow-auto p-8 transition-opacity", filtering && "pointer-events-none opacity-60")}>
+        {filtering && (
+          <div role="status" className="absolute right-8 top-3 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground shadow-sm">
+            <Spinner className="h-3 w-3" />
+            Actualizando…
+          </div>
+        )}
         {(truncatedCases || truncatedInbound) && (
           <div className="mb-6 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -265,12 +275,14 @@ export function MetricsView({
             </span>
           </div>
         )}
+        <div key={tab} className="animate-fade-in">
         {tab === "summary" && <SummaryTab report={report} mode={mode} />}
         {tab === "agents" && canSeeOthers && <AgentsTab report={report} mode={mode} />}
         {tab === "funnel" && <FunnelTab report={report} mode={mode} />}
         {tab === "results" && <ResultsTab report={report} />}
         {tab === "overdue" && <OverdueTab report={report} memberNames={memberNames} staleDays={staleDays} />}
         {tab === "volume" && <VolumeTab report={report} showMessages={canSeeOthers} />}
+        </div>
       </div>
     </div>
   );

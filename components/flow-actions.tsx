@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Upload, Download, Loader2, GitBranch, FileJson, X, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
+import { startRouteProgress } from "@/components/ui/route-progress";
 import type { Json } from "@/lib/types/database";
 
 interface FlowExportData {
@@ -74,6 +76,7 @@ export function DeleteFlowButton({
   flow: { id: string; name: string };
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -87,14 +90,15 @@ export function DeleteFlowButton({
 
       if (!res.ok) {
         console.error("Failed to delete flow");
-        alert("No se pudo eliminar el flujo. Inténtalo de nuevo.");
+        toast.error("No se pudo eliminar el flujo. Inténtalo de nuevo.");
         return;
       }
 
+      toast.success("Flujo eliminado");
       router.refresh();
     } catch (err) {
       console.error("Failed to delete flow:", err);
-      alert("No se pudo eliminar el flujo. Inténtalo de nuevo.");
+      toast.error("No se pudo eliminar el flujo. Inténtalo de nuevo.");
     } finally {
       setDeleting(false);
     }
@@ -142,6 +146,7 @@ title={`Eliminar ${flow.name}`}
 
 export function ImportFlowButton() {
   const router = useRouter();
+  const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -207,10 +212,14 @@ export function ImportFlowButton() {
 
       const flow = await res.json();
       setPreview(null);
+      toast.success("Flujo importado");
+      startRouteProgress();
       router.push(`/dashboard/flows/${flow.id}`);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo importar");
+      const message = err instanceof Error ? err.message : "No se pudo importar";
+      setError(message);
+      toast.error(message);
       setTimeout(() => setError(null), 4000);
     } finally {
       setImporting(false);
@@ -248,8 +257,8 @@ export function ImportFlowButton() {
 
       {/* Import preview */}
       {preview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPreview(null)}>
-          <div className="mx-4 w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPreview(null)}>
+          <div className="animate-pop-in mx-4 w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
                 <GitBranch className="h-4 w-4 text-muted-foreground" />

@@ -63,7 +63,7 @@ export function VersionHistoryPanel({
 
 
   return (
-    <div className="w-80 border-l border-border bg-card overflow-y-auto">
+    <div className="animate-slide-in-right w-80 border-l border-border bg-card overflow-y-auto">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-muted-foreground" />

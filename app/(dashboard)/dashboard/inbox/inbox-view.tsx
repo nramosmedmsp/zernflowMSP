@@ -13,6 +13,7 @@ import { useContactCases } from "@/components/inbox/use-contact-cases";
 import { useCaseNotes } from "@/components/inbox/use-case-notes";
 import type { InboxCase, InboxConversation, InboxMeta, InboxRow } from "@/components/inbox/inbox-model";
 import { createClient } from "@/lib/supabase/client";
+import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import type { Database } from "@/lib/types/database";
 
@@ -42,6 +43,7 @@ export function InboxView({
   meta: InboxMeta;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const searchParams = useSearchParams();
   const data = useInboxData({ workspaceId, initialConversations, initialCases });
   const { conversations, casesByContact, ensureContactConversations, refreshContactCases, markConversationRead } = data;
@@ -198,11 +200,14 @@ export function InboxView({
       const json = await res.json();
       if (!res.ok || json.error) {
         setSyncError(json.error || "No se pudo sincronizar");
+        toast.error(json.error || "No se pudo sincronizar");
         return;
       }
+      toast.success("Conversaciones sincronizadas");
       router.refresh();
     } catch {
       setSyncError("No se pudo sincronizar. Revisa tu conexión.");
+      toast.error("No se pudo sincronizar. Revisa tu conexión.");
     } finally {
       setSyncing(false);
     }
@@ -272,7 +277,7 @@ export function InboxView({
                     className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"
                   >
                     <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
-                    {syncing ? "Sincronizando..." : "Sincronizar conversaciones"}
+                    {syncing ? "Sincronizando…" : "Sincronizar conversaciones"}
                   </button>
                   {syncError && (
                     <p className="mt-2 text-xs text-destructive">{syncError}</p>

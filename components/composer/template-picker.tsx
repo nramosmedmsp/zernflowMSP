@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Loader2, Search, Send, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeSearch } from "@/lib/saved-replies";
+import { useToast } from "@/components/ui/toast";
 import {
   buildTemplateParams,
   isSendable,
@@ -41,6 +42,7 @@ type LoadState =
   | { status: "ready"; templates: TemplateSummary[] };
 
 function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: TemplatePickerProps) {
+  const toast = useToast();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<TemplateSummary | null>(null);
@@ -115,9 +117,12 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setSendError(typeof data.error === "string" ? data.error : "No se pudo enviar la plantilla.");
+        const message = typeof data.error === "string" ? data.error : "No se pudo enviar la plantilla.";
+        setSendError(message);
+        toast.error(message);
         return;
       }
+      toast.success("Plantilla enviada");
       onSent();
       onClose();
     } catch {
@@ -129,12 +134,12 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={() => !sending && onClose()} />
+      <div className="animate-fade-in fixed inset-0 bg-black/50" onClick={() => !sending && onClose()} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Enviar plantilla de WhatsApp"
-        className="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg"
+        className="animate-pop-in relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg"
       >
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <div>
@@ -156,7 +161,7 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
         {state.status === "loading" ? (
           <div className="flex items-center justify-center gap-2 px-5 py-12 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Cargando plantillas...
+            Cargando plantillas…
           </div>
         ) : state.status === "error" ? (
           <p className="px-5 py-8 text-center text-sm text-destructive">{state.message}</p>

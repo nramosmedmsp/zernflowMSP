@@ -217,7 +217,7 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
           role="dialog"
           aria-label="Notificaciones"
           style={{ left: anchor.left, top: anchor.top }}
-          className="fixed z-50 flex max-h-[min(28rem,calc(100vh-6rem))] w-80 max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+          className="animate-pop-in fixed z-50 flex max-h-[min(28rem,calc(100vh-6rem))] w-80 max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
         >
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
             <h2 className="text-sm font-semibold">Notificaciones</h2>

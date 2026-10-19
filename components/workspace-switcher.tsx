@@ -113,7 +113,7 @@ export function WorkspaceSwitcher({
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-border bg-popover p-1 shadow-lg">
+        <div className="animate-pop-in absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-border bg-popover p-1 shadow-lg">
           <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             Espacios de trabajo
           </p>

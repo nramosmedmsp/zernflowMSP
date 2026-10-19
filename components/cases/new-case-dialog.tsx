@@ -90,12 +90,12 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="animate-fade-in fixed inset-0 bg-black/50" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-case-title"
-        className="relative z-10 w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg"
+        className="animate-pop-in relative z-10 w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg"
       >
         <div className="flex items-start justify-between">
           <h2 id="new-case-title" className="text-base font-semibold">

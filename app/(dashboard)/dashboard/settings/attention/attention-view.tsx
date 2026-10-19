@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useToast } from "@/components/ui/toast";
 import Link from "next/link";
 import { ArrowLeft, Check, Loader2, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ export function AttentionView({
   const [mode, setMode] = useState(initial.assignmentMode);
   const [canReturn, setCanReturn] = useState(initial.agentCanReturnToQueue);
   const [staleDays, setStaleDays] = useState(String(initial.staleStageDays));
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,12 +64,15 @@ export function AttentionView({
       });
       if ("error" in result) {
         setError(result.error);
+        toast.error(result.error);
         return;
       }
+      toast.success("Configuración guardada");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {
       setError("No se pudo guardar la configuración. Inténtalo de nuevo.");
+      toast.error("No se pudo guardar la configuración. Inténtalo de nuevo.");
     } finally {
       setSaving(false);
     }
@@ -216,7 +221,7 @@ export function AttentionView({
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {saving ? "Guardando..." : "Guardar cambios"}
+              {saving ? "Guardando…" : "Guardar cambios"}
             </button>
             {saved && (
               <span className="flex items-center gap-1 text-sm text-green-600">

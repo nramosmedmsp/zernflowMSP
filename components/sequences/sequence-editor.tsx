@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useToast } from "@/components/ui/toast";
 import {
   ArrowLeft,
   Plus,
@@ -52,6 +53,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
   const [description, setDescription] = useState(sequence.description || "");
   const [steps, setSteps] = useState<SequenceStep[]>(sequence.steps);
   const [status, setStatus] = useState(sequence.status);
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -74,21 +76,29 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
     }
     setSaving(true);
 
-    const result = await updateSequence(sequence.id, {
-      name: name.trim(),
-      description: description.trim() || null,
-      steps,
-      status,
-    });
+    try {
+      const result = await updateSequence(sequence.id, {
+        name: name.trim(),
+        description: description.trim() || null,
+        steps,
+        status,
+      });
 
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setSuccess("Guardado");
-      setTimeout(() => setSuccess(null), 2000);
+      if (result.error) {
+        setError(result.error);
+        toast.error(result.error);
+      } else {
+        setSuccess("Guardado");
+        toast.success("Secuencia guardada");
+        setTimeout(() => setSuccess(null), 2000);
+      }
+    } catch {
+      setError("No se pudo guardar la secuencia. Inténtalo de nuevo.");
+      toast.error("No se pudo guardar la secuencia. Inténtalo de nuevo.");
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
-  }, [sequence.id, name, description, steps, status]);
+  }, [sequence.id, name, description, steps, status, toast]);
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);
@@ -195,7 +205,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              {saving ? "Guardando..." : "Guardar"}
+              {saving ? "Guardando…" : "Guardar"}
             </button>
             <button
               onClick={() => setConfirmDelete(true)}

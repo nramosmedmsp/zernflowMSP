@@ -6,6 +6,7 @@
 // servicio. Devuelven { ok: true, ... } o { error } con el mensaje en español.
 
 import { after } from "next/server";
+import { unstable_cache } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import * as engine from "@/lib/cases";
@@ -412,29 +413,42 @@ export async function getContactCases(
   };
 }
 
+/** Nombre y correo de un usuario de Auth, en caché 2 min entre peticiones (evita 1 viaje a Auth por miembro). */
+const authIdentity = unstable_cache(
+  async (userId: string) => {
+    const service = await createServiceClient();
+    const {
+      data: { user },
+    } = await service.auth.admin.getUserById(userId);
+    return user
+      ? { id: user.id, email: user.email ?? null, user_metadata: (user.user_metadata ?? {}) as Record<string, unknown> }
+      : null;
+  },
+  ["auth-identity"],
+  { revalidate: 120 },
+);
+
 /** Miembros del espacio con nombre, disponibilidad y equipos (para asignar y mencionar). */
 export async function listCaseMembers(): Promise<CaseActionResult<{ members: CaseMemberView[] }>> {
-  const s = await session();
-  if ("error" in s) return s;
-  const teamIds = s.actor.teams.map((t) => t.id);
+  // getWorkspace ya comprobó la sesión y la membresía (y está en caché por petición).
+  const { workspace } = await getWorkspace();
+  const db = await createServiceClient();
+  // Equipos activos del espacio y sus integrantes en una sola consulta (join), en paralelo con los miembros.
   const [{ data: members }, { data: teamMembers }] = await Promise.all([
-    s.db
-      .from("workspace_members")
-      .select("user_id, role, availability")
-      .eq("workspace_id", s.workspaceId),
-    teamIds.length
-      ? s.db.from("team_members").select("team_id, user_id, role, case_type_ids").in("team_id", teamIds)
-      : Promise.resolve({ data: [] as { team_id: string; user_id: string; role: TeamRole; case_type_ids: string[] | null }[] }),
+    db.from("workspace_members").select("user_id, role, availability").eq("workspace_id", workspace.id),
+    db
+      .from("team_members")
+      .select("team_id, user_id, role, case_type_ids, teams!inner(workspace_id, archived_at)")
+      .eq("teams.workspace_id", workspace.id)
+      .is("teams.archived_at", null),
   ]);
 
   const result = await Promise.all(
     (members ?? []).map(async (m) => {
-      const {
-        data: { user },
-      } = await s.db.auth.admin.getUserById(m.user_id);
+      const user = await authIdentity(m.user_id);
       return {
         userId: m.user_id,
-        name: displayName(user ? { id: user.id, email: user.email, user_metadata: user.user_metadata } : null),
+        name: displayName(user ? { id: user.id, email: user.email ?? undefined, user_metadata: user.user_metadata } : null),
         email: user?.email ?? null,
         role: m.role,
         availability: m.availability,

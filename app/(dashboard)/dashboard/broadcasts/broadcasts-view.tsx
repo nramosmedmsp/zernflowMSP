@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { useToast } from "@/components/ui/toast";
+import { Spinner } from "@/components/ui/spinner";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import {
   SegmentBuilder,
@@ -72,6 +74,7 @@ export function BroadcastsView({
   broadcasts: Broadcast[];
   workspaceId: string;
 }) {
+  const toast = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -114,9 +117,11 @@ export function BroadcastsView({
         setNewKind("text");
         setShowCreate(false);
         setSelectedId(data.id);
+        toast.success("Difusión creada");
       }
     } catch (err) {
       console.error("Failed to create broadcast:", err);
+      toast.error("No se pudo crear la difusión. Inténtalo de nuevo.");
     } finally {
       setCreating(false);
     }
@@ -180,9 +185,10 @@ export function BroadcastsView({
               <button
                 onClick={handleCreate}
                 disabled={!newName.trim() || creating}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                {creating ? "Creando..." : "Crear"}
+                {creating && <Spinner />}
+                {creating ? "Creando…" : "Crear"}
               </button>
               <button
                 onClick={() => {
@@ -257,7 +263,7 @@ export function BroadcastsView({
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-border">
+          <div className="stagger-list divide-y divide-border">
             {items.map((broadcast) => {
               const status = statusConfig[broadcast.status];
               const StatusIcon = status.icon;
@@ -423,6 +429,7 @@ function BroadcastDetail({
         }
       : null
   );
+  const toast = useToast();
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -484,8 +491,11 @@ function BroadcastDetail({
 
       if (err) throw err;
       if (data) onUpdate(data);
+      toast.success("Borrador guardado");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar");
+      const message = err instanceof Error ? err.message : "No se pudo guardar";
+      setError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -539,6 +549,7 @@ function BroadcastDetail({
       }
 
       setSuccess(`Enviando a ${formatNumber(data.totalRecipients)} destinatarios`);
+      toast.success(`Difusión en marcha: ${formatNumber(data.totalRecipients)} destinatarios`);
       setPreview(null);
 
       // Actualizar la difusión localmente
@@ -549,7 +560,9 @@ function BroadcastDetail({
         message_content: content as unknown as Json,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo enviar");
+      const message = err instanceof Error ? err.message : "No se pudo enviar";
+      setError(message);
+      toast.error(message);
     } finally {
       setSending(false);
     }
@@ -727,7 +740,7 @@ function BroadcastDetail({
                   className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
                   {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  {sending ? "Enviando..." : `Confirmar y enviar a ${formatNumber(preview.willReceive)}`}
+                  {sending ? "Enviando…" : `Confirmar y enviar a ${formatNumber(preview.willReceive)}`}
                 </button>
                 <button
                   onClick={() => setPreview(null)}
@@ -767,14 +780,15 @@ function BroadcastDetail({
                 ) : (
                   <Send className="h-4 w-4" />
                 )}
-                {previewing ? "Calculando..." : "Revisar y enviar"}
+                {previewing ? "Calculando…" : "Revisar y enviar"}
               </button>
               <button
                 onClick={handleSave}
                 disabled={saving || !contentReady}
                 className="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50"
               >
-                {saving ? "Guardando..." : "Guardar borrador"}
+                {saving && <Spinner />}
+                {saving ? "Guardando…" : "Guardar borrador"}
               </button>
             </div>
           )}

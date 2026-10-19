@@ -4,9 +4,12 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Loader2 } from "lucide-react";
 import { createSequence } from "@/lib/actions/sequences";
+import { useToast } from "@/components/ui/toast";
+import { startRouteProgress } from "@/components/ui/route-progress";
 
 export function CreateSequenceButton() {
   const router = useRouter();
+  const toast = useToast();
   const [creating, setCreating] = useState(false);
   const pendingRef = useRef(false);
 
@@ -20,16 +23,18 @@ export function CreateSequenceButton() {
 
       if (result.error) {
         console.error("Failed to create sequence:", result.error);
-        alert(`No se pudo crear la secuencia: ${result.error}`);
+        toast.error(`No se pudo crear la secuencia: ${result.error}`);
         return;
       }
 
       if (result.sequence) {
+        toast.success("Secuencia creada");
+        startRouteProgress();
         router.push(`/dashboard/sequences/${result.sequence.id}`);
       }
     } catch (err) {
       console.error("Failed to create sequence:", err);
-      alert(`No se pudo crear la secuencia: ${err instanceof Error ? err.message : "Error desconocido"}`);
+      toast.error(`No se pudo crear la secuencia: ${err instanceof Error ? err.message : "Error desconocido"}`);
     } finally {
       pendingRef.current = false;
       setCreating(false);
@@ -47,7 +52,7 @@ export function CreateSequenceButton() {
       ) : (
         <Plus className="h-4 w-4" />
       )}
-      {creating ? "Creando..." : "Nueva secuencia"}
+      {creating ? "Creando…" : "Nueva secuencia"}
     </button>
   );
 }

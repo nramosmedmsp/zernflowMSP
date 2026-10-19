@@ -2,10 +2,13 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Paperclip, Bot, BotOff, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical } from "lucide-react";
+import { Paperclip, Bot, BotOff, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical, AlertCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
+import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 import { formatDate, formatTime } from "@/lib/format";
 import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
 import type { Database, ConversationStatus } from "@/lib/types/database";
@@ -35,15 +38,18 @@ function formatDateSeparator(dateStr: string): string {
   return day;
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message, onRetry }: { message: Message; onRetry?: (id: string) => void }) {
   const isInbound = message.direction === "inbound";
   const isBot = message.sent_by_flow_id !== null;
+  const sending = !isInbound && message.status === "pending" && message.id.startsWith("optimistic-");
+  const failed = !isInbound && message.status === "failed";
 
   return (
     <div
       className={cn(
         "flex gap-2",
-        isInbound ? "justify-start" : "justify-end"
+        isInbound ? "justify-start" : "justify-end",
+        message.id.startsWith("optimistic-") && "animate-slide-up"
       )}
     >
       {isInbound && (
@@ -58,7 +64,9 @@ function MessageBubble({ message }: { message: Message }) {
             "rounded-2xl px-4 py-2 text-sm",
             isInbound
               ? "rounded-tl-md bg-muted text-foreground"
-              : "rounded-tr-md bg-primary text-primary-foreground"
+              : "rounded-tr-md bg-primary text-primary-foreground",
+            sending && "opacity-70",
+            failed && "bg-destructive/90 ring-1 ring-destructive"
           )}
         >
           {message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
@@ -78,15 +86,30 @@ function MessageBubble({ message }: { message: Message }) {
           {isBot && (
             <Bot className="h-3 w-3" />
           )}
-          <span>{formatTime(message.created_at)}</span>
-          {!isInbound && message.status !== "sent" && (
-            <span className="capitalize">
-              {message.status === "delivered"
-                ? "Entregado"
-                : message.status === "failed"
-                ? "Falló"
-                : ""}
+          {sending ? (
+            <span className="inline-flex items-center gap-1">
+              <Spinner className="h-3 w-3" />
+              Enviando…
             </span>
+          ) : failed ? (
+            <span role="alert" className="inline-flex items-center gap-1.5 text-destructive">
+              <AlertCircle className="h-3 w-3" />
+              No se envió
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(message.id)}
+                  className="font-medium underline underline-offset-2 hover:no-underline"
+                >
+                  Reintentar
+                </button>
+              )}
+            </span>
+          ) : (
+            <>
+              <span>{formatTime(message.created_at)}</span>
+              {!isInbound && message.status === "delivered" && <span>Entregado</span>}
+            </>
           )}
         </div>
       </div>
@@ -185,6 +208,7 @@ export function MessageThread({
   canSimulate?: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [simulateOpen, setSimulateOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
@@ -202,12 +226,13 @@ export function MessageThread({
         .eq("id", conversation.id);
       if (error) throw error;
       router.refresh();
+      toast.success(status === "closed" ? "Conversación cerrada" : status === "snoozed" ? "Conversación pospuesta" : "Conversación reabierta");
     } catch {
-      alert("No se pudo actualizar el estado de la conversación");
+      toast.error("No se pudo actualizar el estado de la conversación");
     } finally {
       setStatusUpdating(null);
     }
-  }, [conversation, statusUpdating, router]);
+  }, [conversation, statusUpdating, router, toast]);
 
   useEffect(() => {
     setMessages(initialMessages);
@@ -231,17 +256,18 @@ export function MessageThread({
     try {
       const result = await setConversationBotPaused(noteCase.id, conversationId, next);
       if ("error" in result) {
-        alert(result.error);
+        toast.error(result.error);
       } else {
         setBotPausedLocal(result.paused);
+        toast.success(result.paused ? "Bot en pausa en este chat" : "Bot reanudado en este chat");
         onCaseActivity?.();
       }
     } catch {
-      alert("No se pudo cambiar el estado del bot");
+      toast.error("No se pudo cambiar el estado del bot");
     } finally {
       setBotBusy(false);
     }
-  }, [conversationId, noteCase, botBusy, botPaused, onCaseActivity]);
+  }, [conversationId, noteCase, botBusy, botPaused, onCaseActivity, toast]);
 
   const refetchMessages = useCallback(async () => {
     if (!conversationId) return;
@@ -331,7 +357,19 @@ export function MessageThread({
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimisticMessage]);
+    await deliver(optimisticId, text);
+  }
 
+  /** Reintenta un mensaje que falló: vuelve a "Enviando…" y lo manda otra vez. */
+  async function handleRetry(messageId: string) {
+    const failed = messages.find((m) => m.id === messageId);
+    if (!failed?.text || failed.status !== "failed") return;
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, status: "pending" as const } : m)));
+    await deliver(messageId, failed.text);
+  }
+
+  async function deliver(optimisticId: string, text: string) {
+    if (!conversation) return;
     try {
       const res = await fetch("/api/v1/messages", {
         method: "POST",
@@ -359,6 +397,7 @@ export function MessageThread({
           m.id === optimisticId ? { ...m, status: "failed" as const } : m
         )
       );
+      toast.error(err instanceof Error ? err.message : "No se pudo enviar el mensaje");
     }
   }
 
@@ -501,8 +540,12 @@ export function MessageThread({
       {/* Messages and internal notes */}
       <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {loading ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+          <div role="status" aria-busy="true" className="mx-auto max-w-2xl animate-fade-in space-y-4">
+            <span className="sr-only">Cargando mensajes…</span>
+            <Skeleton className="h-10 w-2/5 rounded-2xl" />
+            <Skeleton className="ml-auto h-14 w-1/2 rounded-2xl" />
+            <Skeleton className="h-10 w-1/3 rounded-2xl" />
+            <Skeleton className="ml-auto h-10 w-2/5 rounded-2xl" />
           </div>
         ) : (
           <div className="mx-auto max-w-2xl space-y-4">
@@ -521,7 +564,7 @@ export function MessageThread({
                     </div>
                   )}
                   {item.kind === "message" ? (
-                    <MessageBubble message={item.message} />
+                    <MessageBubble message={item.message} onRetry={(id) => void handleRetry(id)} />
                   ) : (
                     <NoteBubble note={item.note} members={members} />
                   )}

@@ -20,33 +20,42 @@ export default async function MetricsPage({
   const { user, workspace, role, supabase } = await getWorkspace();
   const now = new Date();
 
-  // Supervisor: lidera algún equipo. Administrador: todo. Asesor: solo lo suyo (lo recorta RLS).
-  const { data: myTeams } = await supabase.from("team_members").select("role").eq("user_id", user.id);
-  const isSupervisor = (myTeams ?? []).some((m) => m.role === "supervisor");
-  const canSeeOthers = isAdminRole(role) || isSupervisor;
-
   const filters = parseMetricFilters(params);
+
+  // Los miembros (con sus equipos) se piden de una vez: de ahí sale también si
+  // es supervisor, sin otra consulta a team_members.
+  const membersPromise = listCaseMembers().then((res) => ("members" in res ? res.members : []));
+  const isAdmin = isAdminRole(role);
+  // Administrador: ya se sabe que ve todo, así las consultas no esperan a los miembros.
+  // Supervisor (lidera algún equipo): todo lo de su equipo. Asesor: solo lo suyo (lo recorta RLS).
+  const allMembersEarly = isAdmin ? null : await membersPromise;
+  const isSupervisor = (allMembersEarly ?? [])
+    .find((m) => m.userId === user.id)
+    ?.teams.some((t) => t.role === "supervisor") ?? false;
+  const canSeeOthers = isAdmin || isSupervisor;
+
   if (!canSeeOthers) {
     // Los cortes por asesor y equipo son solo para supervisores y administradores.
     filters.assigneeId = undefined;
     filters.teamId = undefined;
   }
 
-  const membersRes = await listCaseMembers();
-  const allMembers = "members" in membersRes ? membersRes.members : [];
-  const members = (canSeeOthers ? allMembers : allMembers.filter((m) => m.userId === user.id)).map((m) => ({
-    userId: m.userId,
-    name: m.name,
-  }));
+  const visibleMembers = membersPromise.then((all) =>
+    (canSeeOthers ? all : all.filter((m) => m.userId === user.id)).map((m) => ({
+      userId: m.userId,
+      name: m.name,
+    })),
+  );
 
   const loaded = await loadMetrics(supabase, {
     workspaceId: workspace.id,
     workspaceSettings: workspace.settings,
     filters,
     canSeeOthers,
-    members,
+    members: visibleMembers,
     now,
   });
+  const members = await visibleMembers;
   const report = computeMetrics(loaded.input, filters);
 
   const tabParam = Array.isArray(params.tab) ? params.tab[0] : params.tab;

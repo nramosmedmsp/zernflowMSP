@@ -9,6 +9,7 @@ import { FileText, Loader2, Lock, Send, StickyNote } from "lucide-react";
 import { addCaseNote, type CaseView } from "@/lib/actions/cases";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/toast";
 import { SavedReplyPicker } from "@/components/composer/saved-reply-picker";
 import { TemplatePicker } from "@/components/composer/template-picker";
 import {
@@ -60,6 +61,7 @@ export function Composer({
   const [customFields, setCustomFields] = useState<Record<string, string>>({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const now = useNow();
+  const toast = useToast();
 
   const contactId = conversation.contact_id;
   const contactName = conversation.contacts?.display_name ?? undefined;
@@ -158,8 +160,10 @@ export function Composer({
       const result = await addCaseNote(noteCase.id, text, mentions, conversation.id);
       if ("error" in result) {
         setError(result.error);
+        toast.error(result.error);
         return;
       }
+      toast.success("Nota guardada");
       onNoteAdded({
         id: result.noteId,
         workspace_id: conversation.workspace_id,
@@ -182,6 +186,7 @@ export function Composer({
       requestAnimationFrame(autoResize);
     } catch {
       setError("No se pudo guardar la nota. Inténtalo de nuevo.");
+      toast.error("No se pudo guardar la nota. Inténtalo de nuevo.");
     } finally {
       setSavingNote(false);
     }
@@ -345,7 +350,7 @@ export function Composer({
               />
             )}
             {mentionOpen && (
-              <div className="absolute bottom-full left-0 z-30 mb-1 w-64 rounded-lg border border-border bg-card p-1 shadow-lg">
+              <div className="animate-pop-in absolute bottom-full left-0 z-30 mb-1 w-64 rounded-lg border border-border bg-card p-1 shadow-lg">
                 {mentionOptions.map((m, i) => (
                   <button
                     key={m.userId}

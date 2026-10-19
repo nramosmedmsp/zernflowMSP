@@ -21,7 +21,7 @@ function chunks<T>(list: T[], size: number): T[][] {
 export default async function InboxPage() {
   const { user, workspace, role, supabase } = await getWorkspace();
 
-  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult, { data: channels }] =
+  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult, { data: channels }, { data: stages }] =
     await Promise.all([
       supabase
         .from("conversations")
@@ -49,16 +49,13 @@ export default async function InboxPage() {
         .order("name", { ascending: true }),
       listCaseMembers(),
       supabase.from("channels").select("id, late_account_id").eq("workspace_id", workspace.id),
-    ]);
-
-  const typeIds = (types ?? []).map((t) => t.id);
-  const { data: stages } = typeIds.length
-    ? await supabase
+      // Etapas por join con el tipo: sin esperar a la lista de tipos.
+      supabase
         .from("case_stages")
-        .select("id, case_type_id, name, color, kind, archived_at")
-        .in("case_type_id", typeIds)
-        .order("position", { ascending: true })
-    : { data: [] };
+        .select("id, case_type_id, name, color, kind, archived_at, case_types!inner(workspace_id)")
+        .eq("case_types.workspace_id", workspace.id)
+        .order("position", { ascending: true }),
+    ]);
 
   // Chats de contactos con gestiones activas que no están entre los recientes.
   const conversations: InboxConversation[] = [...((recent ?? []) as InboxConversation[])];

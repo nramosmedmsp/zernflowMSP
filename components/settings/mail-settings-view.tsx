@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useToast } from "@/components/ui/toast";
 import Link from "next/link";
 import { ArrowLeft, Check, Loader2, Mail, Save, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,7 @@ export function MailSettingsView({
   const [fromName, setFromName] = useState(initial.fromName);
   const [status, setStatus] = useState(initialStatus);
 
+  const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
@@ -72,19 +74,26 @@ export function MailSettingsView({
     setSaving(true);
     setMessage(null);
 
-    const result = await saveMailSettings({
-      host,
-      port,
-      security,
-      username,
-      password,
-      fromEmail,
-      fromName,
-    });
+    let result: Awaited<ReturnType<typeof saveMailSettings>>;
+    try {
+      result = await saveMailSettings({
+        host,
+        port,
+        security,
+        username,
+        password,
+        fromEmail,
+        fromName,
+      });
+    } catch {
+      result = { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
+    }
 
     if ("error" in result) {
       setMessage({ kind: "error", text: result.error });
+      toast.error(result.error);
     } else {
+      toast.success("Configuración de correo guardada");
       setPassword("");
       setHasPassword(true);
       setStatus(result.status);
@@ -98,11 +107,18 @@ export function MailSettingsView({
     setTesting(true);
     setMessage(null);
 
-    const result = await sendTestMail();
+    let result: Awaited<ReturnType<typeof sendTestMail>>;
+    try {
+      result = await sendTestMail();
+    } catch {
+      result = { error: "No se pudo enviar el correo de prueba. Inténtalo de nuevo." } as typeof result;
+    }
     if (result.status) setStatus(result.status);
     if ("error" in result) {
       setMessage({ kind: "error", text: result.error });
+      toast.error(result.error);
     } else {
+      toast.success(`Correo de prueba enviado a ${result.to}`);
       setMessage({ kind: "ok", text: `Te enviamos un correo de prueba a ${result.to}.` });
     }
     setTesting(false);
@@ -306,7 +322,7 @@ export function MailSettingsView({
                 className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                {saving ? "Guardando..." : "Guardar"}
+                {saving ? "Guardando…" : "Guardar"}
               </button>
               <button
                 type="button"
