@@ -32,6 +32,7 @@ import {
   getContactCases,
   markNotificationsRead,
   openManualCase,
+  postponeCase,
   setConversationBotPaused,
   setMyAvailability,
   takeCase,
@@ -244,5 +245,29 @@ describe("acciones de gestiones: permisos", () => {
     ]);
     expect(await markNotificationsRead("all")).toEqual({ ok: true, updated: 1 });
     expect(fake.rows("notifications").find((n) => n.user_id === BETO)!.read_at).toBeNull();
+  });
+});
+
+describe("postponeCase", () => {
+  it("guarda el próximo contacto y conserva la nota", async () => {
+    fake.rows("cases")[0].next_action_note = "Llamar por el pedido";
+    as(ANA);
+    const result = await postponeCase(caseId, "2026-10-28T14:00:00.000Z");
+    expect(result).toMatchObject({ ok: true, nextActionAt: "2026-10-28T14:00:00.000Z", assignedToMe: false });
+    expect(fake.rows("cases")[0]).toMatchObject({ next_action_at: "2026-10-28T14:00:00.000Z", next_action_note: "Llamar por el pedido" });
+  });
+
+  it("si la gestión no tiene responsable y la persona puede tomarla, se la asigna", async () => {
+    fake.rows("cases")[0].assignee_id = null;
+    as(SUP);
+    expect(await postponeCase(caseId, "2026-10-28T14:00:00.000Z")).toMatchObject({ ok: true, assignedToMe: true });
+    expect(fake.rows("cases")[0].assignee_id).toBe(SUP);
+  });
+
+  it("quien no puede editar la gestión no la pospone", async () => {
+    as(BETO);
+    expect(await postponeCase(caseId, "2026-10-28T14:00:00.000Z")).toEqual({ error: CASE_NOT_FOUND });
+    as(ANA);
+    expect(await postponeCase(caseId, "no es fecha")).toMatchObject({ error: expect.any(String) });
   });
 });

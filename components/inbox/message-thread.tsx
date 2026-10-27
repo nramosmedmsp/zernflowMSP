@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
-import { Paperclip, Bot, BotOff, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
+import { Paperclip, Bot, BotOff, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -14,10 +13,10 @@ import { platformLabel } from "@/lib/platforms";
 import { linkify } from "@/lib/linkify";
 import type { InboxMessage } from "@/lib/inbox-messages";
 import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
-import type { ConversationStatus } from "@/lib/types/database";
 import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
 import { SimulateInboundDialog } from "./simulate-inbound-dialog";
+import { PostponeMenu } from "./postpone-menu";
 import { latestIso, memberName, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
 import { useThreadMessages } from "./use-thread-messages";
@@ -26,12 +25,6 @@ import { useNow } from "./use-now";
 type TimelineItem =
   | { kind: "message"; at: string; message: InboxMessage }
   | { kind: "note"; at: string; note: CaseNote };
-
-const CONVERSATION_STATUS_LABELS: Record<ConversationStatus, string> = {
-  open: "Abierta",
-  closed: "Cerrada",
-  snoozed: "Pospuesta",
-};
 
 /** Distancia al final (px) para considerar que el asesor está leyendo lo último. */
 const NEAR_BOTTOM_PX = 120;
@@ -262,31 +255,11 @@ export function MessageThread({
   /** Administrador: botón "Simular mensaje del cliente" (solo con isDemo). */
   canSimulate?: boolean;
 }) {
-  const router = useRouter();
   const toast = useToast();
   const [simulateOpen, setSimulateOpen] = useState(false);
-  const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
   const conversationId = conversation?.id ?? null;
   const thread = useThreadMessages(conversationId);
   const serverMessages = thread.messages;
-
-  const updateConversationStatus = useCallback(async (status: ConversationStatus) => {
-    if (!conversation || statusUpdating) return;
-    setStatusUpdating(status);
-    try {
-      const { error } = await createClient()
-        .from("conversations")
-        .update({ status })
-        .eq("id", conversation.id);
-      if (error) throw error;
-      router.refresh();
-      toast.success(status === "closed" ? "Conversación cerrada" : status === "snoozed" ? "Conversación pospuesta" : "Conversación reabierta");
-    } catch {
-      toast.error("No se pudo actualizar el estado de la conversación");
-    } finally {
-      setStatusUpdating(null);
-    }
-  }, [conversation, statusUpdating, router, toast]);
 
   // Pausar o reanudar el bot (solo quien puede editar la gestión activa). El valor
   // local cubre el tiempo hasta que llega la actualización de la conversación.
@@ -521,18 +494,6 @@ export function MessageThread({
               Simular mensaje del cliente
             </button>
           )}
-          <span
-            className={cn(
-              "rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
-              conversation.status === "open"
-                ? "bg-green-100 text-green-700"
-                : conversation.status === "snoozed"
-                ? "bg-yellow-100 text-yellow-700"
-                : "bg-muted text-muted-foreground"
-            )}
-          >
-            {CONVERSATION_STATUS_LABELS[conversation.status]}
-          </span>
           {canToggleBot ? (
             <button
               onClick={() => void toggleBotPaused()}
@@ -559,41 +520,9 @@ export function MessageThread({
               </span>
             )
           )}
-          <div className="flex items-center gap-1">
-            {conversation.status !== "closed" && (
-              <button
-                onClick={() => updateConversationStatus("closed")}
-                disabled={!!statusUpdating}
-                title="Cerrar conversación"
-                aria-label="Cerrar conversación"
-                className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                {statusUpdating === "closed" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
-              </button>
-            )}
-            {conversation.status !== "snoozed" && (
-              <button
-                onClick={() => updateConversationStatus("snoozed")}
-                disabled={!!statusUpdating}
-                title="Posponer conversación"
-                aria-label="Posponer conversación"
-                className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                {statusUpdating === "snoozed" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />}
-              </button>
-            )}
-            {conversation.status !== "open" && (
-              <button
-                onClick={() => updateConversationStatus("open")}
-                disabled={!!statusUpdating}
-                title="Reabrir conversación"
-                aria-label="Reabrir conversación"
-                className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
-              >
-                {statusUpdating === "open" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-              </button>
-            )}
-          </div>
+          {noteCase && noteCase.status === "open" && noteCase.permissions.canEdit && (
+            <PostponeMenu caseView={noteCase} onDone={onCaseActivity} />
+          )}
         </div>
       </div>
 
