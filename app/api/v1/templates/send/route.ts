@@ -7,6 +7,7 @@ import { messagePreview } from "@/lib/message-preview";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { demoTemplateText, isDemoChannel } from "@/lib/demo";
 import { storeDemoMessage } from "@/lib/demo-messages";
+import { recordOutboundSend } from "@/lib/outbound-log";
 import {
   TEMPLATE_PARAM_MAX,
   fillPlaceholders,
@@ -197,6 +198,9 @@ export async function POST(request: NextRequest) {
       .from("conversations")
       .update({ last_message_at: sentAt, last_message_preview: messagePreview(text) })
       .eq("id", conversationId);
+
+    // Quién la envió y su estado de entrega (lib/outbound-log.ts).
+    await recordOutboundSend(service, { conversationId, platformMessageId: messageId, text, userId: user.id, at: sentAt });
 
     // Respuesta humana (docs/FASE-1-TECNICO.md 3.2): igual que messages/route.ts.
     // Si falla, la plantilla ya salió: solo se registra el error.

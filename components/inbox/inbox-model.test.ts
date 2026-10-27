@@ -14,6 +14,7 @@ import {
   type InboxCase,
   type InboxConversation,
   type InboxMeta,
+  messageAuthor,
 } from "./inbox-model";
 
 const ME = "00000000-0000-0000-0000-000000000001";
@@ -241,5 +242,23 @@ describe("whatsAppWindowChip", () => {
     expect(whatsAppWindowChip("instagram", last, at("2026-10-27T13:00:00.000Z"))).toBeNull();
     expect(whatsAppWindowChip("whatsapp", last, at("2026-10-28T10:00:01.000Z"))).toBeNull();
     expect(whatsAppWindowChip("whatsapp", null, at("2026-10-27T13:00:00.000Z"))).toBeNull();
+  });
+});
+
+describe("messageAuthor", () => {
+  const members = [{ userId: "u-ana", name: "Ana Torres", email: null, availability: "available" as const, teams: [] }];
+  const msg = (extra: Partial<{ direction: string; sent_by_user_id: string | null; sent_by_flow_id: string | null; flow_name: string | null }>) => ({
+    direction: "outbound",
+    sent_by_user_id: null,
+    sent_by_flow_id: null,
+    ...extra,
+  });
+  it("nombre del asesor, Tú, o el bot con su flujo", () => {
+    expect(messageAuthor(msg({ sent_by_user_id: "u-ana" }), members, "u-yo")).toBe("Ana Torres");
+    expect(messageAuthor(msg({ sent_by_user_id: "u-yo" }), members, "u-yo")).toBe("Tú");
+    expect(messageAuthor(msg({ sent_by_flow_id: "f1", flow_name: "Bienvenida" }), members, "u-yo")).toBe("Bot · Bienvenida");
+    expect(messageAuthor(msg({ sent_by_user_id: "u-x" }), members, "u-yo")).toBe("Otro asesor");
+    expect(messageAuthor(msg({}), members, "u-yo")).toBeNull();
+    expect(messageAuthor(msg({ direction: "inbound", sent_by_user_id: "u-ana" }), members, "u-yo")).toBeNull();
   });
 });

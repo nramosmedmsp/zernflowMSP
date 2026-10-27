@@ -7,10 +7,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { mergeMessages, type InboxMessage, type MessagesPage } from "@/lib/inbox-messages";
+import { applyStatusUpdate, mergeMessages, type InboxMessage, type MessagesPage } from "@/lib/inbox-messages";
+import type { MessageStatus } from "@/lib/types/database";
 import { useReconnect } from "./use-reconnect";
 
 export type ThreadStatus = "loading" | "ready" | "error";
+
+/** Tras enviar, se revisan los ticks cada 20 s durante 3 minutos (por si no llega el aviso en vivo). */
+const TICKS_POLL_MS = 20_000;
+const TICKS_WINDOW_MS = 3 * 60_000;
+
+function awaitingTicks(messages: InboxMessage[], now: number): boolean {
+  return messages.some(
+    (m) =>
+      m.direction === "outbound" &&
+      (m.status === "sent" || m.status === "delivered") &&
+      now - (new Date(m.created_at).getTime() || 0) < TICKS_WINDOW_MS,
+  );
+}
 
 async function fetchPage(conversationId: string, signal: AbortSignal, cursor?: string): Promise<MessagesPage> {
   const qs = new URLSearchParams({ conversationId });
@@ -31,6 +45,10 @@ export function useThreadMessages(conversationId: string | null) {
   // Número del último pedido de la página reciente: una respuesta de un pedido
   // anterior (o de otro chat) se descarta.
   const seq = useRef(0);
+  const latest = useRef<InboxMessage[]>([]);
+  useEffect(() => {
+    latest.current = messages;
+  }, [messages]);
   const controller = useRef<AbortController | null>(null);
   const loaded = useRef(false);
 
@@ -105,6 +123,18 @@ export function useThreadMessages(conversationId: string | null) {
           scheduleRefresh();
         },
       )
+      // Entregado / leído / no entregado en vivo (webhook → messages).
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages", filter: `conversation_id=eq.${conversationId}` },
+        (payload) => {
+          const row = payload.new as { platform_message_id?: string | null; status?: MessageStatus; error_text?: string | null };
+          if (!row.status) return;
+          setMessages((prev) =>
+            applyStatusUpdate(prev, { platform_message_id: row.platform_message_id ?? null, status: row.status!, error_text: row.error_text }),
+          );
+        },
+      )
       .subscribe((state) => {
         if (state !== "SUBSCRIBED") return;
         // Al volver a conectarse pudo perderse un mensaje.
@@ -118,6 +148,19 @@ export function useThreadMessages(conversationId: string | null) {
   }, [conversationId, scheduleRefresh]);
 
   useReconnect(scheduleRefresh);
+
+  // Respaldo de los ticks: justo después de enviar, si el aviso en vivo no
+  // llega, se vuelve a pedir la lista de vez en cuando (solo con la pestaña visible).
+  const waiting = awaitingTicks(messages, Date.now());
+  useEffect(() => {
+    if (!conversationId || !waiting) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (!awaitingTicks(latest.current, Date.now())) return;
+      void refresh();
+    }, TICKS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [conversationId, waiting, refresh]);
 
   return {
     messages,

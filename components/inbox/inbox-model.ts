@@ -330,6 +330,22 @@ export function memberName(members: readonly InboxMember[], userId: string | nul
   return members.find((m) => m.userId === userId)?.name ?? "Otra persona";
 }
 
+/**
+ * Quién envió un mensaje propio: "Tú", el nombre del asesor o "Bot · flujo".
+ * null si no se sabe (por ejemplo, enviado desde otra app).
+ */
+export function messageAuthor(
+  message: { direction: string; sent_by_user_id: string | null; sent_by_flow_id: string | null; flow_name?: string | null },
+  members: readonly InboxMember[],
+  meId: string,
+): string | null {
+  if (message.direction !== "outbound") return null;
+  if (message.sent_by_flow_id) return message.flow_name ? `Bot · ${message.flow_name}` : "Bot";
+  if (!message.sent_by_user_id) return null;
+  if (message.sent_by_user_id === meId) return "Tú";
+  return members.find((m) => m.userId === message.sent_by_user_id)?.name ?? "Otro asesor";
+}
+
 // ── Menciones en notas internas ─────────────────────────────────────────────
 
 /**

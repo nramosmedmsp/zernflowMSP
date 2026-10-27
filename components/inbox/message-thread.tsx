@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { Bot, BotOff, Paperclip, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
+import { Bot, BotOff, Check, CheckCheck, Paperclip, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -18,7 +18,7 @@ import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
 import { SimulateInboundDialog } from "./simulate-inbound-dialog";
 import { PostponeMenu } from "./postpone-menu";
-import { latestIso, memberName, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
+import { latestIso, memberName, messageAuthor, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
 import { useThreadMessages } from "./use-thread-messages";
 import { useNow } from "./use-now";
@@ -57,12 +57,41 @@ function MessageText({ text }: { text: string }) {
   );
 }
 
+/** ✓ enviado, ✓✓ entregado, ✓✓ azul leído. */
+function DeliveryTicks({ status }: { status: InboxMessage["status"] }) {
+  if (status === "read") {
+    return (
+      <span title="Leído" aria-label="Leído" className="inline-flex text-sky-500">
+        <CheckCheck className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  if (status === "delivered") {
+    return (
+      <span title="Entregado" aria-label="Entregado" className="inline-flex">
+        <CheckCheck className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  if (status === "sent") {
+    return (
+      <span title="Enviado" aria-label="Enviado" className="inline-flex">
+        <Check className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return null;
+}
+
 function MessageBubble({
   message,
+  author,
   onRetry,
   onOpenImage,
 }: {
   message: InboxMessage;
+  /** Quién lo envió ("Tú", "Ana", "Bot · Bienvenida"); null si no se sabe. */
+  author: string | null;
   onRetry?: (clientId: string) => void;
   onOpenImage: (image: LightboxImage) => void;
 }) {
@@ -163,9 +192,9 @@ function MessageBubble({
             </span>
           ) : (
             <>
+              {author && <span className="font-medium">{author} ·</span>}
               <span>{formatTime(message.created_at)}</span>
-              {!isInbound && message.status === "delivered" && <span>· Entregado</span>}
-              {!isInbound && message.status === "read" && <span>· Leído</span>}
+              {!isInbound && <DeliveryTicks status={message.status} />}
             </>
           )}
         </div>
@@ -617,7 +646,12 @@ export function MessageThread({
                       </div>
                     )}
                     {item.kind === "message" ? (
-                      <MessageBubble message={item.message} onRetry={onRetry} onOpenImage={setLightbox} />
+                      <MessageBubble
+                        message={item.message}
+                        author={messageAuthor(item.message, members, me.userId)}
+                        onRetry={onRetry}
+                        onOpenImage={setLightbox}
+                      />
                     ) : (
                       <NoteBubble note={item.note} members={members} />
                     )}

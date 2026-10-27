@@ -8,7 +8,7 @@ import { deliveryErrorText, type DeliveryErrorLike } from "@/lib/delivery-errors
 
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 
-export type InboxMessageStatus = MessageStatus | "read";
+export type InboxMessageStatus = MessageStatus;
 
 /** Un archivo del mensaje, listo para mostrar. */
 export interface InboxMedia {
@@ -24,7 +24,10 @@ export interface InboxMedia {
   localUrl?: string | null;
 }
 
-export type InboxMessage = Omit<MessageRow, "status"> & {
+/** Columnas internas de `messages` que la bandeja no usa tal cual. */
+type InternalColumns = "status" | "client_message_id" | "status_at" | "error_code" | "error_text";
+
+export type InboxMessage = Omit<MessageRow, InternalColumns> & {
   status: InboxMessageStatus;
   /** Motivo en español cuando la plataforma no entregó el mensaje. */
   error: string | null;
@@ -32,6 +35,8 @@ export type InboxMessage = Omit<MessageRow, "status"> & {
   story: "reply" | "mention" | null;
   /** Archivos del mensaje (fotos, PDF, audios…), si tiene. */
   media?: InboxMedia[] | null;
+  /** Nombre del flujo que lo envió (mensajes del bot). */
+  flow_name?: string | null;
 };
 
 /** Página de mensajes que devuelve GET /api/v1/messages. */
@@ -106,7 +111,7 @@ export function mapZernioMessage(raw: ZernioListMessage, conversationId: string)
 
 /** Fila local (canales de prueba y envíos del bot) en el formato de la bandeja. */
 export function fromLocalMessage(row: MessageRow): InboxMessage {
-  return { ...row, error: null, story: null };
+  return { ...row, error: row.status === "failed" ? (row.error_text ?? null) : null, story: null };
 }
 
 function byTime(a: InboxMessage, b: InboxMessage): number {
@@ -217,4 +222,72 @@ export function attachMedia(
     }
     return { ...message, media };
   });
+}
+
+// ── Autor y estado registrados en la base ──────────────────────────────────
+
+/** Lo que guarda `messages` de un envío (autor, estado del webhook). */
+export interface LocalMeta {
+  platform_message_id: string | null;
+  sent_by_user_id: string | null;
+  sent_by_flow_id: string | null;
+  status: MessageStatus;
+  error_text: string | null;
+}
+
+const STATUS_RANK: Record<InboxMessageStatus, number> = { pending: 0, sent: 1, delivered: 2, failed: 3, read: 4 };
+
+/**
+ * El estado más avanzado de dos: leído gana a todo, no entregado gana a
+ * enviado y entregado. Así un dato viejo nunca hace retroceder los ticks.
+ */
+export function strongerStatus(a: InboxMessageStatus, b: InboxMessageStatus): InboxMessageStatus {
+  return STATUS_RANK[b] > STATUS_RANK[a] ? b : a;
+}
+
+/**
+ * Une la lista de Zernio con lo registrado en `messages` (por id de
+ * plataforma): quién lo envió (asesor o flujo) y el último estado que avisó el
+ * webhook, si es más avanzado que el de la lista.
+ */
+export function attachLocalMeta(
+  messages: InboxMessage[],
+  rows: LocalMeta[],
+  flowNames: Readonly<Record<string, string>> = {},
+): InboxMessage[] {
+  const byId = new Map<string, LocalMeta>();
+  for (const row of rows) if (row.platform_message_id) byId.set(row.platform_message_id, row);
+  if (byId.size === 0) return messages;
+  return messages.map((m) => {
+    const row = byId.get(m.id);
+    if (!row) return m;
+    const outbound = m.direction === "outbound";
+    const status = outbound ? strongerStatus(m.status, row.status) : m.status;
+    const flowId = m.sent_by_flow_id ?? row.sent_by_flow_id;
+    return {
+      ...m,
+      sent_by_user_id: m.sent_by_user_id ?? row.sent_by_user_id,
+      sent_by_flow_id: flowId,
+      flow_name: flowId ? (flowNames[flowId] ?? m.flow_name ?? null) : (m.flow_name ?? null),
+      status,
+      error: status === "failed" ? (m.error ?? row.error_text ?? null) : null,
+    };
+  });
+}
+
+/** Cambio de estado que llega en vivo (Realtime de `messages`). */
+export function applyStatusUpdate(
+  messages: InboxMessage[],
+  update: { platform_message_id: string | null; status: MessageStatus; error_text?: string | null },
+): InboxMessage[] {
+  if (!update.platform_message_id) return messages;
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.id !== update.platform_message_id || m.direction !== "outbound") return m;
+    const status = strongerStatus(m.status, update.status);
+    if (status === m.status) return m;
+    changed = true;
+    return { ...m, status, error: status === "failed" ? (update.error_text ?? m.error ?? null) : null };
+  });
+  return changed ? next : messages;
 }

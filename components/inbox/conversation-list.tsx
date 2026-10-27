@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -39,6 +39,7 @@ export function ConversationList({
   syncing = false,
   syncError = null,
   failedConversationIds,
+  headerActions,
 }: {
   workspaceId: string;
   conversations: InboxConversation[];
@@ -52,6 +53,8 @@ export function ConversationList({
   syncError?: string | null;
   /** Chats con un envío que no salió (bandeja de salida). */
   failedConversationIds?: ReadonlySet<string>;
+  /** Botones extra en la cabecera (por ejemplo, los avisos). */
+  headerActions?: ReactNode;
 }) {
   const views = availableViews(meta);
   const [view, setView] = useState<InboxViewKey>("mine");
@@ -96,6 +99,7 @@ export function ConversationList({
           <span className="text-xs text-muted-foreground">
             {rows.length} {rows.length === 1 ? "conversación" : "conversaciones"}
           </span>
+          {headerActions}
           {onSync && (
             <button
               onClick={onSync}

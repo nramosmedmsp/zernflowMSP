@@ -8,6 +8,7 @@ import { isDemoChannel } from "@/lib/demo";
 import { storeDemoMessage } from "@/lib/demo-messages";
 import { zernioErrorMessage, zernioFailed } from "../templates/zernio-error";
 import {
+  attachLocalMeta,
   attachMedia,
   fromLocalMessage,
   mapZernioMessage,
@@ -15,6 +16,7 @@ import {
   sortMessages,
   type InboxMedia,
   type InboxMessage,
+  type LocalMeta,
   type MediaRow,
   type MessagesPage,
   type ZernioListMessage,
@@ -22,6 +24,7 @@ import {
 import type { Database } from "@/lib/types/database";
 import { zernioAttachmentType } from "@/lib/chat-media";
 import { prepareOutgoingMedia, type OutgoingMedia } from "@/lib/media-store";
+import { recordOutboundSend } from "@/lib/outbound-log";
 
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 
@@ -75,7 +78,7 @@ export async function GET(request: NextRequest) {
     const page = list.slice(0, limit);
     const local = sortMessages(page.map(fromLocalMessage));
     const result: MessagesPage = {
-      messages: await withMedia(supabase, local, conversationId),
+      messages: await withFlowNames(supabase, await withMedia(supabase, local, conversationId)),
       olderCursor: hasMore ? page[page.length - 1].created_at : null,
       hasMore,
     };
@@ -128,7 +131,7 @@ export async function GET(request: NextRequest) {
     const nextCursor = data?.pagination?.nextCursor ?? null;
     const hasMore = !!data?.pagination?.hasMore && !!nextCursor;
     const page: MessagesPage = {
-      messages: await withMedia(supabase, sortMessages(messages), conversationId),
+      messages: await withLocalMeta(supabase, await withMedia(supabase, sortMessages(messages), conversationId), conversationId),
       olderCursor: hasMore ? nextCursor : null,
       hasMore,
     };
@@ -259,6 +262,17 @@ export async function POST(request: NextRequest) {
 
     // El archivo enviado queda registrado para verlo en el chat (2 meses).
     const mediaView = media && messageId ? await recordOutgoingMedia(conversation, messageId, media, user.id) : null;
+
+    // Quién lo envió y su estado de entrega (lib/outbound-log.ts).
+    await recordOutboundSend(await createServiceClient(), {
+      conversationId,
+      platformMessageId: messageId,
+      text,
+      attachments: media ? [{ type: media.kind }] : null,
+      userId: user.id,
+      clientMessageId: typeof clientMessageId === "string" ? clientMessageId : null,
+      at: new Date().toISOString(),
+    });
 
     // Update conversation's last message info (ZernFlow-specific metadata)
     await supabase
@@ -434,4 +448,49 @@ async function withMedia(
     .in("platform_message_id", ids);
   if (error) console.error("[messages] message_media:", error.message);
   return attachMedia(messages, (data ?? []) as MediaRow[], { conversationId });
+}
+
+/** Nombres de los flujos que enviaron mensajes (para "Bot · Bienvenida"). */
+async function flowNames(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  ids: Array<string | null>,
+): Promise<Record<string, string>> {
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  if (unique.length === 0) return {};
+  const { data } = await supabase.from("flows").select("id, name").in("id", unique);
+  return Object.fromEntries((data ?? []).map((f) => [f.id, f.name]));
+}
+
+async function withFlowNames(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  messages: InboxMessage[],
+): Promise<InboxMessage[]> {
+  const names = await flowNames(supabase, messages.map((m) => m.sent_by_flow_id));
+  if (Object.keys(names).length === 0) return messages;
+  return messages.map((m) => (m.sent_by_flow_id ? { ...m, flow_name: names[m.sent_by_flow_id] ?? null } : m));
+}
+
+/**
+ * Une la lista de Zernio con lo registrado en `messages`: quién envió cada
+ * mensaje (asesor o flujo) y el último estado que avisó el webhook.
+ */
+async function withLocalMeta(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  messages: InboxMessage[],
+  conversationId: string,
+): Promise<InboxMessage[]> {
+  const ids = messages.filter((m) => m.direction === "outbound").map((m) => m.id);
+  if (ids.length === 0) return messages;
+  const { data, error } = await supabase
+    .from("messages")
+    .select("platform_message_id, sent_by_user_id, sent_by_flow_id, status, error_text")
+    .eq("conversation_id", conversationId)
+    .in("platform_message_id", ids);
+  if (error) {
+    console.error("[messages] local meta:", error.message);
+    return messages;
+  }
+  const rows = (data ?? []) as LocalMeta[];
+  const names = await flowNames(supabase, rows.map((r) => r.sent_by_flow_id));
+  return attachLocalMeta(messages, rows, names);
 }

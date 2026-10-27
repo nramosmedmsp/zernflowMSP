@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachMedia, mapZernioMessage, mergeMessages, pageLimit, sortMessages, type InboxMessage } from "./inbox-messages";
+import { applyStatusUpdate, attachLocalMeta, attachMedia, mapZernioMessage, strongerStatus, mergeMessages, pageLimit, sortMessages, type InboxMessage } from "./inbox-messages";
 import { deliveryErrorText } from "./delivery-errors";
 
 describe("mapZernioMessage", () => {
@@ -118,5 +118,53 @@ describe("attachMedia", () => {
       { id: "mm-5", platform_message_id: "wamid.5", attachment_index: 0, kind: "file", file_name: "lista.pdf", mime_type: "application/pdf", size_bytes: 10, status: "stored" },
     ], ctx);
     expect(m.media?.[0]).toMatchObject({ status: "stored", url: "/api/v1/media/mm-5", name: "lista.pdf" });
+  });
+});
+
+describe("autor y estado registrados", () => {
+  const out = (id: string, deliveryStatus: string | null = null) =>
+    mapZernioMessage({ id, direction: "outgoing", message: "Hola", createdAt: "2026-10-27T10:00:00Z", deliveryStatus }, "c") as InboxMessage;
+  const meta = (id: string, extra: Partial<Parameters<typeof attachLocalMeta>[1][number]> = {}) => ({
+    platform_message_id: id,
+    sent_by_user_id: null,
+    sent_by_flow_id: null,
+    status: "sent" as const,
+    error_text: null,
+    ...extra,
+  });
+
+  it("los ticks nunca retroceden y leído gana", () => {
+    expect(strongerStatus("delivered", "sent")).toBe("delivered");
+    expect(strongerStatus("sent", "read")).toBe("read");
+    expect(strongerStatus("delivered", "failed")).toBe("failed");
+    expect(strongerStatus("read", "failed")).toBe("read");
+  });
+
+  it("une el autor y el nombre del flujo por id de plataforma", () => {
+    const [a, b, c] = attachLocalMeta(
+      [out("w1"), out("w2"), out("w3")],
+      [meta("w1", { sent_by_user_id: "u-ana" }), meta("w2", { sent_by_flow_id: "f1" })],
+      { f1: "Bienvenida" },
+    );
+    expect(a.sent_by_user_id).toBe("u-ana");
+    expect(b).toMatchObject({ sent_by_flow_id: "f1", flow_name: "Bienvenida" });
+    expect(c.sent_by_user_id).toBeNull();
+  });
+
+  it("usa el estado del webhook si va más adelante, con su motivo", () => {
+    const [m] = attachLocalMeta([out("w1", "delivered")], [meta("w1", { status: "read" })]);
+    expect(m.status).toBe("read");
+    const [f] = attachLocalMeta([out("w2")], [meta("w2", { status: "failed", error_text: "pasaron más de 24 horas" })]);
+    expect(f).toMatchObject({ status: "failed", error: "pasaron más de 24 horas" });
+    const [kept] = attachLocalMeta([out("w3", "read")], [meta("w3", { status: "delivered" })]);
+    expect(kept.status).toBe("read");
+  });
+
+  it("aplica los cambios en vivo solo a mensajes propios y sin retroceder", () => {
+    const list = [out("w1"), out("w2", "read")];
+    const next = applyStatusUpdate(list, { platform_message_id: "w1", status: "delivered" });
+    expect(next[0].status).toBe("delivered");
+    expect(applyStatusUpdate(next, { platform_message_id: "w2", status: "delivered" })).toBe(next);
+    expect(applyStatusUpdate(list, { platform_message_id: null, status: "read" })).toBe(list);
   });
 });

@@ -10,6 +10,7 @@ import { runInboundPipeline } from "@/lib/inbound-pipeline";
 import { recordInboundConversation } from "@/lib/inbound-conversation";
 import { storeInboundMedia, type InboundAttachmentInput } from "@/lib/media-store";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { applyDeliveryEvent, type DeliveryEvent } from "@/lib/outbound-log";
 
 // Copiar fotos y PDF que llegan puede tardar más que lo normal (hasta 25 MB).
 export const maxDuration = 60;
@@ -83,6 +84,19 @@ interface CommentWebhookPayload {
   timestamp: string;
 }
 
+/** message.delivered / message.read / message.failed (estado de un mensaje propio). */
+interface DeliveryWebhookPayload {
+  id?: string;
+  event: DeliveryEvent;
+  message: { conversationId?: string; platformMessageId?: string };
+  statusAt?: string;
+  error?: { code?: number; title?: string; message?: string; explanation?: string | null } | null;
+  conversation?: { id?: string };
+  account: { id: string };
+}
+
+const DELIVERY_EVENTS = new Set<string>(["message.delivered", "message.read", "message.failed"]);
+
 // ── Webhook handler ─────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -134,6 +148,10 @@ async function handleWebhook(request: NextRequest) {
 
   if (parsed.event === "comment.received") {
     return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature, eventId);
+  }
+
+  if (parsed.event && DELIVERY_EVENTS.has(parsed.event)) {
+    return handleDeliveryWebhook(parsed as DeliveryWebhookPayload, body, signature, eventId);
   }
 
   // Everything else besides message.received is acknowledged and ignored
@@ -309,6 +327,55 @@ async function copyInboundMedia(
     attachments,
     apiKey: await getLateApiKey(workspaceId, supabase),
   });
+}
+
+// ── Delivery status webhook ─────────────────────────────────────────────────
+
+/**
+ * Entregado, leído o no entregado: actualiza el mensaje registrado en
+ * `messages` (lib/outbound-log.ts) y la bandeja lo ve en vivo por Realtime.
+ */
+async function handleDeliveryWebhook(
+  payload: DeliveryWebhookPayload,
+  rawBody: string,
+  signature: string | null,
+  eventId: string | null | undefined,
+) {
+  const supabase = await createServiceClient();
+  const { data: channel } = await supabase
+    .from("channels")
+    .select("*")
+    .eq("late_account_id", payload.account?.id ?? "")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!channel) return NextResponse.json({ ok: true, skipped: true, reason: "channel_not_found" });
+
+  const secret = await resolveWebhookSecret(supabase, channel);
+  if (secret && !verifyWebhookSignature(secret, rawBody, signature)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+  if (!(await claimWebhookEvent(supabase, eventId))) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
+  }
+
+  const lateConversationId = payload.message?.conversationId ?? payload.conversation?.id;
+  const platformMessageId = payload.message?.platformMessageId;
+  if (!lateConversationId || !platformMessageId) return NextResponse.json({ ok: true, skipped: true });
+
+  after(async () => {
+    try {
+      await applyDeliveryEvent(supabase, {
+        lateConversationId,
+        platformMessageId,
+        event: payload.event,
+        statusAt: payload.statusAt ?? null,
+        error: payload.error ?? null,
+      });
+    } catch (err) {
+      console.error("Webhook delivery status error:", err);
+    }
+  });
+  return NextResponse.json({ ok: true, queued: true });
 }
 
 // ── Comment webhook ─────────────────────────────────────────────────────────

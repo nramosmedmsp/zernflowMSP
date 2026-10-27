@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 import { outboxMessages } from "@/lib/inbox-outbox";
 import type { InboxMessage } from "@/lib/inbox-messages";
 import { useOutbox } from "@/components/inbox/use-outbox";
+import { useNewMessageAlerts } from "@/components/inbox/use-new-message-alerts";
+import { AlertSettingsButton } from "@/components/inbox/alert-settings";
 import { useReconnect } from "@/components/inbox/use-reconnect";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,6 +127,27 @@ export function InboxView({
     },
     [syncUrl],
   );
+
+  // Clic en una notificación de Windows: abre ese chat.
+  const openFromAlert = useCallback(
+    (conversationId: string) => {
+      const conversation = conversations.find((c) => c.id === conversationId);
+      if (!conversation) return;
+      setNotice(null);
+      setSelectedId(conversation.id);
+      setActiveCaseId(null);
+      lastParams.current = `${conversation.contact_id}|`;
+      syncUrl(conversation.contact_id, null);
+    },
+    [conversations, syncUrl],
+  );
+  const alerts = useNewMessageAlerts({
+    userId: meta.userId,
+    conversations,
+    casesByContact,
+    selectedId,
+    onOpen: openFromAlert,
+  });
 
   const handleSelectCase = useCallback(
     (caseId: string) => {
@@ -236,6 +259,7 @@ export function InboxView({
           syncing={syncing}
           syncError={conversations.length > 0 ? syncError : null}
           failedConversationIds={outbox.failedIds}
+          headerActions={<AlertSettingsButton settings={alerts.settings} onChange={alerts.update} />}
         />
       </div>
 
