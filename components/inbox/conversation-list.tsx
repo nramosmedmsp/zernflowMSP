@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock } from "lucide-react";
+import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import { formatRelative } from "@/lib/format";
@@ -13,6 +13,7 @@ import {
   activeFilterCount,
   availableViews,
   buildRows,
+  filtersForView,
   memberName,
   waitingText,
   type InboxCase,
@@ -35,6 +36,7 @@ export function ConversationList({
   onSync,
   syncing = false,
   syncError = null,
+  failedConversationIds,
 }: {
   conversations: InboxConversation[];
   casesByContact: ReadonlyMap<string, InboxCase[]>;
@@ -45,6 +47,8 @@ export function ConversationList({
   onSync?: () => void;
   syncing?: boolean;
   syncError?: string | null;
+  /** Chats con un envío que no salió (bandeja de salida). */
+  failedConversationIds?: ReadonlySet<string>;
 }) {
   const views = availableViews(meta);
   const [view, setView] = useState<InboxViewKey>("mine");
@@ -57,7 +61,7 @@ export function ConversationList({
 
   const rowsByView = useMemo(() => {
     const result = new Map<InboxViewKey, InboxRow[]>();
-    for (const v of views) result.set(v, buildRows(conversations, casesByContact, v, filters, meta, nowDate));
+    for (const v of views) result.set(v, buildRows(conversations, casesByContact, v, filtersForView(filters, v), meta, nowDate));
     return result;
     // `views` se deriva de `meta`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,7 +114,10 @@ export function ConversationList({
           return (
             <button
               key={v}
-              onClick={() => setView(v)}
+              onClick={() => {
+                setView(v);
+                setFilters((prev) => filtersForView(prev, v));
+              }}
               className={cn(
                 "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
                 view === v
@@ -355,6 +362,13 @@ export function ConversationList({
                     <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
                       <Clock className="h-3 w-3" />
                       {waitingText(formatRelative(waiting, nowDate))}
+                    </p>
+                  )}
+
+                  {failedConversationIds?.has(conversation.id) && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-destructive">
+                      <AlertCircle className="h-3 w-3" />
+                      No se envió tu último mensaje
                     </p>
                   )}
 

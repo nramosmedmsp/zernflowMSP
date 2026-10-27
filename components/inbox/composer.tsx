@@ -193,6 +193,9 @@ export function Composer({
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter que confirma una tilde o un carácter compuesto (teclados con teclas
+    // muertas o IME): no envía.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (mentionOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();

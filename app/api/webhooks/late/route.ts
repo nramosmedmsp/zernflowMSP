@@ -7,6 +7,7 @@ import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
 import { messagePreview } from "@/lib/message-preview";
 import { runInboundPipeline } from "@/lib/inbound-pipeline";
+import { recordInboundConversation } from "@/lib/inbound-conversation";
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -136,8 +137,9 @@ async function handleWebhook(request: NextRequest) {
 
   const { message: msg, account } = payload;
 
-  // Ignore outbound messages (sent by the bot itself) to prevent loops
-  if (msg.direction === "outbound") {
+  // Ignore outbound messages (sent by the bot itself) to prevent loops.
+  // Zernio documenta "outgoing"; "outbound" se acepta por compatibilidad.
+  if (msg.direction === "outbound" || msg.direction === "outgoing") {
     return NextResponse.json({ ok: true, skipped: true });
   }
 
@@ -230,37 +232,19 @@ async function processMessageEvent(
 
   const preview = messagePreview(msg.text);
 
-  const { data: conversation } = await supabase
-    .from("conversations")
-    .upsert(
-      {
-        workspace_id: channel.workspace_id,
-        channel_id: channel.id,
-        contact_id: contactId,
-        platform: channel.platform,
-        late_conversation_id: conv.id,
-        status: "open",
-        last_message_at: new Date().toISOString(),
-        last_message_preview: preview,
-        unread_count: 1,
-      },
-      { onConflict: "channel_id,contact_id" }
-    )
-    .select("id, is_automation_paused")
-    .single();
+  const conversation = await recordInboundConversation(supabase, {
+    workspaceId: channel.workspace_id,
+    channelId: channel.id,
+    contactId,
+    platform: channel.platform,
+    lateConversationId: conv.id,
+    preview,
+    at: new Date().toISOString(),
+  });
 
   if (!conversation) {
     console.error("Failed to upsert conversation for webhook message");
     return;
-  }
-
-  if (contact.existed) {
-    await supabase
-      .rpc("increment_unread", {
-        conv_id: conversation.id,
-        preview,
-      })
-      .then(() => {});
   }
 
   // Messages are stored by Zernio (source of truth) — no local insert needed.

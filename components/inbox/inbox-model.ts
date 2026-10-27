@@ -78,6 +78,11 @@ export const EMPTY_FILTERS: InboxFilters = {
   search: "",
 };
 
+/** "Sin gestión" solo existe en la vista Todas: en las demás vistas se quita. */
+export function filtersForView(f: InboxFilters, view: InboxViewKey): InboxFilters {
+  return f.status === "none" && view !== "all" ? { ...f, status: "" } : f;
+}
+
 export function activeFilterCount(f: InboxFilters): number {
   return [f.caseTypeId, f.stageId, f.status, f.assigneeId, f.platform].filter(Boolean).length + (f.waitingOnly ? 1 : 0);
 }

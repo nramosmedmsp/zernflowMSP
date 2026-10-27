@@ -7,12 +7,30 @@ import { getLateApiKey } from "@/lib/workspace-secrets";
 import { isDemoChannel } from "@/lib/demo";
 import { storeDemoMessage } from "@/lib/demo-messages";
 import { zernioErrorMessage, zernioFailed } from "../templates/zernio-error";
+import {
+  fromLocalMessage,
+  mapZernioMessage,
+  pageLimit,
+  sortMessages,
+  type InboxMessage,
+  type MessagesPage,
+  type ZernioListMessage,
+} from "@/lib/inbox-messages";
+import type { Database } from "@/lib/types/database";
+
+type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * GET /api/v1/messages?conversationId=...
+ * GET /api/v1/messages?conversationId=...&cursor=...&limit=...
  *
  * Fetches messages from the Zernio API (source of truth) instead of a local mirror.
  * En canales de prueba (lib/demo.ts) devuelve los mensajes de la tabla local.
+ *
+ * Devuelve una página de los mensajes más recientes ({ messages, olderCursor,
+ * hasMore }), ordenada del más antiguo al más nuevo. Con `cursor` (el
+ * olderCursor anterior) devuelve la página previa.
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -21,10 +39,13 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
-  const conversationId = request.nextUrl.searchParams.get("conversationId");
+  const params = request.nextUrl.searchParams;
+  const conversationId = params.get("conversationId");
   if (!conversationId) {
     return NextResponse.json({ error: "Falta el ID de la conversación" }, { status: 400 });
   }
+  const cursor = params.get("cursor") || undefined;
+  const limit = pageLimit(params.get("limit"));
 
   // Look up the Zernio conversation ID. Con el cliente del usuario: RLS
   // (can_see_contact) decide si puede ver esta conversación.
@@ -35,17 +56,24 @@ export async function GET(request: NextRequest) {
     .single();
 
   // Canal de prueba: mensajes locales (RLS por la conversación), sin Zernio ni clave.
+  // El cursor es la fecha del mensaje más antiguo ya cargado.
   if (conversation && isDemoChannel(conversation.channels as { late_account_id: string } | null)) {
-    const { data: rows, error } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true });
+    let query = supabase.from("messages").select("*").eq("conversation_id", conversationId);
+    if (cursor) query = query.lt("created_at", cursor);
+    const { data: rows, error } = await query.order("created_at", { ascending: false }).limit(limit + 1);
     if (error) {
       console.error("Failed to load demo messages:", error);
       return NextResponse.json({ error: "No se pudieron cargar los mensajes" }, { status: 500 });
     }
-    return NextResponse.json(rows ?? []);
+    const list = (rows ?? []) as MessageRow[];
+    const hasMore = list.length > limit;
+    const page = list.slice(0, limit);
+    const result: MessagesPage = {
+      messages: sortMessages(page.map(fromLocalMessage)),
+      olderCursor: hasMore ? page[page.length - 1].created_at : null,
+      hasMore,
+    };
+    return NextResponse.json(result);
   }
 
   if (!conversation?.late_conversation_id) {
@@ -64,39 +92,37 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "No se encontró el canal" }, { status: 404 });
   }
 
-  // Fetch messages from Zernio API
+  // Fetch messages from Zernio API: la página más reciente primero (sortOrder
+  // desc), para que los chats largos abran con los últimos mensajes.
   try {
     const zernio = createZernioClient(lateApiKey);
     const res = await zernio.messages.getInboxConversationMessages({
       path: { conversationId: conversation.late_conversation_id },
-      query: { accountId: channel.late_account_id },
+      query: { accountId: channel.late_account_id, limit, sortOrder: "desc", cursor },
     });
 
+    // El SDK no lanza excepciones: un error llega en res.error.
+    if (zernioFailed(res)) {
+      console.error("[messages] Zernio no devolvió los mensajes:", res.error);
+      return NextResponse.json(
+        { error: zernioErrorMessage(res, "No se pudieron cargar los mensajes de Zernio") },
+        { status: 502 },
+      );
+    }
+
     // The Zernio endpoint returns { success, messages: [...] } — NOT { data }.
-    const zernioMessages =
-      (res.data as { messages?: unknown[] })?.messages ??
-      (res.data as { data?: unknown[] })?.data ??
-      [];
+    const data = res.data as
+      | { messages?: ZernioListMessage[]; data?: ZernioListMessage[]; pagination?: { hasMore?: boolean; nextCursor?: string | null } }
+      | undefined;
+    const zernioMessages = data?.messages ?? data?.data ?? [];
+    const messages = zernioMessages
+      .map((m) => mapZernioMessage(m, conversationId))
+      .filter((m): m is InboxMessage => m !== null);
 
-    // Map Zernio messages to the shape the inbox UI expects
-    const messages = zernioMessages.map((m: any) => ({
-      id: m.id,
-      conversation_id: conversationId,
-      direction: m.direction === "outbound" ? "outbound" : "inbound",
-      text: m.text ?? m.message ?? null,
-      attachments: m.attachments?.length ? m.attachments : null,
-      quick_reply_payload: null,
-      postback_payload: null,
-      callback_data: null,
-      platform_message_id: m.platformMessageId ?? null,
-      sent_by_flow_id: null,
-      sent_by_node_id: null,
-      sent_by_user_id: null,
-      status: "sent",
-      created_at: m.sentAt ?? m.createdAt ?? new Date().toISOString(),
-    }));
-
-    return NextResponse.json(messages);
+    const nextCursor = data?.pagination?.nextCursor ?? null;
+    const hasMore = !!data?.pagination?.hasMore && !!nextCursor;
+    const page: MessagesPage = { messages: sortMessages(messages), olderCursor: hasMore ? nextCursor : null, hasMore };
+    return NextResponse.json(page);
   } catch (error) {
     console.error("Failed to fetch messages from Zernio API:", error);
     return NextResponse.json(
@@ -120,13 +146,18 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const body = await request.json();
-  const { conversationId, text } = body;
+  const { conversationId, text, clientMessageId } = body;
 
   if (!conversationId || !text) {
     return NextResponse.json(
       { error: "Faltan el ID de la conversación y el texto" },
       { status: 400 }
     );
+  }
+  // Id del mensaje en el navegador: se manda a Zernio como Idempotency-Key, así
+  // un reintento del mismo mensaje no sale dos veces.
+  if (clientMessageId !== undefined && (typeof clientMessageId !== "string" || !UUID_RE.test(clientMessageId))) {
+    return NextResponse.json({ error: "El identificador del mensaje no es válido" }, { status: 400 });
   }
 
   // Get conversation with channel info
@@ -169,7 +200,17 @@ export async function POST(request: NextRequest) {
     const res = await zernio.messages.sendInboxMessage({
       path: { conversationId: conversation.late_conversation_id },
       body: { accountId: channel.late_account_id, message: text },
+      ...(clientMessageId ? { headers: { "Idempotency-Key": clientMessageId } } : {}),
     });
+
+    // 409: Zernio todavía procesa un envío con la misma clave (doble clic o
+    // reintento muy rápido). No es un rechazo: el mensaje puede estar saliendo.
+    if (res.response?.status === 409) {
+      return NextResponse.json(
+        { error: "Este mensaje ya se está enviando.", code: "in_progress" },
+        { status: 409 }
+      );
+    }
 
     // El SDK no lanza excepciones: un envío rechazado llega en res.error.
     if (zernioFailed(res) || !res.data) {
@@ -220,14 +261,16 @@ export async function POST(request: NextRequest) {
         sent_by_node_id: null,
         sent_by_user_id: user.id,
         status: "sent",
+        error: null,
+        story: null,
         created_at: new Date().toISOString(),
-      },
+      } satisfies InboxMessage,
       { status: 201 }
     );
   } catch (error) {
     console.error("Failed to send message via Zernio API:", error);
     return NextResponse.json(
-      { error: `No se pudo enviar el mensaje: ${error}` },
+      { error: "No se pudo enviar el mensaje. Revisa tu conexión e inténtalo de nuevo." },
       { status: 500 }
     );
   }
@@ -275,8 +318,10 @@ async function sendDemoMessage(params: { conversationId: string; text: string; u
       sent_by_node_id: null,
       sent_by_user_id: params.userId,
       status: "sent",
+      error: null,
+      story: null,
       created_at: at,
-    },
+    } satisfies InboxMessage,
     { status: 201 }
   );
 }

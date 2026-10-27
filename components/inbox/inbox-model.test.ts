@@ -4,6 +4,7 @@ import {
   availableViews,
   buildRows,
   caseMatchesView,
+  filtersForView,
   groupCasesByContact,
   mentionQueryAt,
   mentionedIds,
@@ -213,5 +214,15 @@ describe("menciones", () => {
       [OTHER, "Luis"],
     ]);
     expect(mentionedIds("Revisa esto @Ana Pérez", picked)).toEqual([ME]);
+  });
+});
+
+describe("filtersForView", () => {
+  it("quita el filtro oculto «Sin gestión» fuera de la vista Todas", () => {
+    const none = { ...EMPTY_FILTERS, status: "none" as const };
+    expect(filtersForView(none, "mine").status).toBe("");
+    expect(filtersForView(none, "team").status).toBe("");
+    expect(filtersForView(none, "all").status).toBe("none");
+    expect(filtersForView({ ...EMPTY_FILTERS, status: "open" }, "mine").status).toBe("open");
   });
 });
