@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileText, Image as ImageIcon, Loader2, MessageSquareText, Settings2 } from "lucide-react";
+import { FileText, Image as ImageIcon, Loader2, MessageSquareText, Search, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { listSavedReplies, type SavedReplyView } from "@/lib/actions/saved-replies";
 import { applyReplyVariables, applyReplyVariablesDetailed, searchSavedReplies } from "@/lib/saved-replies";
@@ -34,6 +34,11 @@ export interface SavedReplyPickerProps {
    */
   onSelect: (result: PickedReply) => void;
   onClose: () => void;
+  /**
+   * Con buscador propio (botón Respuestas): muestra todas las respuestas para
+   * verlas y elegir sin escribir "/". Se cierra al hacer clic fuera.
+   */
+  searchable?: boolean;
   context: {
     contactName?: string;
     agentName?: string;
@@ -67,7 +72,10 @@ export function invalidateSavedRepliesCache() {
  * Tab y Escape, así que la caja de texto puede seguir con el foco. No envía
  * nada: `onSelect` entrega el texto para que la persona lo revise.
  */
-export function SavedReplyPicker({ open, query, onSelect, onClose, context }: SavedReplyPickerProps) {
+export function SavedReplyPicker({ open, query: slashQuery, onSelect, onClose, searchable = false, context }: SavedReplyPickerProps) {
+  const [search, setSearch] = useState("");
+  const query = searchable ? search : slashQuery;
+  const rootRef = useRef<HTMLDivElement>(null);
   // null = todavía no se cargaron.
   const [loaded, setLoaded] = useState<SavedReplyView[] | null>(() => cache?.replies ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -166,10 +174,23 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
     listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  // Con buscador propio se cierra al hacer clic fuera (salvo en el botón que lo abre).
+  useEffect(() => {
+    if (!open || !searchable) return;
+    function onDown(e: MouseEvent) {
+      const target = e.target as Element | null;
+      if (rootRef.current?.contains(target) || target?.closest("[data-replies-toggle]")) return;
+      onClose();
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open, searchable, onClose]);
+
   if (!open) return null;
 
   return (
     <div
+      ref={rootRef}
       role="dialog"
       aria-label="Respuestas guardadas"
       className="animate-pop-in absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-border bg-card shadow-lg"
@@ -179,8 +200,24 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
           <MessageSquareText className="h-3.5 w-3.5" />
           Respuestas guardadas
         </span>
-        <span className="text-[11px] text-muted-foreground">↑ ↓ para moverte · Enter para usar · Esc para cerrar</span>
+        <span className="text-[11px] text-muted-foreground">
+          {searchable && replies.length > 0 ? `${replies.length} ${replies.length === 1 ? "respuesta" : "respuestas"} · ` : ""}
+          ↑ ↓ para moverte · Enter para usar · Esc para cerrar
+        </span>
       </div>
+      {searchable && (
+        <div className="relative border-b border-border px-3 py-2">
+          <Search className="pointer-events-none absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por título, atajo o texto..."
+            aria-label="Buscar respuestas guardadas"
+            className="w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-muted-foreground">
@@ -196,7 +233,7 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
             : "Ninguna respuesta coincide con lo que escribiste."}
         </p>
       ) : (
-        <ul ref={listRef} role="listbox" className="max-h-64 overflow-y-auto py-1">
+        <ul ref={listRef} role="listbox" className={cn("overflow-y-auto py-1", searchable ? "max-h-80" : "max-h-64")}>
           {results.map((reply, index) => {
             const suggested = !!caseTypeId && reply.caseTypeId === caseTypeId;
             return (
@@ -229,7 +266,7 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
                   </span>
                 </div>
                 {reply.body && (
-                  <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">
+                  <p className={cn("mt-0.5 whitespace-pre-line text-xs text-muted-foreground", searchable ? "line-clamp-3" : "line-clamp-2")}>
                     {applyReplyVariables(reply.body, { contactName, agentName, teamName, workspaceName, customFields })}
                   </p>
                 )}

@@ -98,6 +98,8 @@ export function Composer({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [slash, setSlash] = useState<{ start: number; query: string } | null>(null);
   const [replyDismissed, setReplyDismissed] = useState(false);
+  /** Respuestas abiertas con el botón (con buscador propio, sin escribir "/"). */
+  const [browsing, setBrowsing] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [customFields, setCustomFields] = useState<Record<string, string>>({});
   const [review, setReview] = useState<Review | null>(null);
@@ -181,7 +183,7 @@ export function Composer({
 
   const blocked = !noteMode && now !== null && outsideWhatsAppWindow(conversation.platform, lastInboundAt, now);
   const windowChip = !noteMode && now !== null ? whatsAppWindowChip(conversation.platform, lastInboundAt, now) : null;
-  const replyOpen = !!slash && !replyDismissed && !review && (noteMode || !blocked);
+  const replyOpen = (browsing || (!!slash && !replyDismissed)) && !review && (noteMode || !blocked);
   const mentionOptions = noteMode && mention ? filterMembers(members, mention.query) : [];
   const mentionOpen = mentionOptions.length > 0;
 
@@ -224,10 +226,12 @@ export function Composer({
     // El archivo de la respuesta queda listo para salir (solo en mensajes).
     if (attachment && !noteMode) attachments.addReplyFile(attachment);
     const caret = textareaRef.current?.selectionStart ?? input.length;
-    const start = slash?.start ?? caret;
+    // Con el botón se pega donde estaba el cursor; con "/" reemplaza "/búsqueda".
+    const start = browsing ? caret : (slash?.start ?? caret);
     const { value, caret: pos } = replaceRange(input, start, Math.max(start, caret), text);
     setInput(value);
     setSlash(null);
+    setBrowsing(false);
     setReplyDismissed(false);
     setWarning(
       empty.length > 0
@@ -237,17 +241,20 @@ export function Composer({
     placeCaret(pos);
   }
 
-  /** Botón Respuestas: escribe "/" donde está el cursor para abrir el buscador. */
-  function openReplies() {
-    const el = textareaRef.current;
-    const caret = el?.selectionStart ?? input.length;
-    const needsSpace = caret > 0 && !/\s/.test(input[caret - 1]);
-    const { value, caret: pos } = replaceRange(input, caret, caret, needsSpace ? " /" : "/");
-    setInput(value);
-    setReplyDismissed(false);
-    setSlash(slashQueryAt(value, pos));
-    placeCaret(pos);
+  /** Botón Respuestas: abre (o cierra) la lista completa con su buscador. */
+  function toggleReplies() {
+    setSlash(null);
+    setBrowsing((v) => !v);
   }
+
+  const closeReplies = useCallback(() => {
+    if (browsing) {
+      setBrowsing(false);
+      textareaRef.current?.focus();
+    } else {
+      setReplyDismissed(true);
+    }
+  }, [browsing]);
 
   function sendMessage(text: string) {
     setTexts((prev) => ({ ...prev, message: "" }));
@@ -475,6 +482,7 @@ export function Composer({
                 setNoteMode((v) => !v);
                 setMention(null);
                 setSlash(null);
+                setBrowsing(false);
                 setReview(null);
                 setError(null);
                 setWarning(null);
@@ -558,7 +566,8 @@ export function Composer({
                 open={replyOpen}
                 query={slash?.query ?? ""}
                 onSelect={pickReply}
-                onClose={() => setReplyDismissed(true)}
+                onClose={closeReplies}
+                searchable={browsing}
                 context={{
                   contactName,
                   agentName: me.name,
@@ -649,9 +658,14 @@ export function Composer({
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={openReplies}
-              title="Respuestas guardadas (también escribiendo /)"
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={toggleReplies}
+              data-replies-toggle
+              aria-expanded={browsing}
+              title="Ver y elegir respuestas guardadas (también escribiendo /)"
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
+                browsing && "bg-accent text-foreground",
+              )}
             >
               <Zap className="h-3.5 w-3.5" />
               Respuestas
