@@ -5,14 +5,17 @@ import Link from "next/link";
 import { Loader2, MessageSquareText, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { listSavedReplies, type SavedReplyView } from "@/lib/actions/saved-replies";
-import { applyReplyVariables, searchSavedReplies } from "@/lib/saved-replies";
+import { applyReplyVariables, applyReplyVariablesDetailed, searchSavedReplies } from "@/lib/saved-replies";
 
 export interface SavedReplyPickerProps {
   open: boolean;
   /** Lo que se escribió después de `/` (con o sin la barra). */
   query: string;
-  /** Recibe el texto con las variables ya reemplazadas, para pegarlo en la caja. */
-  onSelect: (text: string) => void;
+  /**
+   * Recibe el texto con las variables ya reemplazadas, para pegarlo en la caja,
+   * y las variables que quedaron sin dato (para avisar).
+   */
+  onSelect: (result: { text: string; empty: string[] }) => void;
   onClose: () => void;
   context: {
     contactName?: string;
@@ -105,7 +108,7 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
   const choose = useCallback(
     (reply: SavedReplyView) => {
       onSelect(
-        applyReplyVariables(reply.body, { contactName, agentName, teamName, workspaceName, customFields }),
+        applyReplyVariablesDetailed(reply.body, { contactName, agentName, teamName, workspaceName, customFields, now: new Date() }),
       );
     },
     [onSelect, contactName, agentName, teamName, workspaceName, customFields],

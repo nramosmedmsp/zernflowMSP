@@ -2,6 +2,9 @@
 // de servidor, para probarlas con vitest y usarlas en la bandeja, el
 // selector y las acciones del servidor.
 
+import { APP_LOCALE, APP_TIME_ZONE } from "@/lib/format";
+import { firstName } from "@/lib/names";
+
 export type SavedReplyScopeKey = "workspace" | "team" | "personal";
 
 /** Datos para reemplazar las variables de una respuesta. */
@@ -13,6 +16,8 @@ export interface ReplyContext {
   workspaceName?: string;
   /** Campos personalizados del contacto, por slug (`{campo:slug}`). */
   customFields?: Record<string, string>;
+  /** Momento de pegar la respuesta (`{saludo}` y `{hoy}`, en hora de Lima). */
+  now?: Date;
 }
 
 export interface ReplyVariable {
@@ -22,10 +27,13 @@ export interface ReplyVariable {
 
 /** Variables que se pueden insertar desde el formulario. */
 export const REPLY_VARIABLES: readonly ReplyVariable[] = [
-  { token: "{nombre}", label: "Nombre del contacto" },
+  { token: "{primer_nombre}", label: "Primer nombre del contacto" },
+  { token: "{saludo}", label: "Buenos días, Buenas tardes o Buenas noches según la hora de Lima" },
+  { token: "{nombre}", label: "Nombre completo del contacto" },
   { token: "{asesor}", label: "Tu nombre" },
   { token: "{sede}", label: "Sede o equipo" },
   { token: "{empresa}", label: "Empresa" },
+  { token: "{hoy}", label: "Fecha de hoy, por ejemplo «lunes 27 de octubre»" },
 ];
 
 export const SAVED_REPLY_TITLE_MAX = 200;
@@ -33,7 +41,29 @@ export const SAVED_REPLY_BODY_MAX = 4000;
 export const SHORTCUT_MAX = 30;
 
 const EMPTY = "\u0000";
-const VARIABLE_RE = /\{(nombre|asesor|sede|empresa|campo:([a-z0-9_-]+))\}/gi;
+const VARIABLE_RE = /\{(nombre|primer_nombre|asesor|sede|empresa|saludo|hoy|campo:([a-z0-9_-]+))\}/gi;
+
+const hourFormat = new Intl.DateTimeFormat(APP_LOCALE, { timeZone: APP_TIME_ZONE, hour: "numeric", hourCycle: "h23" });
+const longDayFormat = new Intl.DateTimeFormat(APP_LOCALE, {
+  timeZone: APP_TIME_ZONE,
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+});
+
+/** "Buenos días" (5:00 a 11:59), "Buenas tardes" (12:00 a 18:59) o "Buenas noches", en hora de Lima. */
+export function greetingFor(now: Date): string {
+  const hour = Number(hourFormat.format(now));
+  if (hour >= 5 && hour < 12) return "Buenos días";
+  if (hour >= 12 && hour < 19) return "Buenas tardes";
+  return "Buenas noches";
+}
+
+/** "lunes 27 de octubre", en hora de Lima. */
+export function longDayFor(now: Date): string {
+  const parts = Object.fromEntries(longDayFormat.formatToParts(now).map((p) => [p.type, p.value]));
+  return `${parts.weekday} ${parts.day} de ${parts.month}`;
+}
 
 function clean(value: string | undefined | null): string {
   return typeof value === "string" ? value.trim() : "";
@@ -50,20 +80,27 @@ function customFieldValue(fields: Record<string, string> | undefined, slug: stri
 }
 
 /**
- * Reemplaza `{nombre}`, `{asesor}`, `{sede}`, `{empresa}` y `{campo:slug}`.
- * Las variables sin valor quedan vacías, sin llaves y sin dejar espacios
- * dobles ni espacios antes de la puntuación ("Hola {nombre}, ..." con el
- * nombre vacío queda "Hola, ..."). Lo que no es una variable conocida no se
- * toca.
+ * Reemplaza las variables de REPLY_VARIABLES y `{campo:slug}`. Las variables
+ * sin valor quedan vacías, sin llaves y sin dejar espacios dobles ni espacios
+ * antes de la puntuación ("Hola {nombre}, ..." con el nombre vacío queda
+ * "Hola, ..."); `empty` dice cuáles fueron, para avisar al asesor. Lo que no
+ * es una variable conocida no se toca.
  */
-export function applyReplyVariables(text: string, context: ReplyContext = {}): string {
-  let result = text.replace(VARIABLE_RE, (_match, name: string, slug?: string) => {
+export function applyReplyVariablesDetailed(
+  text: string,
+  context: ReplyContext = {},
+): { text: string; empty: string[] } {
+  const empty: string[] = [];
+  let result = text.replace(VARIABLE_RE, (match: string, name: string, slug?: string) => {
     let value = "";
     if (slug) value = customFieldValue(context.customFields, slug);
     else {
       switch (name.toLowerCase()) {
         case "nombre":
           value = clean(context.contactName);
+          break;
+        case "primer_nombre":
+          value = firstName(context.contactName);
           break;
         case "asesor":
           value = clean(context.agentName);
@@ -74,12 +111,19 @@ export function applyReplyVariables(text: string, context: ReplyContext = {}): s
         case "empresa":
           value = clean(context.workspaceName);
           break;
+        case "saludo":
+          value = greetingFor(context.now ?? new Date());
+          break;
+        case "hoy":
+          value = longDayFor(context.now ?? new Date());
+          break;
       }
     }
+    if (!value && !empty.includes(match.toLowerCase())) empty.push(match.toLowerCase());
     return value || EMPTY;
   });
 
-  if (!result.includes(EMPTY)) return result;
+  if (!result.includes(EMPTY)) return { text: result, empty };
 
   // Al inicio de una línea: "{nombre}, hola" -> "hola".
   result = result.replace(/^[ \t]*\u0000[ \t]*[,;:]?[ \t]*/gm, "");
@@ -89,7 +133,40 @@ export function applyReplyVariables(text: string, context: ReplyContext = {}): s
   result = result.replace(/([ \t])\u0000[ \t]+/g, "$1");
   // Al final de una línea: "Hola {nombre}" -> "Hola".
   result = result.replace(/[ \t]*\u0000[ \t]*$/gm, "");
-  return result.replace(/\u0000/g, "");
+  return { text: result.replace(/\u0000/g, ""), empty };
+}
+
+/** Igual que applyReplyVariablesDetailed, solo el texto. */
+export function applyReplyVariables(text: string, context: ReplyContext = {}): string {
+  return applyReplyVariablesDetailed(text, context).text;
+}
+
+/**
+ * Llaves que quedaron en un mensaje ("{nombre}", "{precio}"): el cliente las
+ * vería tal cual. Para avisar antes de enviar.
+ */
+export function findUnresolvedPlaceholders(text: string): string[] {
+  const found = text.match(/\{[a-z_][a-z0-9_:-]*\}/gi) ?? [];
+  return [...new Set(found)];
+}
+
+/**
+ * Búsqueda de respuesta en curso: el texto entre una "/" (al inicio o tras un
+ * espacio) y el cursor, sin saltos de línea. null si no hay.
+ */
+export function slashQueryAt(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const slash = before.lastIndexOf("/");
+  if (slash < 0) return null;
+  if (slash > 0 && !/\s/.test(before[slash - 1])) return null;
+  const query = before.slice(slash + 1);
+  if (/^\s/.test(query) || query.includes("\n") || query.length > 40 || /\s{2}/.test(query)) return null;
+  return { start: slash, query };
+}
+
+/** Reemplaza [start, end) por `insert` y devuelve el texto y la nueva posición del cursor. */
+export function replaceRange(text: string, start: number, end: number, insert: string): { value: string; caret: number } {
+  return { value: text.slice(0, start) + insert + text.slice(end), caret: start + insert.length };
 }
 
 /** Minúsculas y sin tildes, para buscar sin distinguirlas. */
@@ -106,6 +183,8 @@ export interface SearchableReply {
   title: string;
   shortcut: string | null;
   caseTypeId: string | null;
+  /** Texto de la respuesta: también se busca en él, con menor prioridad. */
+  body?: string;
 }
 
 function shortcutKey(shortcut: string | null | undefined): string {
@@ -117,6 +196,7 @@ function matchRank(reply: SearchableReply, tokens: string[]): number | null {
   const title = normalizeSearch(reply.title);
   const shortcut = shortcutKey(reply.shortcut);
   const titleWords = title.split(/\s+/);
+  let body: string | null = null;
   let worst = 0;
 
   for (const token of tokens) {
@@ -126,6 +206,7 @@ function matchRank(reply: SearchableReply, tokens: string[]): number | null {
     else if (title.startsWith(token)) rank = 2;
     else if (titleWords.some((w) => w.startsWith(token))) rank = 3;
     else if (shortcut.includes(token) || title.includes(token)) rank = 4;
+    else if (reply.body && (body ??= normalizeSearch(reply.body)).includes(token)) rank = 5;
     if (rank === null) return null;
     worst = Math.max(worst, rank);
   }
@@ -133,8 +214,8 @@ function matchRank(reply: SearchableReply, tokens: string[]): number | null {
 }
 
 /**
- * Filtra por título y atajo (sin tildes ni mayúsculas; la barra inicial del
- * atajo es opcional). Con `caseTypeId`, las respuestas ligadas a ese tipo de
+ * Filtra por título, atajo y texto (sin tildes ni mayúsculas; la barra inicial
+ * del atajo es opcional; el texto pesa menos). Con `caseTypeId`, las respuestas ligadas a ese tipo de
  * gestión salen primero. Sin búsqueda devuelve todas, en el mismo orden.
  */
 export function searchSavedReplies<T extends SearchableReply>(

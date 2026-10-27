@@ -1,14 +1,21 @@
 "use client";
 
 // Caja de texto del chat: mensajes al cliente o notas internas (interruptor
-// "Nota interna"), menciones con @, respuestas guardadas con / y bloqueo de
-// WhatsApp fuera de la ventana de 24 horas con "Usar plantilla".
+// "Nota interna"), menciones con @, respuestas guardadas con / (en cualquier
+// parte del texto o con el botón Respuestas), borradores por chat, corrector
+// del navegador y revisión al enviar, cuenta regresiva de la ventana de 24 horas
+// de WhatsApp y bloqueo fuera de ella con "Usar plantilla".
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { FileText, Loader2, Lock, Send, StickyNote } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Check, FileText, Loader2, Lock, Send, StickyNote, Timer, Zap } from "lucide-react";
 import { addCaseNote, type CaseView } from "@/lib/actions/cases";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { formatDate, formatTime } from "@/lib/format";
+import { firstName } from "@/lib/names";
+import { readDraft, writeDraft, type DraftMode } from "@/lib/drafts";
+import { replaceRange, slashQueryAt } from "@/lib/saved-replies";
+import { applySuggestions, reviewOutgoing, type Suggestion } from "@/lib/send-review";
 import { useToast } from "@/components/ui/toast";
 import { SavedReplyPicker } from "@/components/composer/saved-reply-picker";
 import { TemplatePicker } from "@/components/composer/template-picker";
@@ -17,12 +24,36 @@ import {
   mentionQueryAt,
   mentionedIds,
   outsideWhatsAppWindow,
+  whatsAppWindowChip,
   type InboxConversation,
   type InboxMember,
 } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
+import { draftStorage, notifyDraftsChanged } from "./use-drafts";
 import { useNow } from "./use-now";
+import { SendReviewPopover } from "./send-review-popover";
 
+const REVIEW_OFF_KEY = "zf:send-review:off:";
+
+function reviewDisabled(userId: string): boolean {
+  try {
+    return window.localStorage.getItem(REVIEW_OFF_KEY + userId) === "1";
+  } catch {
+    return false;
+  }
+}
+
+interface Review {
+  text: string;
+  suggestions: Suggestion[];
+  unresolved: string[];
+  chosen: Set<string>;
+}
+
+/**
+ * Se monta una vez por chat (la vista usa key por conversación): el texto
+ * arranca con el borrador guardado de ese chat.
+ */
 export function Composer({
   conversation,
   noteCase,
@@ -48,7 +79,11 @@ export function Composer({
   onNoteAdded: (note: CaseNote) => void;
   onTemplateSent: () => void;
 }) {
-  const [input, setInput] = useState("");
+  const scope = { userId: me.userId, workspaceId: conversation.workspace_id };
+  const [texts, setTexts] = useState<Record<DraftMode, string>>(() => ({
+    message: readDraft(draftStorage(), scope, conversation.id, "message"),
+    note: readDraft(draftStorage(), scope, conversation.id, "note"),
+  }));
   const [noteMode, setNoteMode] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,27 +91,21 @@ export function Composer({
   const [picked, setPicked] = useState<Map<string, string>>(new Map());
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const [slash, setSlash] = useState<{ start: number; query: string } | null>(null);
   const [replyDismissed, setReplyDismissed] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [customFields, setCustomFields] = useState<Record<string, string>>({});
+  const [review, setReview] = useState<Review | null>(null);
+  const [draftSaved, setDraftSaved] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const now = useNow();
   const toast = useToast();
 
+  const mode: DraftMode = noteMode ? "note" : "message";
+  const input = texts[mode];
   const contactId = conversation.contact_id;
   const contactName = conversation.contacts?.display_name ?? undefined;
   const canNote = !!noteCase && noteCase.permissions.canNote;
-
-  // Al cambiar de chat se limpia la caja.
-  useEffect(() => {
-    setInput("");
-    setNoteMode(false);
-    setError(null);
-    setWarning(null);
-    setPicked(new Map());
-    setMention(null);
-    setTemplateOpen(false);
-  }, [conversation.id]);
 
   // Campos personalizados del contacto para las variables de las respuestas guardadas.
   useEffect(() => {
@@ -99,44 +128,123 @@ export function Composer({
     };
   }, [contactId]);
 
-  const blocked = !noteMode && now !== null && outsideWhatsAppWindow(conversation.platform, lastInboundAt, now);
-  const replyOpen = !noteMode && !blocked && input.startsWith("/") && !input.includes("\n") && !replyDismissed;
-  const mentionOptions = noteMode && mention ? filterMembers(members, mention.query) : [];
-  const mentionOpen = mentionOptions.length > 0;
+  // Guarda el borrador un momento después de dejar de escribir, y al salir del
+  // chat (el guardado pendiente no se pierde al cambiar de conversación).
+  const { userId, workspaceId } = scope;
+  const conversationId = conversation.id;
+  const saveDraft = useCallback(
+    (draftMode: DraftMode, text: string) => {
+      writeDraft(draftStorage(), { userId, workspaceId }, conversationId, draftMode, text);
+      notifyDraftsChanged();
+    },
+    [userId, workspaceId, conversationId],
+  );
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveDraft(mode, input);
+      setDraftSaved(!!input.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [input, mode, saveDraft]);
+  const latestTexts = useRef(texts);
+  useEffect(() => {
+    latestTexts.current = texts;
+  }, [texts]);
+  useEffect(
+    () => () => {
+      saveDraft("message", latestTexts.current.message);
+      saveDraft("note", latestTexts.current.note);
+    },
+    [saveDraft],
+  );
 
-  function autoResize() {
+  // El tamaño de la caja sigue al texto (también con el borrador inicial).
+  const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+  }, []);
+  useEffect(() => {
+    autoResize();
+  }, [input, autoResize]);
+
+  const blocked = !noteMode && now !== null && outsideWhatsAppWindow(conversation.platform, lastInboundAt, now);
+  const windowChip = !noteMode && now !== null ? whatsAppWindowChip(conversation.platform, lastInboundAt, now) : null;
+  const replyOpen = !!slash && !replyDismissed && !review && (noteMode || !blocked);
+  const mentionOptions = noteMode && mention ? filterMembers(members, mention.query) : [];
+  const mentionOpen = mentionOptions.length > 0;
+
+  function setInput(value: string) {
+    setTexts((prev) => ({ ...prev, [mode]: value }));
+    setDraftSaved(false);
   }
 
   function updateInput(value: string, caret: number) {
     setInput(value);
-    if (!value.startsWith("/")) setReplyDismissed(false);
+    const nextSlash = slashQueryAt(value, caret);
+    if (!nextSlash) setReplyDismissed(false);
+    setSlash(nextSlash);
     setMention(noteMode ? mentionQueryAt(value, caret) : null);
     setMentionIndex(0);
-    requestAnimationFrame(autoResize);
+  }
+
+  function placeCaret(pos: number) {
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
   }
 
   function pickMention(member: InboxMember) {
     if (!mention) return;
     const el = textareaRef.current;
     const caret = el?.selectionStart ?? input.length;
-    const before = input.slice(0, mention.start);
-    const after = input.slice(caret);
-    const inserted = `@${member.name} `;
-    const value = before + inserted + after;
+    const { value, caret: pos } = replaceRange(input, mention.start, caret, `@${member.name} `);
     setInput(value);
     setPicked((prev) => new Map(prev).set(member.userId, member.name));
     setMention(null);
-    requestAnimationFrame(() => {
-      if (!el) return;
-      el.focus();
-      const pos = before.length + inserted.length;
-      el.setSelectionRange(pos, pos);
-      autoResize();
-    });
+    placeCaret(pos);
+  }
+
+  /** Pega la respuesta en lugar de "/búsqueda", sin borrar el resto del texto. */
+  function pickReply({ text, empty }: { text: string; empty: string[] }) {
+    const caret = textareaRef.current?.selectionStart ?? input.length;
+    const start = slash?.start ?? caret;
+    const { value, caret: pos } = replaceRange(input, start, Math.max(start, caret), text);
+    setInput(value);
+    setSlash(null);
+    setReplyDismissed(false);
+    setWarning(
+      empty.length > 0
+        ? `${empty.length === 1 ? "La variable" : "Las variables"} ${empty.join(", ")} no ${empty.length === 1 ? "tiene" : "tienen"} dato y se ${empty.length === 1 ? "quitó" : "quitaron"}. Revisa el texto antes de enviar.`
+        : null,
+    );
+    placeCaret(pos);
+  }
+
+  /** Botón Respuestas: escribe "/" donde está el cursor para abrir el buscador. */
+  function openReplies() {
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? input.length;
+    const needsSpace = caret > 0 && !/\s/.test(input[caret - 1]);
+    const { value, caret: pos } = replaceRange(input, caret, caret, needsSpace ? " /" : "/");
+    setInput(value);
+    setReplyDismissed(false);
+    setSlash(slashQueryAt(value, pos));
+    placeCaret(pos);
+  }
+
+  function sendMessage(text: string) {
+    setTexts((prev) => ({ ...prev, message: "" }));
+    saveDraft("message", "");
+    setReview(null);
+    setWarning(null);
+    setSlash(null);
+    onSendMessage(text);
+    textareaRef.current?.focus();
   }
 
   async function handleSubmit() {
@@ -147,9 +255,15 @@ export function Composer({
 
     if (!noteMode) {
       if (blocked) return;
-      setInput("");
-      requestAnimationFrame(autoResize);
-      onSendMessage(text);
+      // Revisión al enviar: solo aparece si encuentra algo (lib/send-review.ts).
+      if (!reviewDisabled(me.userId)) {
+        const result = reviewOutgoing(text);
+        if (result.suggestions.length > 0 || result.unresolved.length > 0) {
+          setReview({ text, ...result, chosen: new Set(result.suggestions.map((s) => s.id)) });
+          return;
+        }
+      }
+      sendMessage(text);
       return;
     }
 
@@ -181,9 +295,9 @@ export function Composer({
           `${names.join(", ")} ${names.length === 1 ? "no puede" : "no pueden"} ver este contacto, así que no se ${names.length === 1 ? "le notificó" : "les notificó"}.`,
         );
       }
-      setInput("");
+      setTexts((prev) => ({ ...prev, note: "" }));
+      saveDraft("note", "");
       setPicked(new Map());
-      requestAnimationFrame(autoResize);
     } catch {
       setError("No se pudo guardar la nota. Inténtalo de nuevo.");
       toast.error("No se pudo guardar la nota. Inténtalo de nuevo.");
@@ -218,34 +332,44 @@ export function Composer({
         return;
       }
     }
-    if (replyOpen) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setReplyDismissed(true);
-        return;
-      }
-      // Con el buscador abierto, Enter elige una respuesta (lo maneja el buscador), no envía "/...".
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        return;
-      }
+    if (replyOpen && e.key === "Escape") {
+      e.preventDefault();
+      setReplyDismissed(true);
+      return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      // Con el buscador abierto, Enter elige una respuesta (lo maneja el buscador).
+      if (replyOpen) return;
       void handleSubmit();
     }
   }
 
   if (blocked) {
+    const who = firstName(contactName) || "El cliente";
     return (
       <div className="border-t border-border p-4">
         <div className="mx-auto max-w-2xl space-y-2">
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
             <Lock className="h-4 w-4 shrink-0" />
-            <p className="min-w-0 flex-1">
-              Pasaron más de 24 horas desde el último mensaje del cliente. WhatsApp solo permite enviar una
-              plantilla aprobada.
-            </p>
+            <div className="min-w-0 flex-1">
+              <p>
+                {lastInboundAt ? (
+                  <>
+                    {who} escribió por última vez el{" "}
+                    <span className="font-semibold">
+                      {formatDate(lastInboundAt)} a las {formatTime(lastInboundAt)}
+                    </span>
+                    . Pasadas 24 horas, WhatsApp solo permite enviar una plantilla aprobada.
+                  </>
+                ) : (
+                  "Pasaron más de 24 horas desde el último mensaje del cliente. WhatsApp solo permite enviar una plantilla aprobada."
+                )}
+              </p>
+              <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+                Tus respuestas guardadas vuelven a funcionar cuando el cliente te escriba.
+              </p>
+            </div>
             <button
               onClick={() => setTemplateOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
@@ -261,6 +385,7 @@ export function Composer({
             >
               <StickyNote className="h-3.5 w-3.5" />
               Escribir una nota interna
+              <span className="text-muted-foreground/70">(en las notas también funciona /)</span>
             </button>
           )}
         </div>
@@ -297,6 +422,8 @@ export function Composer({
               onClick={() => {
                 setNoteMode((v) => !v);
                 setMention(null);
+                setSlash(null);
+                setReview(null);
                 setError(null);
                 setWarning(null);
                 textareaRef.current?.focus();
@@ -320,27 +447,61 @@ export function Composer({
               Solo la ve tu equipo. Usa @ para mencionar.
             </span>
           ) : (
-            <span className="text-[11px] text-muted-foreground">Escribe / para usar una respuesta guardada</span>
+            windowChip && (
+              <span
+                title="Tiempo para responder sin plantilla: WhatsApp permite mensajes libres hasta 24 horas después del último mensaje del cliente."
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                  windowChip.urgent
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                <Timer className="h-3 w-3" />
+                {windowChip.text}
+              </span>
+            )
           )}
         </div>
 
         <div className="relative flex items-end gap-2">
           <div className="relative flex-1">
+            {review && (
+              <SendReviewPopover
+                suggestions={review.suggestions}
+                unresolved={review.unresolved}
+                chosen={review.chosen}
+                onToggle={(id) =>
+                  setReview((r) => {
+                    if (!r) return r;
+                    const chosen = new Set(r.chosen);
+                    if (chosen.has(id)) chosen.delete(id);
+                    else chosen.add(id);
+                    return { ...r, chosen };
+                  })
+                }
+                onApply={() => sendMessage(applySuggestions(review.text, review.suggestions.filter((s) => review.chosen.has(s.id))))}
+                onSendAsIs={() => sendMessage(review.text)}
+                onCancel={() => {
+                  setReview(null);
+                  textareaRef.current?.focus();
+                }}
+                onDisable={() => {
+                  try {
+                    window.localStorage.setItem(REVIEW_OFF_KEY + me.userId, "1");
+                  } catch {
+                    // Sin almacenamiento: la revisión sigue activa.
+                  }
+                  sendMessage(review.text);
+                  toast.success("Listo: ya no revisaremos la ortografía al enviar en este equipo.");
+                }}
+              />
+            )}
             {replyOpen && (
               <SavedReplyPicker
                 open={replyOpen}
-                query={input.slice(1)}
-                onSelect={(text) => {
-                  setInput(text);
-                  setReplyDismissed(false);
-                  requestAnimationFrame(() => {
-                    const el = textareaRef.current;
-                    if (!el) return;
-                    el.focus();
-                    el.setSelectionRange(text.length, text.length);
-                    autoResize();
-                  });
-                }}
+                query={slash?.query ?? ""}
+                onSelect={pickReply}
                 onClose={() => setReplyDismissed(true)}
                 context={{
                   contactName,
@@ -378,9 +539,17 @@ export function Composer({
               value={input}
               onChange={(e) => updateInput(e.target.value, e.target.selectionStart ?? e.target.value.length)}
               onKeyDown={handleKeyDown}
-              onClick={(e) => noteMode && setMention(mentionQueryAt(input, e.currentTarget.selectionStart ?? input.length))}
+              onClick={(e) => {
+                const caret = e.currentTarget.selectionStart ?? input.length;
+                setSlash(slashQueryAt(input, caret));
+                if (noteMode) setMention(mentionQueryAt(input, caret));
+              }}
               placeholder={noteMode ? "Escribe una nota interna..." : "Escribe un mensaje..."}
               rows={1}
+              spellCheck
+              lang="es-PE"
+              autoCapitalize="sentences"
+              autoCorrect="on"
               className={cn(
                 "w-full resize-none rounded-lg border bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2",
                 noteMode
@@ -411,6 +580,24 @@ export function Composer({
               <Send className="h-4 w-4" />
             )}
           </button>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={openReplies}
+            title="Respuestas guardadas (también escribiendo /)"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Zap className="h-3.5 w-3.5" />
+            Respuestas
+          </button>
+          {draftSaved && input.trim() && (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Check className="h-3 w-3" />
+              Borrador guardado
+            </span>
+          )}
         </div>
         {warning && <p className="text-xs text-amber-700 dark:text-amber-300">{warning}</p>}
         {error && <p className="text-xs text-destructive">{error}</p>}

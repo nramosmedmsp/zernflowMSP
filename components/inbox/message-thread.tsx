@@ -2,14 +2,15 @@
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Paperclip, Bot, BotOff, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown } from "lucide-react";
+import { Paperclip, Bot, BotOff, User, MessageSquare, CheckCircle, Clock, RotateCcw, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import { Spinner } from "@/components/ui/spinner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { formatDate, formatTime } from "@/lib/format";
+import { formatDate, formatPhoneDisplay, formatRelative, formatTime } from "@/lib/format";
+import { platformLabel } from "@/lib/platforms";
 import { linkify } from "@/lib/linkify";
 import type { InboxMessage } from "@/lib/inbox-messages";
 import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
@@ -17,9 +18,10 @@ import type { ConversationStatus } from "@/lib/types/database";
 import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
 import { SimulateInboundDialog } from "./simulate-inbound-dialog";
-import { latestIso, memberName, type InboxConversation, type InboxMember } from "./inbox-model";
+import { latestIso, memberName, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
 import { useThreadMessages } from "./use-thread-messages";
+import { useNow } from "./use-now";
 
 type TimelineItem =
   | { kind: "message"; at: string; message: InboxMessage }
@@ -93,6 +95,12 @@ function MessageBubble({ message, onRetry }: { message: InboxMessage; onRetry?: 
             failed && outboxId && "bg-destructive/90 ring-1 ring-destructive"
           )}
         >
+          {message.story && (
+            <p className={cn("mb-0.5 flex items-center gap-1 text-[11px] font-medium", isInbound ? "text-muted-foreground" : "opacity-80")}>
+              <Reply className="h-3 w-3" />
+              {message.story === "mention" ? "Te mencionó en su historia" : "Respondió a tu historia"}
+            </p>
+          )}
           {message.text && <MessageText text={message.text} />}
           {message.attachments && (
             <div className="mt-1">
@@ -407,6 +415,34 @@ export function MessageThread({
     requestAnimationFrame(() => requestAnimationFrame(() => (olderAnchor.current = null)));
   }, [loadOlder]);
 
+  // Debajo del nombre: canal, teléfono o @usuario y cuánto lleva esperando.
+  const [channelInfo, setChannelInfo] = useState<{ senderId: string | null; username: string | null } | null>(null);
+  const contactIdOfChat = conversation?.contact_id ?? null;
+  const channelIdOfChat = conversation?.channel_id ?? null;
+  useEffect(() => {
+    if (!contactIdOfChat || !channelIdOfChat) return;
+    let cancelled = false;
+    void createClient()
+      .from("contact_channels")
+      .select("platform_sender_id, platform_username")
+      .eq("contact_id", contactIdOfChat)
+      .eq("channel_id", channelIdOfChat)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled && data) setChannelInfo({ senderId: data.platform_sender_id, username: data.platform_username });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contactIdOfChat, channelIdOfChat]);
+  const handle =
+    formatPhoneDisplay(conversation?.contacts?.phone) ||
+    (conversation?.platform === "whatsapp" ? formatPhoneDisplay(channelInfo?.senderId) : "") ||
+    (channelInfo?.username ? `@${channelInfo.username}` : "");
+  const now = useNow();
+  const waiting =
+    noteCase?.waitingSince && now !== null ? waitingText(formatRelative(noteCase.waitingSince, new Date(now))) : "";
+
   const lastInboundMessageAt = useMemo(() => {
     let latest: string | null = null;
     for (const m of serverMessages) {
@@ -455,11 +491,23 @@ export function MessageThread({
               />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-medium">
-              {conversation.contacts?.display_name ?? "Desconocido"}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="truncate text-sm font-medium">
+                {conversation.contacts?.display_name ?? "Desconocido"}
+              </p>
+              {isDemo && <DemoBadge />}
+            </div>
+            <p className="truncate text-[11px] text-muted-foreground">
+              {platformLabel(conversation.platform)}
+              {handle && ` · ${handle}`}
+              {waiting && (
+                <>
+                  {" · "}
+                  <span className="font-medium text-amber-700 dark:text-amber-400">{waiting}</span>
+                </>
+              )}
             </p>
-            {isDemo && <DemoBadge />}
           </div>
         </div>
 

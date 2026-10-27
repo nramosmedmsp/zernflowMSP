@@ -16,11 +16,14 @@ import {
   Contact as ContactIcon,
   CalendarDays,
   Loader2,
+  Phone,
+  Copy,
+  Pencil,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
-import { formatDate as formatDay, formatDateTime } from "@/lib/format";
+import { formatDate as formatDay, formatDateTime, formatPhoneDisplay } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
 import { limaDateTimeIso } from "@/lib/cases/dates";
 import { listCaseMembers, type ContactCasesView } from "@/lib/actions/cases";
@@ -29,12 +32,13 @@ import {
   removeContactTag,
   setContactOwner,
   setContactTeam,
+  updateContactPhone,
   updateContactType,
   type ContactActionResult,
 } from "@/lib/actions/contacts";
 import type { Database, Platform } from "@/lib/types/database";
 import { useContactCases } from "./use-contact-cases";
-import { selectClass } from "./ui";
+import { inputClass, selectClass } from "./ui";
 import { useToast } from "@/components/ui/toast";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
@@ -49,6 +53,7 @@ interface ContactDetails {
   channels: {
     platform: Platform;
     platform_username: string | null;
+    platform_sender_id: string;
   }[];
 }
 
@@ -82,7 +87,7 @@ async function fetchContactDetails(id: string): Promise<ContactDetails | null> {
       .eq("contact_id", id),
     supabase
       .from("contact_channels")
-      .select("platform_username, channels(platform)")
+      .select("platform_username, platform_sender_id, channels(platform)")
       .eq("contact_id", id),
   ]);
 
@@ -101,6 +106,7 @@ async function fetchContactDetails(id: string): Promise<ContactDetails | null> {
     const channels = (channelsRes.data ?? []).map((cc) => ({
       platform: (cc.channels as unknown as { platform: Platform }).platform,
       platform_username: cc.platform_username,
+      platform_sender_id: cc.platform_sender_id,
     }));
 
     return {
@@ -111,6 +117,98 @@ async function fetchContactDetails(id: string): Promise<ContactDetails | null> {
     };
   }
   return null;
+}
+
+/** Teléfono con Copiar y edición rápida. */
+function PhoneRow({
+  phone,
+  fallback,
+  saving,
+  onSave,
+}: {
+  phone: string | null;
+  /** Número de WhatsApp del chat, si el contacto no tiene teléfono guardado. */
+  fallback: string | null;
+  saving: boolean;
+  onSave: (phone: string | null) => Promise<boolean>;
+}) {
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(phone ?? "");
+  const shown = formatPhoneDisplay(phone) || formatPhoneDisplay(fallback);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(shown.replace(/\s/g, ""));
+      toast.success("Teléfono copiado");
+    } catch {
+      toast.error("No se pudo copiar. Selecciónalo y cópialo a mano.");
+    }
+  }
+
+  async function save() {
+    if (await onSave(value.trim() || null)) setEditing(false);
+  }
+
+  return (
+    <div>
+      <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
+        <Phone className="h-3 w-3" />
+        Teléfono
+        {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+      </h4>
+      {editing ? (
+        <div className="mt-1 flex items-center gap-1.5">
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void save();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            placeholder="+51 987 654 321"
+            inputMode="tel"
+            className={cn(inputClass, "py-1 text-sm")}
+            aria-label="Teléfono"
+          />
+          <button
+            onClick={() => void save()}
+            disabled={saving}
+            className="rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            Guardar
+          </button>
+        </div>
+      ) : (
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <p className={cn("text-sm", !shown && "text-muted-foreground")}>{shown || "Sin teléfono"}</p>
+          <div className="flex items-center gap-1">
+            {shown && (
+              <button
+                onClick={() => void copy()}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Copy className="h-3 w-3" />
+                Copiar
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setValue(phone ?? (formatPhoneDisplay(fallback) ? shown : ""));
+                setEditing(true);
+              }}
+              title="Editar teléfono"
+              aria-label="Editar teléfono"
+              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ContactPanel({
@@ -198,8 +296,8 @@ export function ContactPanel({
   const isAdmin = !!cases?.me.isAdmin;
 
   /** Cambia un dato del contacto con la acción de servidor (valida permisos y registra la actividad). */
-  async function updateContact(key: string, action: (contactId: string) => Promise<ContactActionResult>) {
-    if (!details) return;
+  async function updateContact(key: string, action: (contactId: string) => Promise<ContactActionResult>): Promise<boolean> {
+    if (!details) return false;
     setSaving(key);
     setError(null);
     let result: ContactActionResult;
@@ -212,12 +310,13 @@ export function ContactPanel({
     if ("error" in result) {
       setError(result.error);
       toast.error(result.error);
-      return;
+      return false;
     }
     toast.success("Contacto actualizado");
     await loadContact(details.contact.id);
     onContactChanged?.();
     if (providedCases === undefined) void own.reload();
+    return true;
   }
 
   async function addTag(tagId: string) {
@@ -348,6 +447,13 @@ export function ContactPanel({
           {/* Details */}
           <div className="space-y-4 p-4">
             {error && <p className="text-xs text-destructive">{error}</p>}
+
+            <PhoneRow
+              phone={contact.phone}
+              fallback={details.channels.find((ch) => ch.platform === "whatsapp")?.platform_sender_id ?? null}
+              saving={saving === "phone"}
+              onSave={(phone) => updateContact("phone", (id) => updateContactPhone(id, phone))}
+            />
 
             {/* Contact type */}
             <div>

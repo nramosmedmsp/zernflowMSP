@@ -5,6 +5,7 @@
 // (components/composer/whatsapp-templates.test.ts).
 
 import { normalizeSearch } from "@/lib/saved-replies";
+import { firstName } from "@/lib/names";
 
 export const TEMPLATE_BODY_MAX = 1024;
 export const TEMPLATE_PARAM_MAX = 1024;
@@ -217,14 +218,7 @@ export function buildTemplateParams(
  * Valor inicial de la primera variable: el primer nombre del contacto, solo si
  * parece un nombre (no un teléfono, un correo ni un usuario con números).
  */
-export function suggestFirstParam(contactName: string | null | undefined): string {
-  const name = (contactName ?? "").trim();
-  if (!name || name.includes("@") || /\d/.test(name)) return "";
-  const first = name.split(/\s+/)[0] ?? "";
-  const letters = first.replace(/[^\p{L}]/gu, "");
-  if (letters.length < 2) return "";
-  return first;
-}
+export const suggestFirstParam = firstName;
 
 /** Aprobada y con idioma y nombre: la única que se puede enviar. */
 export function isSendable(template: Pick<TemplateSummary, "status" | "name" | "language">): boolean {

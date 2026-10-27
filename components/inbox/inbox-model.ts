@@ -296,6 +296,25 @@ export function outsideWhatsAppWindow(
   return !Number.isNaN(t) && now - t > WHATSAPP_WINDOW_MS;
 }
 
+/**
+ * Lo que queda de la ventana de 24 horas de WhatsApp: "Quedan 21 h" o
+ * "Quedan 40 min" (urgente en la última hora). null si no aplica o ya cerró.
+ */
+export function whatsAppWindowChip(
+  platform: Platform,
+  lastInboundAt: string | null,
+  now: number,
+): { text: string; urgent: boolean } | null {
+  if (platform !== "whatsapp" || !lastInboundAt) return null;
+  const t = time(lastInboundAt);
+  if (Number.isNaN(t)) return null;
+  const left = WHATSAPP_WINDOW_MS - (now - t);
+  if (left <= 0) return null;
+  const minutes = Math.max(1, Math.ceil(left / 60_000));
+  if (minutes < 60) return { text: `Quedan ${minutes} min`, urgent: true };
+  return { text: `Quedan ${Math.floor(minutes / 60)} h`, urgent: false };
+}
+
 /** El más reciente de dos instantes ISO (o el que exista). */
 export function latestIso(a: string | null | undefined, b: string | null | undefined): string | null {
   const ta = time(a);

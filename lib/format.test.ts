@@ -3,6 +3,7 @@ import {
   APP_LOCALE,
   APP_TIME_ZONE,
   formatDate,
+  formatPhoneDisplay,
   formatDateTime,
   formatNumber,
   formatRelative,
@@ -200,5 +201,21 @@ describe("formatNumber", () => {
     expect(formatNumber("")).toBe("");
     expect(formatNumber("   ")).toBe("");
     expect(formatNumber("abc")).toBe("");
+  });
+});
+
+describe("formatPhoneDisplay", () => {
+  it("celulares de Perú con o sin código de país", () => {
+    expect(formatPhoneDisplay("51987654321")).toBe("+51 987 654 321");
+    expect(formatPhoneDisplay("+51 987-654-321")).toBe("+51 987 654 321");
+    expect(formatPhoneDisplay("987654321")).toBe("+51 987 654 321");
+  });
+  it("otros países con + y los dígitos", () => {
+    expect(formatPhoneDisplay("5491155556666")).toBe("+5491155556666");
+  });
+  it("vacío si no parece un teléfono", () => {
+    expect(formatPhoneDisplay("PE.12AbC9")).toBe("");
+    expect(formatPhoneDisplay("123")).toBe("");
+    expect(formatPhoneDisplay(null)).toBe("");
   });
 });

@@ -137,3 +137,22 @@ export function formatNumber(n: number | string | null | undefined): string {
   const num = Number(n);
   return Number.isFinite(num) ? numberFormat.format(num) : "";
 }
+
+/**
+ * Teléfono para mostrar: "+51 987 654 321" para celulares de Perú, "+" y los
+ * dígitos para el resto. "" si no parece un teléfono (por ejemplo, el id que
+ * WhatsApp usa cuando el cliente oculta su número).
+ */
+export function formatPhoneDisplay(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value || /[a-z]/i.test(value)) return "";
+  const digits = value.replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) return "";
+  if (digits.length === 11 && digits.startsWith("519")) {
+    return `+51 ${digits.slice(2, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`;
+  }
+  if (digits.length === 9 && digits.startsWith("9")) {
+    return `+51 ${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+  }
+  return `+${digits}`;
+}

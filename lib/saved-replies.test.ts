@@ -6,6 +6,12 @@ import {
   normalizeShortcut,
   searchSavedReplies,
   validateSavedReplyInput,
+  applyReplyVariablesDetailed,
+  findUnresolvedPlaceholders,
+  greetingFor,
+  longDayFor,
+  replaceRange,
+  slashQueryAt,
 } from "./saved-replies";
 
 describe("applyReplyVariables", () => {
@@ -180,5 +186,74 @@ describe("hasShortcutConflict", () => {
     expect(hasShortcutConflict("/precios", others, "1")).toBe(false);
     expect(hasShortcutConflict(null, others)).toBe(false);
     expect(hasShortcutConflict("/otro", others)).toBe(false);
+  });
+});
+
+describe("variables nuevas", () => {
+  // 27 oct 2026, 10:30 en Lima (15:30 UTC).
+  const morning = new Date("2026-10-27T15:30:00.000Z");
+
+  it("{primer_nombre} toma solo el primer nombre", () => {
+    expect(applyReplyVariables("Hola {primer_nombre}", { contactName: "Patricia Salas Ríos" })).toBe("Hola Patricia");
+  });
+
+  it("{saludo} sigue la hora de Lima", () => {
+    expect(greetingFor(new Date("2026-10-27T15:30:00.000Z"))).toBe("Buenos días");
+    expect(greetingFor(new Date("2026-10-27T19:00:00.000Z"))).toBe("Buenas tardes");
+    expect(greetingFor(new Date("2026-10-28T01:30:00.000Z"))).toBe("Buenas noches");
+    expect(greetingFor(new Date("2026-10-27T09:59:00.000Z"))).toBe("Buenas noches");
+    expect(applyReplyVariables("{saludo} {primer_nombre} 👋", { contactName: "Ana", now: morning })).toBe("Buenos días Ana 👋");
+  });
+
+  it("{hoy} escribe el día en español", () => {
+    expect(longDayFor(morning)).toBe("martes 27 de octubre");
+  });
+
+  it("dice qué variables quedaron sin dato", () => {
+    const r = applyReplyVariablesDetailed("Hola {nombre}, recoge en {sede}.", { contactName: "Ana" });
+    expect(r.text).toBe("Hola Ana, recoge en.");
+    expect(r.empty).toEqual(["{sede}"]);
+  });
+
+  it("{primer_nombre} queda vacío si el nombre es un teléfono", () => {
+    expect(applyReplyVariablesDetailed("Hola {primer_nombre}", { contactName: "+51 987 654 321" }).empty).toEqual(["{primer_nombre}"]);
+  });
+});
+
+describe("findUnresolvedPlaceholders", () => {
+  it("encuentra llaves que el cliente vería tal cual", () => {
+    expect(findUnresolvedPlaceholders("Hola {nombre}, el precio es {precio} y {precio}")).toEqual(["{nombre}", "{precio}"]);
+    expect(findUnresolvedPlaceholders("Sin llaves 🙂")).toEqual([]);
+  });
+});
+
+describe("slashQueryAt y replaceRange", () => {
+  it("detecta / al inicio o después de un espacio", () => {
+    expect(slashQueryAt("/pre", 4)).toEqual({ start: 0, query: "pre" });
+    expect(slashQueryAt("Gracias 🙌 /pre", "Gracias 🙌 /pre".length)).toEqual({ start: "Gracias 🙌 ".length, query: "pre" });
+    expect(slashQueryAt("Gracias /", 9)).toEqual({ start: 8, query: "" });
+  });
+
+  it("no se activa en enlaces, fechas ni con un espacio justo después", () => {
+    expect(slashQueryAt("https://muscleshop.pe", 21)).toBeNull();
+    expect(slashQueryAt("el 27/10", 8)).toBeNull();
+    expect(slashQueryAt("1 / 2", 5)).toBeNull();
+    expect(slashQueryAt("/pre\nhola", 9)).toBeNull();
+  });
+
+  it("pega la respuesta donde está el cursor sin borrar lo escrito", () => {
+    const text = "Gracias 🙌 /pre";
+    const q = slashQueryAt(text, text.length)!;
+    expect(replaceRange(text, q.start, text.length, "Hola Ana")).toEqual({ value: "Gracias 🙌 Hola Ana", caret: "Gracias 🙌 Hola Ana".length });
+  });
+});
+
+describe("búsqueda por el texto de la respuesta", () => {
+  it("encuentra por una palabra del texto, después de título y atajo", () => {
+    const replies = [
+      { id: "1", title: "Envíos a provincia", shortcut: "/envio", caseTypeId: null, body: "Hacemos envíos por Olva y Shalom" },
+      { id: "2", title: "Olva Courier", shortcut: null, caseTypeId: null, body: "Seguimiento" },
+    ];
+    expect(searchSavedReplies(replies, "olva").map((r) => r.id)).toEqual(["2", "1"]);
   });
 });

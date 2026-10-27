@@ -226,6 +226,7 @@ export function InboxView({
       {/* Left panel: Conversation list */}
       <div className="w-80 flex-shrink-0">
         <ConversationList
+          workspaceId={workspaceId}
           conversations={conversations}
           casesByContact={casesByContact}
           meta={meta}

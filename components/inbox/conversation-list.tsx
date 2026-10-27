@@ -26,8 +26,10 @@ import {
 import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
+import { useDraftPreviews } from "./use-drafts";
 
 export function ConversationList({
+  workspaceId,
   conversations,
   casesByContact,
   meta,
@@ -38,6 +40,7 @@ export function ConversationList({
   syncError = null,
   failedConversationIds,
 }: {
+  workspaceId: string;
   conversations: InboxConversation[];
   casesByContact: ReadonlyMap<string, InboxCase[]>;
   meta: InboxMeta;
@@ -58,6 +61,7 @@ export function ConversationList({
   // de montar para no provocar errores de hidratación (React #418).
   const now = useNow();
   const nowDate = useMemo(() => (now === null ? new Date() : new Date(now)), [now]);
+  const drafts = useDraftPreviews({ userId: meta.userId, workspaceId });
 
   const rowsByView = useMemo(() => {
     const result = new Map<InboxViewKey, InboxRow[]>();
@@ -365,6 +369,13 @@ export function ConversationList({
                     </p>
                   )}
 
+                  {selectedId !== conversation.id && drafts.has(conversation.id) && (
+                    <p className="mt-0.5 flex min-w-0 items-center gap-1 text-xs">
+                      <span className="shrink-0 font-medium text-primary">Borrador:</span>
+                      <span className="truncate text-muted-foreground">{drafts.get(conversation.id)}</span>
+                    </p>
+                  )}
+
                   {failedConversationIds?.has(conversation.id) && (
                     <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-destructive">
                       <AlertCircle className="h-3 w-3" />
@@ -374,7 +385,9 @@ export function ConversationList({
 
                   <div className="flex items-center justify-between">
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {conversation.last_message_preview ?? "Aún no hay mensajes"}
+                      {conversation.last_message_preview === null
+                        ? "Aún no hay mensajes"
+                        : conversation.last_message_preview || "Mensaje sin texto"}
                     </p>
                     {conversation.unread_count > 0 && (
                       <span className="ml-2 flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">

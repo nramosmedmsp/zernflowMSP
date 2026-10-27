@@ -5,7 +5,7 @@ import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webho
 import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
-import { messagePreview } from "@/lib/message-preview";
+import { inboundPreview } from "@/lib/message-preview";
 import { runInboundPipeline } from "@/lib/inbound-pipeline";
 import { recordInboundConversation } from "@/lib/inbound-conversation";
 
@@ -21,7 +21,10 @@ interface WebhookPayload {
     platformMessageId: string;
     direction: string;
     text: string | null;
-    attachments: Array<{ type: string; url: string; payload?: string }>;
+    attachments: Array<{ type: string; url: string; payload?: unknown }>;
+    /** Instagram: respuesta o mención de una historia (si Zernio lo manda). */
+    storyReply?: unknown;
+    isStoryMention?: boolean | null;
     sender: {
       id: string;
       name: string;
@@ -230,7 +233,7 @@ async function processMessageEvent(
 
   // ── Upsert conversation ──────────────────────────────────────────────────
 
-  const preview = messagePreview(msg.text);
+  const preview = inboundPreview(msg);
 
   const conversation = await recordInboundConversation(supabase, {
     workspaceId: channel.workspace_id,

@@ -5,6 +5,7 @@ import {
   buildRows,
   caseMatchesView,
   filtersForView,
+  whatsAppWindowChip,
   groupCasesByContact,
   mentionQueryAt,
   mentionedIds,
@@ -224,5 +225,21 @@ describe("filtersForView", () => {
     expect(filtersForView(none, "team").status).toBe("");
     expect(filtersForView(none, "all").status).toBe("none");
     expect(filtersForView({ ...EMPTY_FILTERS, status: "open" }, "mine").status).toBe("open");
+  });
+});
+
+describe("whatsAppWindowChip", () => {
+  const last = "2026-10-27T10:00:00.000Z";
+  const at = (iso: string) => new Date(iso).getTime();
+  it("cuenta las horas que quedan", () => {
+    expect(whatsAppWindowChip("whatsapp", last, at("2026-10-27T13:00:00.000Z"))).toEqual({ text: "Quedan 21 h", urgent: false });
+  });
+  it("en la última hora cuenta minutos y es urgente", () => {
+    expect(whatsAppWindowChip("whatsapp", last, at("2026-10-28T09:20:00.000Z"))).toEqual({ text: "Quedan 40 min", urgent: true });
+  });
+  it("no aplica fuera de WhatsApp ni con la ventana cerrada", () => {
+    expect(whatsAppWindowChip("instagram", last, at("2026-10-27T13:00:00.000Z"))).toBeNull();
+    expect(whatsAppWindowChip("whatsapp", last, at("2026-10-28T10:00:01.000Z"))).toBeNull();
+    expect(whatsAppWindowChip("whatsapp", null, at("2026-10-27T13:00:00.000Z"))).toBeNull();
   });
 });
