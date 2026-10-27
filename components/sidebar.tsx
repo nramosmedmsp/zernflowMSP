@@ -27,6 +27,8 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { NotificationBell } from "@/components/notifications/notification-bell";
+import { draftStorage } from "@/components/inbox/use-drafts";
+import { clearUserDrafts } from "@/lib/drafts";
 import { isNavActive, navigationFor, type NavKey } from "@/components/sidebar-nav";
 import { setMyAvailability } from "@/lib/actions/cases";
 import type { Database, MemberAvailability } from "@/lib/types/database";
@@ -176,6 +178,8 @@ export function Sidebar({
   }
 
   async function handleSignOut() {
+    // Los borradores de la bandeja son de esta persona: no quedan en la PC.
+    clearUserDrafts(draftStorage(), user.id);
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();

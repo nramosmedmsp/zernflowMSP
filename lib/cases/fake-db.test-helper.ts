@@ -82,7 +82,7 @@ const DEFAULTS: Record<string, () => Row> = {
   team_members: () => ({ role: "agent", case_type_ids: null }),
   workspace_members: () => ({ role: "member", availability: "available", last_assigned_at: null }),
   workspaces: () => ({ settings: {} }),
-  conversations: () => ({ is_automation_paused: false }),
+  conversations: () => ({ is_automation_paused: false, unread_count: 0 }),
   flow_sessions: () => ({ waiting_for_input: false, waiting_until: null, current_node_id: null, human_takeover_at: null, variables: {} }),
   case_notes: () => ({ mentions: [], conversation_id: null }),
   notifications: () => ({ body: null, link: null, read_at: null }),
@@ -368,6 +368,16 @@ export class FakeDb {
   };
 
   async rpc(name: string, args: Record<string, unknown>) {
+    if (name === "increment_unread") {
+      // supabase/migrations/00003_rpc_functions.sql
+      const row = this.rows("conversations").find((c) => c.id === args.conv_id);
+      if (row) {
+        row.unread_count = ((row.unread_count as number) ?? 0) + 1;
+        row.last_message_preview = args.preview;
+        row.status = "open";
+      }
+      return { data: null, error: null };
+    }
     if (name === "open_inbound_case") {
       const open = this.rows("cases").find((c) => c.contact_id === args.p_contact_id && c.status === "open");
       if (open) return { data: { case_id: open.id, created: false }, error: null };

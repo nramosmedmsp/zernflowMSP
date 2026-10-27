@@ -611,6 +611,40 @@ export async function setNextAction(
   return engine.setNextAction(ctx.s.db, { caseId: ctx.access.row.id, at, note, actorId: ctx.s.userId });
 }
 
+/**
+ * Posponer (cabecera del chat): guarda el próximo contacto conservando su nota.
+ * Si la gestión no tiene responsable y la persona puede tomarla, se la asigna:
+ * "Para hoy" solo muestra las gestiones propias, así el chat vuelve a esa hora.
+ */
+export async function postponeCase(
+  caseId: string,
+  at: string,
+): Promise<CaseActionResult<{ nextActionAt: string | null; assignedToMe: boolean }>> {
+  if (typeof at !== "string" || !at) return { error: INVALID };
+  const ctx = await withCase(caseId, (p) => p.canEdit);
+  if ("error" in ctx) return ctx;
+  const { s, access } = ctx;
+  const result = await engine.setNextAction(s.db, {
+    caseId: access.row.id,
+    at,
+    note: access.row.next_action_note,
+    actorId: s.userId,
+  });
+  if ("error" in result) return result;
+
+  let assignedToMe = false;
+  if (!access.row.assignee_id && access.perms.canTake) {
+    const assigned = await engine.assignTo(s.db, {
+      caseId: access.row.id,
+      assigneeId: s.userId,
+      actorId: s.userId,
+      enforceTeam: !isAdminRole(s.actor.role),
+    });
+    assignedToMe = !("error" in assigned);
+  }
+  return { ok: true, nextActionAt: result.nextActionAt, assignedToMe };
+}
+
 /** Nota interna con menciones (ids de miembros). */
 export async function addCaseNote(
   caseId: string,

@@ -4,6 +4,8 @@ import {
   availableViews,
   buildRows,
   caseMatchesView,
+  filtersForView,
+  whatsAppWindowChip,
   groupCasesByContact,
   mentionQueryAt,
   mentionedIds,
@@ -12,6 +14,7 @@ import {
   type InboxCase,
   type InboxConversation,
   type InboxMeta,
+  messageAuthor,
 } from "./inbox-model";
 
 const ME = "00000000-0000-0000-0000-000000000001";
@@ -213,5 +216,49 @@ describe("menciones", () => {
       [OTHER, "Luis"],
     ]);
     expect(mentionedIds("Revisa esto @Ana Pérez", picked)).toEqual([ME]);
+  });
+});
+
+describe("filtersForView", () => {
+  it("quita el filtro oculto «Sin gestión» fuera de la vista Todas", () => {
+    const none = { ...EMPTY_FILTERS, status: "none" as const };
+    expect(filtersForView(none, "mine").status).toBe("");
+    expect(filtersForView(none, "team").status).toBe("");
+    expect(filtersForView(none, "all").status).toBe("none");
+    expect(filtersForView({ ...EMPTY_FILTERS, status: "open" }, "mine").status).toBe("open");
+  });
+});
+
+describe("whatsAppWindowChip", () => {
+  const last = "2026-10-27T10:00:00.000Z";
+  const at = (iso: string) => new Date(iso).getTime();
+  it("cuenta las horas que quedan", () => {
+    expect(whatsAppWindowChip("whatsapp", last, at("2026-10-27T13:00:00.000Z"))).toEqual({ text: "Quedan 21 h", urgent: false });
+  });
+  it("en la última hora cuenta minutos y es urgente", () => {
+    expect(whatsAppWindowChip("whatsapp", last, at("2026-10-28T09:20:00.000Z"))).toEqual({ text: "Quedan 40 min", urgent: true });
+  });
+  it("no aplica fuera de WhatsApp ni con la ventana cerrada", () => {
+    expect(whatsAppWindowChip("instagram", last, at("2026-10-27T13:00:00.000Z"))).toBeNull();
+    expect(whatsAppWindowChip("whatsapp", last, at("2026-10-28T10:00:01.000Z"))).toBeNull();
+    expect(whatsAppWindowChip("whatsapp", null, at("2026-10-27T13:00:00.000Z"))).toBeNull();
+  });
+});
+
+describe("messageAuthor", () => {
+  const members = [{ userId: "u-ana", name: "Ana Torres", email: null, availability: "available" as const, teams: [] }];
+  const msg = (extra: Partial<{ direction: string; sent_by_user_id: string | null; sent_by_flow_id: string | null; flow_name: string | null }>) => ({
+    direction: "outbound",
+    sent_by_user_id: null,
+    sent_by_flow_id: null,
+    ...extra,
+  });
+  it("nombre del asesor, Tú, o el bot con su flujo", () => {
+    expect(messageAuthor(msg({ sent_by_user_id: "u-ana" }), members, "u-yo")).toBe("Ana Torres");
+    expect(messageAuthor(msg({ sent_by_user_id: "u-yo" }), members, "u-yo")).toBe("Tú");
+    expect(messageAuthor(msg({ sent_by_flow_id: "f1", flow_name: "Bienvenida" }), members, "u-yo")).toBe("Bot · Bienvenida");
+    expect(messageAuthor(msg({ sent_by_user_id: "u-x" }), members, "u-yo")).toBe("Otro asesor");
+    expect(messageAuthor(msg({}), members, "u-yo")).toBeNull();
+    expect(messageAuthor(msg({ direction: "inbound", sent_by_user_id: "u-ana" }), members, "u-yo")).toBeNull();
   });
 });

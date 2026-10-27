@@ -5,8 +5,15 @@ import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webho
 import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
-import { messagePreview } from "@/lib/message-preview";
+import { inboundPreview } from "@/lib/message-preview";
 import { runInboundPipeline } from "@/lib/inbound-pipeline";
+import { recordInboundConversation } from "@/lib/inbound-conversation";
+import { storeInboundMedia, type InboundAttachmentInput } from "@/lib/media-store";
+import { getLateApiKey } from "@/lib/workspace-secrets";
+import { applyDeliveryEvent, type DeliveryEvent } from "@/lib/outbound-log";
+
+// Copiar fotos y PDF que llegan puede tardar más que lo normal (hasta 25 MB).
+export const maxDuration = 60;
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -20,7 +27,10 @@ interface WebhookPayload {
     platformMessageId: string;
     direction: string;
     text: string | null;
-    attachments: Array<{ type: string; url: string; payload?: string }>;
+    attachments: Array<{ type: string; url: string; filename?: string | null; payload?: unknown }>;
+    /** Instagram: respuesta o mención de una historia (si Zernio lo manda). */
+    storyReply?: unknown;
+    isStoryMention?: boolean | null;
     sender: {
       id: string;
       name: string;
@@ -73,6 +83,19 @@ interface CommentWebhookPayload {
   account: { id: string; platform: string; username: string };
   timestamp: string;
 }
+
+/** message.delivered / message.read / message.failed (estado de un mensaje propio). */
+interface DeliveryWebhookPayload {
+  id?: string;
+  event: DeliveryEvent;
+  message: { conversationId?: string; platformMessageId?: string };
+  statusAt?: string;
+  error?: { code?: number; title?: string; message?: string; explanation?: string | null } | null;
+  conversation?: { id?: string };
+  account: { id: string };
+}
+
+const DELIVERY_EVENTS = new Set<string>(["message.delivered", "message.read", "message.failed"]);
 
 // ── Webhook handler ─────────────────────────────────────────────────────────
 
@@ -127,6 +150,10 @@ async function handleWebhook(request: NextRequest) {
     return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature, eventId);
   }
 
+  if (parsed.event && DELIVERY_EVENTS.has(parsed.event)) {
+    return handleDeliveryWebhook(parsed as DeliveryWebhookPayload, body, signature, eventId);
+  }
+
   // Everything else besides message.received is acknowledged and ignored
   if (parsed.event !== "message.received") {
     return NextResponse.json({ ok: true, skipped: true });
@@ -136,8 +163,9 @@ async function handleWebhook(request: NextRequest) {
 
   const { message: msg, account } = payload;
 
-  // Ignore outbound messages (sent by the bot itself) to prevent loops
-  if (msg.direction === "outbound") {
+  // Ignore outbound messages (sent by the bot itself) to prevent loops.
+  // Zernio documenta "outgoing"; "outbound" se acepta por compatibilidad.
+  if (msg.direction === "outbound" || msg.direction === "outgoing") {
     return NextResponse.json({ ok: true, skipped: true });
   }
 
@@ -228,46 +256,30 @@ async function processMessageEvent(
 
   // ── Upsert conversation ──────────────────────────────────────────────────
 
-  const preview = messagePreview(msg.text);
+  const preview = inboundPreview(msg);
 
-  const { data: conversation } = await supabase
-    .from("conversations")
-    .upsert(
-      {
-        workspace_id: channel.workspace_id,
-        channel_id: channel.id,
-        contact_id: contactId,
-        platform: channel.platform,
-        late_conversation_id: conv.id,
-        status: "open",
-        last_message_at: new Date().toISOString(),
-        last_message_preview: preview,
-        unread_count: 1,
-      },
-      { onConflict: "channel_id,contact_id" }
-    )
-    .select("id, is_automation_paused")
-    .single();
+  const conversation = await recordInboundConversation(supabase, {
+    workspaceId: channel.workspace_id,
+    channelId: channel.id,
+    contactId,
+    platform: channel.platform,
+    lateConversationId: conv.id,
+    preview,
+    at: new Date().toISOString(),
+  });
 
   if (!conversation) {
     console.error("Failed to upsert conversation for webhook message");
     return;
   }
 
-  if (contact.existed) {
-    await supabase
-      .rpc("increment_unread", {
-        conv_id: conversation.id,
-        preview,
-      })
-      .then(() => {});
-  }
-
   // Messages are stored by Zernio (source of truth) — no local insert needed.
+  // Sus archivos sí se copian: WhatsApp los borra a los pocos días.
+  const media = copyInboundMedia(supabase, payload, channel.workspace_id, conversation.id);
 
   // Gestiones y flujos (lib/inbound-pipeline.ts, compartido con la simulación
   // de mensajes de los canales de prueba).
-  await runInboundPipeline(supabase, {
+  const pipeline = runInboundPipeline(supabase, {
     channel,
     contactId,
     conversation,
@@ -282,6 +294,88 @@ async function processMessageEvent(
     lateConversationId: conv.id,
     lateAccountId: account.id,
   });
+
+  const [mediaResult, pipelineResult] = await Promise.allSettled([media, pipeline]);
+  if (mediaResult.status === "rejected") console.error("Webhook media copy error:", mediaResult.reason);
+  if (pipelineResult.status === "rejected") throw pipelineResult.reason;
+}
+
+/** Nombre del archivo que mandó el cliente, si Zernio lo incluye. */
+function attachmentFileName(att: WebhookPayload["message"]["attachments"][number]): string | null {
+  if (typeof att.filename === "string") return att.filename;
+  const payload = att.payload as { filename?: unknown } | null | undefined;
+  return typeof payload?.filename === "string" ? payload.filename : null;
+}
+
+async function copyInboundMedia(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  payload: WebhookPayload,
+  workspaceId: string,
+  conversationId: string,
+): Promise<void> {
+  const { message: msg } = payload;
+  if (!Array.isArray(msg.attachments) || msg.attachments.length === 0 || !msg.platformMessageId) return;
+  const attachments: InboundAttachmentInput[] = msg.attachments.map((att) => ({
+    type: att.type,
+    url: att.url,
+    filename: attachmentFileName(att),
+  }));
+  await storeInboundMedia(supabase, {
+    workspaceId,
+    conversationId,
+    platformMessageId: msg.platformMessageId,
+    attachments,
+    apiKey: await getLateApiKey(workspaceId, supabase),
+  });
+}
+
+// ── Delivery status webhook ─────────────────────────────────────────────────
+
+/**
+ * Entregado, leído o no entregado: actualiza el mensaje registrado en
+ * `messages` (lib/outbound-log.ts) y la bandeja lo ve en vivo por Realtime.
+ */
+async function handleDeliveryWebhook(
+  payload: DeliveryWebhookPayload,
+  rawBody: string,
+  signature: string | null,
+  eventId: string | null | undefined,
+) {
+  const supabase = await createServiceClient();
+  const { data: channel } = await supabase
+    .from("channels")
+    .select("*")
+    .eq("late_account_id", payload.account?.id ?? "")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!channel) return NextResponse.json({ ok: true, skipped: true, reason: "channel_not_found" });
+
+  const secret = await resolveWebhookSecret(supabase, channel);
+  if (secret && !verifyWebhookSignature(secret, rawBody, signature)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+  if (!(await claimWebhookEvent(supabase, eventId))) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
+  }
+
+  const lateConversationId = payload.message?.conversationId ?? payload.conversation?.id;
+  const platformMessageId = payload.message?.platformMessageId;
+  if (!lateConversationId || !platformMessageId) return NextResponse.json({ ok: true, skipped: true });
+
+  after(async () => {
+    try {
+      await applyDeliveryEvent(supabase, {
+        lateConversationId,
+        platformMessageId,
+        event: payload.event,
+        statusAt: payload.statusAt ?? null,
+        error: payload.error ?? null,
+      });
+    } catch (err) {
+      console.error("Webhook delivery status error:", err);
+    }
+  });
+  return NextResponse.json({ ok: true, queued: true });
 }
 
 // ── Comment webhook ─────────────────────────────────────────────────────────

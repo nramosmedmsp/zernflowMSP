@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import { formatRelative } from "@/lib/format";
@@ -13,6 +13,7 @@ import {
   activeFilterCount,
   availableViews,
   buildRows,
+  filtersForView,
   memberName,
   waitingText,
   type InboxCase,
@@ -25,8 +26,10 @@ import {
 import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
+import { useDraftPreviews } from "./use-drafts";
 
 export function ConversationList({
+  workspaceId,
   conversations,
   casesByContact,
   meta,
@@ -35,7 +38,10 @@ export function ConversationList({
   onSync,
   syncing = false,
   syncError = null,
+  failedConversationIds,
+  headerActions,
 }: {
+  workspaceId: string;
   conversations: InboxConversation[];
   casesByContact: ReadonlyMap<string, InboxCase[]>;
   meta: InboxMeta;
@@ -45,6 +51,10 @@ export function ConversationList({
   onSync?: () => void;
   syncing?: boolean;
   syncError?: string | null;
+  /** Chats con un envío que no salió (bandeja de salida). */
+  failedConversationIds?: ReadonlySet<string>;
+  /** Botones extra en la cabecera (por ejemplo, los avisos). */
+  headerActions?: ReactNode;
 }) {
   const views = availableViews(meta);
   const [view, setView] = useState<InboxViewKey>("mine");
@@ -54,10 +64,11 @@ export function ConversationList({
   // de montar para no provocar errores de hidratación (React #418).
   const now = useNow();
   const nowDate = useMemo(() => (now === null ? new Date() : new Date(now)), [now]);
+  const drafts = useDraftPreviews({ userId: meta.userId, workspaceId });
 
   const rowsByView = useMemo(() => {
     const result = new Map<InboxViewKey, InboxRow[]>();
-    for (const v of views) result.set(v, buildRows(conversations, casesByContact, v, filters, meta, nowDate));
+    for (const v of views) result.set(v, buildRows(conversations, casesByContact, v, filtersForView(filters, v), meta, nowDate));
     return result;
     // `views` se deriva de `meta`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,6 +99,7 @@ export function ConversationList({
           <span className="text-xs text-muted-foreground">
             {rows.length} {rows.length === 1 ? "conversación" : "conversaciones"}
           </span>
+          {headerActions}
           {onSync && (
             <button
               onClick={onSync}
@@ -110,7 +122,10 @@ export function ConversationList({
           return (
             <button
               key={v}
-              onClick={() => setView(v)}
+              onClick={() => {
+                setView(v);
+                setFilters((prev) => filtersForView(prev, v));
+              }}
               className={cn(
                 "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
                 view === v
@@ -358,9 +373,25 @@ export function ConversationList({
                     </p>
                   )}
 
+                  {selectedId !== conversation.id && drafts.has(conversation.id) && (
+                    <p className="mt-0.5 flex min-w-0 items-center gap-1 text-xs">
+                      <span className="shrink-0 font-medium text-primary">Borrador:</span>
+                      <span className="truncate text-muted-foreground">{drafts.get(conversation.id)}</span>
+                    </p>
+                  )}
+
+                  {failedConversationIds?.has(conversation.id) && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-destructive">
+                      <AlertCircle className="h-3 w-3" />
+                      No se envió tu último mensaje
+                    </p>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {conversation.last_message_preview ?? "Aún no hay mensajes"}
+                      {conversation.last_message_preview === null
+                        ? "Aún no hay mensajes"
+                        : conversation.last_message_preview || "Mensaje sin texto"}
                     </p>
                     {conversation.unread_count > 0 && (
                       <span className="ml-2 flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">

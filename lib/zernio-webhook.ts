@@ -17,7 +17,21 @@ import { getWorkspaceSecrets, saveWorkspaceSecrets } from "./workspace-secrets";
 export const WEBHOOK_NAME = "Zernflow";
 
 /** Events Zernflow needs delivered to its webhook. */
-export type WebhookEvent = "message.received" | "comment.received";
+export type WebhookEvent =
+  | "message.received"
+  | "comment.received"
+  | "message.delivered"
+  | "message.read"
+  | "message.failed";
+
+/** Eventos que registra la sincronización de canales (estado de entrega: etapa D de la bandeja). */
+export const ZERNFLOW_WEBHOOK_EVENTS: WebhookEvent[] = [
+  "message.received",
+  "comment.received",
+  "message.delivered",
+  "message.read",
+  "message.failed",
+];
 
 export interface EnsureWebhookOptions {
   /** Public base URL of this Zernflow deployment (e.g. NEXT_PUBLIC_APP_URL). */

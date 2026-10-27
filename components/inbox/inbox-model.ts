@@ -78,6 +78,11 @@ export const EMPTY_FILTERS: InboxFilters = {
   search: "",
 };
 
+/** "Sin gestión" solo existe en la vista Todas: en las demás vistas se quita. */
+export function filtersForView(f: InboxFilters, view: InboxViewKey): InboxFilters {
+  return f.status === "none" && view !== "all" ? { ...f, status: "" } : f;
+}
+
 export function activeFilterCount(f: InboxFilters): number {
   return [f.caseTypeId, f.stageId, f.status, f.assigneeId, f.platform].filter(Boolean).length + (f.waitingOnly ? 1 : 0);
 }
@@ -291,6 +296,25 @@ export function outsideWhatsAppWindow(
   return !Number.isNaN(t) && now - t > WHATSAPP_WINDOW_MS;
 }
 
+/**
+ * Lo que queda de la ventana de 24 horas de WhatsApp: "Quedan 21 h" o
+ * "Quedan 40 min" (urgente en la última hora). null si no aplica o ya cerró.
+ */
+export function whatsAppWindowChip(
+  platform: Platform,
+  lastInboundAt: string | null,
+  now: number,
+): { text: string; urgent: boolean } | null {
+  if (platform !== "whatsapp" || !lastInboundAt) return null;
+  const t = time(lastInboundAt);
+  if (Number.isNaN(t)) return null;
+  const left = WHATSAPP_WINDOW_MS - (now - t);
+  if (left <= 0) return null;
+  const minutes = Math.max(1, Math.ceil(left / 60_000));
+  if (minutes < 60) return { text: `Quedan ${minutes} min`, urgent: true };
+  return { text: `Quedan ${Math.floor(minutes / 60)} h`, urgent: false };
+}
+
 /** El más reciente de dos instantes ISO (o el que exista). */
 export function latestIso(a: string | null | undefined, b: string | null | undefined): string | null {
   const ta = time(a);
@@ -304,6 +328,22 @@ export function latestIso(a: string | null | undefined, b: string | null | undef
 export function memberName(members: readonly InboxMember[], userId: string | null | undefined): string {
   if (!userId) return "Sin asignar";
   return members.find((m) => m.userId === userId)?.name ?? "Otra persona";
+}
+
+/**
+ * Quién envió un mensaje propio: "Tú", el nombre del asesor o "Bot · flujo".
+ * null si no se sabe (por ejemplo, enviado desde otra app).
+ */
+export function messageAuthor(
+  message: { direction: string; sent_by_user_id: string | null; sent_by_flow_id: string | null; flow_name?: string | null },
+  members: readonly InboxMember[],
+  meId: string,
+): string | null {
+  if (message.direction !== "outbound") return null;
+  if (message.sent_by_flow_id) return message.flow_name ? `Bot · ${message.flow_name}` : "Bot";
+  if (!message.sent_by_user_id) return null;
+  if (message.sent_by_user_id === meId) return "Tú";
+  return members.find((m) => m.userId === message.sent_by_user_id)?.name ?? "Otro asesor";
 }
 
 // ── Menciones en notas internas ─────────────────────────────────────────────

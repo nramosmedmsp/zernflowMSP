@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MessageSquare, RefreshCw, User } from "lucide-react";
@@ -15,9 +15,12 @@ import type { InboxCase, InboxConversation, InboxMeta, InboxRow } from "@/compon
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import type { Database } from "@/lib/types/database";
-
-type Message = Database["public"]["Tables"]["messages"]["Row"];
+import { outboxMessages } from "@/lib/inbox-outbox";
+import type { InboxMessage } from "@/lib/inbox-messages";
+import { useOutbox } from "@/components/inbox/use-outbox";
+import { useNewMessageAlerts } from "@/components/inbox/use-new-message-alerts";
+import { AlertSettingsButton } from "@/components/inbox/alert-settings";
+import { useReconnect } from "@/components/inbox/use-reconnect";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -50,8 +53,6 @@ export function InboxView({
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [showContactPanel, setShowContactPanel] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -127,6 +128,27 @@ export function InboxView({
     [syncUrl],
   );
 
+  // Clic en una notificación de Windows: abre ese chat.
+  const openFromAlert = useCallback(
+    (conversationId: string) => {
+      const conversation = conversations.find((c) => c.id === conversationId);
+      if (!conversation) return;
+      setNotice(null);
+      setSelectedId(conversation.id);
+      setActiveCaseId(null);
+      lastParams.current = `${conversation.contact_id}|`;
+      syncUrl(conversation.contact_id, null);
+    },
+    [conversations, syncUrl],
+  );
+  const alerts = useNewMessageAlerts({
+    userId: meta.userId,
+    conversations,
+    casesByContact,
+    selectedId,
+    onOpen: openFromAlert,
+  });
+
   const handleSelectCase = useCallback(
     (caseId: string) => {
       setActiveCaseId(caseId);
@@ -145,49 +167,54 @@ export function InboxView({
     await Promise.all([reloadContactCases(), refreshContactCases(contactId)]);
   }, [contactId, reloadContactCases, refreshContactCases]);
 
-  // Load messages when a conversation is selected
+  // No leídos al abrir el chat: el hilo marca dónde empiezan los nuevos.
   const unread = selected?.unread_count ?? 0;
-  const unreadRef = useRef(unread);
-  unreadRef.current = unread;
+  const [opened, setOpened] = useState<{ id: string | null; unread: number }>({ id: null, unread: 0 });
+  if (opened.id !== selectedId) setOpened({ id: selectedId, unread });
+
+  // Chat abierto y a la vista: sus mensajes quedan leídos, también los que
+  // llegan mientras está abierto o cuando la pestaña vuelve a verse.
   useEffect(() => {
-    if (!selectedId) {
-      setMessages([]);
-      return;
-    }
-    let cancelled = false;
-
-    async function loadMessages(id: string) {
-      setLoadingMessages(true);
-      setMessages([]);
-      try {
-        const res = await fetch(`/api/v1/messages?conversationId=${id}`);
-        if (cancelled) return;
-        if (res.ok) {
-          const json = await res.json();
-          if (!cancelled) setMessages(json ?? []);
-        } else {
-          console.error("Failed to load messages:", res.status);
-          setMessages([]);
-        }
-      } catch (err) {
-        console.error("Failed to load messages:", err);
-        if (!cancelled) setMessages([]);
-      } finally {
-        if (!cancelled) setLoadingMessages(false);
-      }
-
-      // Mark as read
-      if (unreadRef.current > 0) {
-        markConversationRead(id);
-        await createClient().from("conversations").update({ unread_count: 0 }).eq("id", id);
-      }
-    }
-
-    void loadMessages(selectedId);
-    return () => {
-      cancelled = true;
+    if (!selectedId || unread === 0) return;
+    const markRead = () => {
+      if (document.hidden) return;
+      markConversationRead(selectedId);
+      void createClient().from("conversations").update({ unread_count: 0 }).eq("id", selectedId);
     };
-  }, [selectedId, markConversationRead]);
+    markRead();
+    document.addEventListener("visibilitychange", markRead);
+    return () => document.removeEventListener("visibilitychange", markRead);
+  }, [selectedId, unread, markConversationRead]);
+
+  // Envíos: viven aquí para que un fallo después de cambiar de chat no se pierda.
+  const conversationsRef = useRef(conversations);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+  const handleDelivered = useCallback(
+    (conversationId: string) => {
+      const sentTo = conversationsRef.current.find((c) => c.id === conversationId)?.contact_id;
+      if (!sentTo) return;
+      if (sentTo === contactId) void handleCaseChanged();
+      else void refreshContactCases(sentTo);
+    },
+    [contactId, handleCaseChanged, refreshContactCases],
+  );
+  const outbox = useOutbox({ onDelivered: handleDelivered });
+  const { settle } = outbox;
+  const selectedOutbox = useMemo(
+    () => (selectedId ? outboxMessages(outbox.items, selectedId) : []),
+    [outbox.items, selectedId],
+  );
+  const handleServerMessages = useCallback(
+    (serverMessages: InboxMessage[]) => {
+      if (selectedId) settle(selectedId, serverMessages);
+    },
+    [selectedId, settle],
+  );
+
+  // Al volver internet o tras suspender la laptop, la lista se vuelve a pedir.
+  useReconnect(useCallback(() => router.refresh(), [router]));
 
   // Imports conversations that already exist in Zernio (e.g. from before the
   // webhook was registered), then refreshes the server-rendered list.
@@ -222,6 +249,7 @@ export function InboxView({
       {/* Left panel: Conversation list */}
       <div className="w-80 flex-shrink-0">
         <ConversationList
+          workspaceId={workspaceId}
           conversations={conversations}
           casesByContact={casesByContact}
           meta={meta}
@@ -230,6 +258,8 @@ export function InboxView({
           onSync={meta.isAdmin ? handleSyncConversations : undefined}
           syncing={syncing}
           syncError={conversations.length > 0 ? syncError : null}
+          failedConversationIds={outbox.failedIds}
+          headerActions={<AlertSettingsButton settings={alerts.settings} onChange={alerts.update} />}
         />
       </div>
 
@@ -291,9 +321,20 @@ export function InboxView({
             </div>
           ) : (
             <MessageThread
+              key={selected?.id ?? "none"}
               conversation={selected}
-              messages={messages}
-              loading={loadingMessages}
+              outbox={selectedOutbox}
+              initialUnread={opened.unread}
+              onSend={(text, attachments) =>
+                selected &&
+                outbox.send(
+                  { id: selected.id, contactName: selected.contacts?.display_name ?? null, platform: selected.platform },
+                  text,
+                  attachments,
+                )
+              }
+              onRetry={(clientId) => void outbox.retry(clientId)}
+              onServerMessages={handleServerMessages}
               caseSlot={
                 selected ? (
                   casesData ? (

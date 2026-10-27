@@ -55,8 +55,8 @@ function seed(lateAccountId: string) {
   return { db, conversation };
 }
 
-function get(conversationId: string) {
-  return GET(new NextRequest(`http://localhost/api/v1/messages?conversationId=${conversationId}`));
+function get(conversationId: string, extra = "") {
+  return GET(new NextRequest(`http://localhost/api/v1/messages?conversationId=${conversationId}${extra}`));
 }
 
 function post(body: unknown) {
@@ -84,12 +84,41 @@ describe("GET /api/v1/messages en canal de prueba", () => {
     ]);
     const res = await get(conversation.id as string);
     expect(res.status).toBe(200);
-    const json = (await res.json()) as Array<Record<string, unknown>>;
-    expect(json.map((m) => m.text)).toEqual(["primero", "segundo"]);
-    expect(json[0]).toMatchObject({ conversation_id: conversation.id, direction: "inbound", status: "sent" });
+    const json = (await res.json()) as { messages: Array<Record<string, unknown>>; hasMore: boolean; olderCursor: string | null };
+    expect(json.messages.map((m) => m.text)).toEqual(["primero", "segundo"]);
+    expect(json.messages[0]).toMatchObject({ conversation_id: conversation.id, direction: "inbound", status: "sent", error: null });
     for (const key of ["id", "conversation_id", "direction", "text", "status", "created_at"]) {
-      expect(Object.keys(json[0])).toContain(key);
+      expect(Object.keys(json.messages[0])).toContain(key);
     }
+    expect(json).toMatchObject({ hasMore: false, olderCursor: null });
+  });
+
+  it("pagina de los más nuevos a los más antiguos con el cursor", async () => {
+    const { db, conversation } = seed("demo-whatsapp-001");
+    db.seed(
+      "messages",
+      [1, 2, 3, 4, 5].map((n) => ({
+        conversation_id: conversation.id,
+        direction: "inbound",
+        text: `m${n}`,
+        status: "sent",
+        created_at: `2026-10-18T10:0${n}:00.000Z`,
+      })),
+    );
+    const first = (await (await get(conversation.id as string, "&limit=2")).json()) as {
+      messages: Array<{ text: string }>;
+      hasMore: boolean;
+      olderCursor: string;
+    };
+    expect(first.messages.map((m) => m.text)).toEqual(["m4", "m5"]);
+    expect(first.hasMore).toBe(true);
+
+    const second = (await (await get(conversation.id as string, `&limit=2&cursor=${encodeURIComponent(first.olderCursor)}`)).json()) as {
+      messages: Array<{ text: string }>;
+      hasMore: boolean;
+    };
+    expect(second.messages.map((m) => m.text)).toEqual(["m2", "m3"]);
+    expect(second.hasMore).toBe(true);
   });
 
   it("sin sesión responde 401", async () => {
@@ -139,6 +168,7 @@ describe("POST /api/v1/messages en canal de prueba", () => {
   it("valida el cuerpo y la sesión", async () => {
     const { conversation } = seed("demo-whatsapp-001");
     expect((await post({ conversationId: conversation.id })).status).toBe(400);
+    expect((await post({ conversationId: conversation.id, text: "Hola", clientMessageId: "no-es-uuid" })).status).toBe(400);
     state.user = null;
     expect((await post({ conversationId: conversation.id, text: "Hola" })).status).toBe(401);
   });
