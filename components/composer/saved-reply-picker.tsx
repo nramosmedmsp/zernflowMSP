@@ -2,10 +2,27 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Loader2, MessageSquareText, Settings2 } from "lucide-react";
+import { FileText, Image as ImageIcon, Loader2, MessageSquareText, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { listSavedReplies, type SavedReplyView } from "@/lib/actions/saved-replies";
 import { applyReplyVariables, applyReplyVariablesDetailed, searchSavedReplies } from "@/lib/saved-replies";
+import { formatRelative } from "@/lib/format";
+
+/** Lo que entrega el selector al elegir una respuesta. */
+export interface PickedReply {
+  text: string;
+  /** Variables que quedaron sin dato (para avisar). */
+  empty: string[];
+  /** Archivo de la respuesta (foto o PDF), si tiene. */
+  attachment: { replyId: string; path: string; name: string; mime: string; size: number | null } | null;
+}
+
+/** "Actualizada hace 3 días", "Actualizada ayer", "Actualizada el 16 oct 2026". */
+export function updatedLabel(iso: string, now = new Date()): string {
+  const rel = formatRelative(iso, now);
+  if (!rel) return "";
+  return /^(hace|ayer|ahora)/.test(rel) ? `Actualizada ${rel}` : `Actualizada el ${rel}`;
+}
 
 export interface SavedReplyPickerProps {
   open: boolean;
@@ -13,9 +30,9 @@ export interface SavedReplyPickerProps {
   query: string;
   /**
    * Recibe el texto con las variables ya reemplazadas, para pegarlo en la caja,
-   * y las variables que quedaron sin dato (para avisar).
+   * las variables que quedaron sin dato (para avisar) y el archivo, si tiene.
    */
-  onSelect: (result: { text: string; empty: string[] }) => void;
+  onSelect: (result: PickedReply) => void;
   onClose: () => void;
   context: {
     contactName?: string;
@@ -107,9 +124,11 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
   const { contactName, agentName, teamName, workspaceName, customFields } = context;
   const choose = useCallback(
     (reply: SavedReplyView) => {
-      onSelect(
-        applyReplyVariablesDetailed(reply.body, { contactName, agentName, teamName, workspaceName, customFields, now: new Date() }),
-      );
+      const filled = applyReplyVariablesDetailed(reply.body, { contactName, agentName, teamName, workspaceName, customFields, now: new Date() });
+      onSelect({
+        ...filled,
+        attachment: reply.attachment ? { replyId: reply.id, ...reply.attachment } : null,
+      });
     },
     [onSelect, contactName, agentName, teamName, workspaceName, customFields],
   );
@@ -209,9 +228,22 @@ export function SavedReplyPicker({ open, query, onSelect, onClose, context }: Sa
                     {reply.scope === "team" && reply.teamName ? reply.teamName : SCOPE_LABELS[reply.scope]}
                   </span>
                 </div>
-                <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">
-                  {applyReplyVariables(reply.body, { contactName, agentName, teamName, workspaceName, customFields })}
-                </p>
+                {reply.body && (
+                  <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">
+                    {applyReplyVariables(reply.body, { contactName, agentName, teamName, workspaceName, customFields })}
+                  </p>
+                )}
+                {reply.attachment && (
+                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                    {reply.attachment.mime.startsWith("image/") ? (
+                      <ImageIcon className="h-3 w-3 shrink-0" />
+                    ) : (
+                      <FileText className="h-3 w-3 shrink-0 text-red-500" />
+                    )}
+                    <span className="truncate">{reply.attachment.name}</span>
+                    <span className="shrink-0">· {updatedLabel(reply.updatedAt)}</span>
+                  </p>
+                )}
               </li>
             );
           })}

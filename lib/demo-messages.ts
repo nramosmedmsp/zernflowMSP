@@ -2,7 +2,7 @@
 // envío que iría a Zernio se guarda en `messages` con el cliente de servicio y
 // actualiza la vista previa de la conversación. Sin llamadas de red.
 
-import { messagePreview } from "@/lib/message-preview";
+import { inboundPreview } from "@/lib/message-preview";
 import type { Db } from "@/lib/cases/io";
 import { phoneDigits } from "@/lib/whatsapp-templates";
 
@@ -15,6 +15,8 @@ export interface DemoMessageInput {
   sentByFlowId?: string | null;
   /** Actualiza last_message_at y la vista previa de la conversación (por defecto sí). */
   touchConversation?: boolean;
+  /** Adjuntos (solo el tipo; el archivo queda en message_media). */
+  attachments?: Array<{ type: string }> | null;
 }
 
 export type DemoStoreResult = { ok: true; messageId: string; createdAt: string } | { ok: false; error: string };
@@ -27,7 +29,8 @@ export async function storeDemoMessage(db: Db, input: DemoMessageInput): Promise
     .insert({
       conversation_id: input.conversationId,
       direction: input.direction,
-      text: input.text,
+      text: input.text || null,
+      attachments: input.attachments?.length ? input.attachments : null,
       platform_message_id: `demo-${crypto.randomUUID()}`,
       sent_by_user_id: input.sentByUserId ?? null,
       sent_by_flow_id: input.sentByFlowId ?? null,
@@ -41,7 +44,7 @@ export async function storeDemoMessage(db: Db, input: DemoMessageInput): Promise
   if (input.touchConversation !== false) {
     await db
       .from("conversations")
-      .update({ last_message_at: at, last_message_preview: messagePreview(input.text) })
+      .update({ last_message_at: at, last_message_preview: inboundPreview({ text: input.text, attachments: input.attachments }) })
       .eq("id", input.conversationId);
   }
   return { ok: true, messageId: data.id, createdAt: at };

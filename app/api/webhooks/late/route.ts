@@ -8,6 +8,11 @@ import type { Database } from "@/lib/types/database";
 import { inboundPreview } from "@/lib/message-preview";
 import { runInboundPipeline } from "@/lib/inbound-pipeline";
 import { recordInboundConversation } from "@/lib/inbound-conversation";
+import { storeInboundMedia, type InboundAttachmentInput } from "@/lib/media-store";
+import { getLateApiKey } from "@/lib/workspace-secrets";
+
+// Copiar fotos y PDF que llegan puede tardar más que lo normal (hasta 25 MB).
+export const maxDuration = 60;
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -21,7 +26,7 @@ interface WebhookPayload {
     platformMessageId: string;
     direction: string;
     text: string | null;
-    attachments: Array<{ type: string; url: string; payload?: unknown }>;
+    attachments: Array<{ type: string; url: string; filename?: string | null; payload?: unknown }>;
     /** Instagram: respuesta o mención de una historia (si Zernio lo manda). */
     storyReply?: unknown;
     isStoryMention?: boolean | null;
@@ -251,10 +256,12 @@ async function processMessageEvent(
   }
 
   // Messages are stored by Zernio (source of truth) — no local insert needed.
+  // Sus archivos sí se copian: WhatsApp los borra a los pocos días.
+  const media = copyInboundMedia(supabase, payload, channel.workspace_id, conversation.id);
 
   // Gestiones y flujos (lib/inbound-pipeline.ts, compartido con la simulación
   // de mensajes de los canales de prueba).
-  await runInboundPipeline(supabase, {
+  const pipeline = runInboundPipeline(supabase, {
     channel,
     contactId,
     conversation,
@@ -268,6 +275,39 @@ async function processMessageEvent(
     },
     lateConversationId: conv.id,
     lateAccountId: account.id,
+  });
+
+  const [mediaResult, pipelineResult] = await Promise.allSettled([media, pipeline]);
+  if (mediaResult.status === "rejected") console.error("Webhook media copy error:", mediaResult.reason);
+  if (pipelineResult.status === "rejected") throw pipelineResult.reason;
+}
+
+/** Nombre del archivo que mandó el cliente, si Zernio lo incluye. */
+function attachmentFileName(att: WebhookPayload["message"]["attachments"][number]): string | null {
+  if (typeof att.filename === "string") return att.filename;
+  const payload = att.payload as { filename?: unknown } | null | undefined;
+  return typeof payload?.filename === "string" ? payload.filename : null;
+}
+
+async function copyInboundMedia(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  payload: WebhookPayload,
+  workspaceId: string,
+  conversationId: string,
+): Promise<void> {
+  const { message: msg } = payload;
+  if (!Array.isArray(msg.attachments) || msg.attachments.length === 0 || !msg.platformMessageId) return;
+  const attachments: InboundAttachmentInput[] = msg.attachments.map((att) => ({
+    type: att.type,
+    url: att.url,
+    filename: attachmentFileName(att),
+  }));
+  await storeInboundMedia(supabase, {
+    workspaceId,
+    conversationId,
+    platformMessageId: msg.platformMessageId,
+    attachments,
+    apiKey: await getLateApiKey(workspaceId, supabase),
   });
 }
 

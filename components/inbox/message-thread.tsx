@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { Paperclip, Bot, BotOff, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
+import { Bot, BotOff, Paperclip, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -12,6 +12,7 @@ import { formatDate, formatPhoneDisplay, formatRelative, formatTime } from "@/li
 import { platformLabel } from "@/lib/platforms";
 import { linkify } from "@/lib/linkify";
 import type { InboxMessage } from "@/lib/inbox-messages";
+import type { OutboxAttachment } from "@/lib/inbox-outbox";
 import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
 import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
@@ -21,6 +22,8 @@ import { latestIso, memberName, waitingText, type InboxConversation, type InboxM
 import type { CaseNote } from "./use-case-notes";
 import { useThreadMessages } from "./use-thread-messages";
 import { useNow } from "./use-now";
+import { MessageMedia } from "./message-media";
+import { MediaLightbox, type LightboxImage } from "./media-lightbox";
 
 type TimelineItem =
   | { kind: "message"; at: string; message: InboxMessage }
@@ -54,8 +57,19 @@ function MessageText({ text }: { text: string }) {
   );
 }
 
-function MessageBubble({ message, onRetry }: { message: InboxMessage; onRetry?: (clientId: string) => void }) {
+function MessageBubble({
+  message,
+  onRetry,
+  onOpenImage,
+}: {
+  message: InboxMessage;
+  onRetry?: (clientId: string) => void;
+  onOpenImage: (image: LightboxImage) => void;
+}) {
   const isInbound = message.direction === "inbound";
+  const media = message.media ?? [];
+  // Archivos sin el detalle de la bandeja (envíos del bot o canales de prueba).
+  const bareAttachment = media.length === 0 && Array.isArray(message.attachments) && message.attachments.length > 0;
   const isBot = message.sent_by_flow_id !== null;
   // Envíos de la bandeja que aún no llegan a la lista de Zernio (lib/inbox-outbox.ts).
   const outboxId = message.id.startsWith("outbox-") ? message.id.slice("outbox-".length) : null;
@@ -80,7 +94,8 @@ function MessageBubble({ message, onRetry }: { message: InboxMessage; onRetry?: 
       <div className="min-w-0 max-w-[70%]">
         <div
           className={cn(
-            "rounded-2xl px-4 py-2 text-sm",
+            "rounded-2xl text-sm",
+            media.length > 0 ? "p-1" : "px-4 py-2",
             isInbound
               ? "rounded-tl-md bg-muted text-foreground"
               : "rounded-tr-md bg-primary text-primary-foreground",
@@ -89,16 +104,27 @@ function MessageBubble({ message, onRetry }: { message: InboxMessage; onRetry?: 
           )}
         >
           {message.story && (
-            <p className={cn("mb-0.5 flex items-center gap-1 text-[11px] font-medium", isInbound ? "text-muted-foreground" : "opacity-80")}>
+            <p
+              className={cn(
+                "mb-0.5 flex items-center gap-1 text-[11px] font-medium",
+                isInbound ? "text-muted-foreground" : "opacity-80",
+                media.length > 0 && "px-3 pt-1",
+              )}
+            >
               <Reply className="h-3 w-3" />
               {message.story === "mention" ? "Te mencionó en su historia" : "Respondió a tu historia"}
             </p>
           )}
-          {message.text && <MessageText text={message.text} />}
-          {message.attachments && (
-            <div className="mt-1">
-              <Paperclip className="inline h-3 w-3" />
-              <span className="ml-1 text-xs opacity-70">Archivo adjunto</span>
+          {media.length > 0 && <MessageMedia media={media} inbound={isInbound} onOpenImage={onOpenImage} />}
+          {message.text && (
+            <div className={cn(media.length > 0 && "px-3 pb-1 pt-1.5")}>
+              <MessageText text={message.text} />
+            </div>
+          )}
+          {bareAttachment && (
+            <div className={cn("flex items-center gap-1 text-xs opacity-70", message.text && "mt-1")}>
+              <Paperclip className="h-3 w-3" />
+              Archivo adjunto
             </div>
           )}
         </div>
@@ -234,7 +260,7 @@ export function MessageThread({
   outbox?: InboxMessage[];
   /** No leídos al abrir el chat: marca dónde empiezan los mensajes nuevos. */
   initialUnread?: number;
-  onSend?: (text: string) => void;
+  onSend?: (text: string, attachments: OutboxAttachment[]) => void;
   onRetry?: (clientId: string) => void;
   /** Llegó la lista del servidor: la bandeja de salida quita lo que ya aparece. */
   onServerMessages?: (messages: InboxMessage[]) => void;
@@ -257,6 +283,8 @@ export function MessageThread({
 }) {
   const toast = useToast();
   const [simulateOpen, setSimulateOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
+  const closeLightbox = useCallback(() => setLightbox(null), []);
   const conversationId = conversation?.id ?? null;
   const thread = useThreadMessages(conversationId);
   const serverMessages = thread.messages;
@@ -589,7 +617,7 @@ export function MessageThread({
                       </div>
                     )}
                     {item.kind === "message" ? (
-                      <MessageBubble message={item.message} onRetry={onRetry} />
+                      <MessageBubble message={item.message} onRetry={onRetry} onOpenImage={setLightbox} />
                     ) : (
                       <NoteBubble note={item.note} members={members} />
                     )}
@@ -613,6 +641,8 @@ export function MessageThread({
         )}
       </div>
 
+      <MediaLightbox image={lightbox} onClose={closeLightbox} />
+
       {isDemo && canSimulate && (
         <SimulateInboundDialog
           open={simulateOpen}
@@ -635,7 +665,7 @@ export function MessageThread({
         me={me}
         teamName={teamName}
         workspaceName={workspaceName}
-        onSendMessage={(text) => onSend?.(text)}
+        onSendMessage={(text, attachments) => onSend?.(text, attachments)}
         onNoteAdded={(note) => onNoteAdded?.(note)}
         onTemplateSent={() => {
           void thread.refresh();

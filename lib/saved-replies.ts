@@ -266,6 +266,8 @@ export interface SavedReplyInput {
   shortcut?: string | null;
   body: string;
   caseTypeId?: string | null;
+  /** Con archivo (foto o PDF) el texto es opcional. */
+  hasAttachment?: boolean;
 }
 
 export type SavedReplyValidation =
@@ -279,7 +281,7 @@ export function validateSavedReplyInput(input: SavedReplyInput): SavedReplyValid
     return { ok: false, error: `El título puede tener hasta ${SAVED_REPLY_TITLE_MAX} caracteres.` };
   }
   const body = (input.body ?? "").trim();
-  if (!body) return { ok: false, error: "Escribe el texto de la respuesta." };
+  if (!body && !input.hasAttachment) return { ok: false, error: "Escribe el texto de la respuesta o adjunta un archivo." };
   if (body.length > SAVED_REPLY_BODY_MAX) {
     return { ok: false, error: `El texto puede tener hasta ${SAVED_REPLY_BODY_MAX} caracteres.` };
   }

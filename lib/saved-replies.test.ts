@@ -163,6 +163,13 @@ describe("validateSavedReplyInput", () => {
     expect(validateSavedReplyInput({ title: "x", body: "  " }).ok).toBe(false);
   });
 
+  it("con archivo, el texto es opcional", () => {
+    expect(validateSavedReplyInput({ title: "Lista de precios", body: " ", hasAttachment: true })).toMatchObject({
+      ok: true,
+      value: { body: "" },
+    });
+  });
+
   it("limita el tamaño", () => {
     expect(validateSavedReplyInput({ title: "x".repeat(201), body: "x" }).ok).toBe(false);
     expect(validateSavedReplyInput({ title: "x", body: "x".repeat(4001) }).ok).toBe(false);

@@ -301,7 +301,14 @@ export function InboxView({
               conversation={selected}
               outbox={selectedOutbox}
               initialUnread={opened.unread}
-              onSend={(text) => selected && outbox.send({ id: selected.id, contactName: selected.contacts?.display_name ?? null }, text)}
+              onSend={(text, attachments) =>
+                selected &&
+                outbox.send(
+                  { id: selected.id, contactName: selected.contacts?.display_name ?? null, platform: selected.platform },
+                  text,
+                  attachments,
+                )
+              }
               onRetry={(clientId) => void outbox.retry(clientId)}
               onServerMessages={handleServerMessages}
               caseSlot={

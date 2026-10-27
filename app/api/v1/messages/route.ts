@@ -2,21 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { handleHumanOutboundForConversation } from "@/lib/cases";
 import { createZernioClient } from "@/lib/zernio-client";
-import { messagePreview } from "@/lib/message-preview";
+import { inboundPreview } from "@/lib/message-preview";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { isDemoChannel } from "@/lib/demo";
 import { storeDemoMessage } from "@/lib/demo-messages";
 import { zernioErrorMessage, zernioFailed } from "../templates/zernio-error";
 import {
+  attachMedia,
   fromLocalMessage,
   mapZernioMessage,
   pageLimit,
   sortMessages,
+  type InboxMedia,
   type InboxMessage,
+  type MediaRow,
   type MessagesPage,
   type ZernioListMessage,
 } from "@/lib/inbox-messages";
 import type { Database } from "@/lib/types/database";
+import { zernioAttachmentType } from "@/lib/chat-media";
+import { prepareOutgoingMedia, type OutgoingMedia } from "@/lib/media-store";
 
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 
@@ -68,8 +73,9 @@ export async function GET(request: NextRequest) {
     const list = (rows ?? []) as MessageRow[];
     const hasMore = list.length > limit;
     const page = list.slice(0, limit);
+    const local = sortMessages(page.map(fromLocalMessage));
     const result: MessagesPage = {
-      messages: sortMessages(page.map(fromLocalMessage)),
+      messages: await withMedia(supabase, local, conversationId),
       olderCursor: hasMore ? page[page.length - 1].created_at : null,
       hasMore,
     };
@@ -121,7 +127,11 @@ export async function GET(request: NextRequest) {
 
     const nextCursor = data?.pagination?.nextCursor ?? null;
     const hasMore = !!data?.pagination?.hasMore && !!nextCursor;
-    const page: MessagesPage = { messages: sortMessages(messages), olderCursor: hasMore ? nextCursor : null, hasMore };
+    const page: MessagesPage = {
+      messages: await withMedia(supabase, sortMessages(messages), conversationId),
+      olderCursor: hasMore ? nextCursor : null,
+      hasMore,
+    };
     return NextResponse.json(page);
   } catch (error) {
     console.error("Failed to fetch messages from Zernio API:", error);
@@ -146,11 +156,14 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const body = await request.json();
-  const { conversationId, text, clientMessageId } = body;
+  const { conversationId, clientMessageId } = body;
+  const text: string = typeof body.text === "string" ? body.text : "";
+  // Archivo ya subido al bucket (POST /api/v1/media/upload-url) o de una respuesta guardada.
+  const attachment = body.attachment as { path?: unknown; name?: unknown } | undefined;
 
-  if (!conversationId || !text) {
+  if (!conversationId || (!text.trim() && !attachment)) {
     return NextResponse.json(
-      { error: "Faltan el ID de la conversación y el texto" },
+      { error: "Faltan el ID de la conversación y el texto o el archivo" },
       { status: 400 }
     );
   }
@@ -171,8 +184,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se encontró la conversación" }, { status: 404 });
   }
 
+  let media: OutgoingMedia | null = null;
+  if (attachment) {
+    const prepared = await prepareOutgoingMedia(supabase, await createServiceClient(), {
+      conversation,
+      path: attachment.path,
+      name: attachment.name,
+    });
+    if ("error" in prepared) return NextResponse.json({ error: prepared.error }, { status: 400 });
+    media = prepared;
+  }
+
   if (isDemoChannel(conversation.channels as { late_account_id: string } | null)) {
-    return sendDemoMessage({ conversationId, text, userId: user.id });
+    return sendDemoMessage({ conversationId, workspaceId: conversation.workspace_id, text, media, userId: user.id });
   }
 
   if (!conversation.late_conversation_id) {
@@ -199,7 +223,17 @@ export async function POST(request: NextRequest) {
     const zernio = createZernioClient(lateApiKey);
     const res = await zernio.messages.sendInboxMessage({
       path: { conversationId: conversation.late_conversation_id },
-      body: { accountId: channel.late_account_id, message: text },
+      body: {
+        accountId: channel.late_account_id,
+        ...(text.trim() ? { message: text } : {}),
+        ...(media
+          ? {
+              attachmentUrl: media.url,
+              attachmentType: zernioAttachmentType(media.kind),
+              ...(media.kind === "file" ? { attachmentName: media.name } : {}),
+            }
+          : {}),
+      },
       ...(clientMessageId ? { headers: { "Idempotency-Key": clientMessageId } } : {}),
     });
 
@@ -223,12 +257,15 @@ export async function POST(request: NextRequest) {
 
     const messageId = (res.data as any)?.data?.messageId ?? null;
 
+    // El archivo enviado queda registrado para verlo en el chat (2 meses).
+    const mediaView = media && messageId ? await recordOutgoingMedia(conversation, messageId, media, user.id) : null;
+
     // Update conversation's last message info (ZernFlow-specific metadata)
     await supabase
       .from("conversations")
       .update({
         last_message_at: new Date().toISOString(),
-        last_message_preview: messagePreview(text),
+        last_message_preview: inboundPreview({ text, attachments: media ? [{ type: media.kind }] : null }),
       })
       .eq("id", conversationId);
 
@@ -251,7 +288,7 @@ export async function POST(request: NextRequest) {
         id: messageId ?? `sent-${Date.now()}`,
         conversation_id: conversationId,
         direction: "outbound",
-        text,
+        text: text || null,
         attachments: null,
         quick_reply_payload: null,
         postback_payload: null,
@@ -263,6 +300,7 @@ export async function POST(request: NextRequest) {
         status: "sent",
         error: null,
         story: null,
+        media: mediaView ? [mediaView] : null,
         created_at: new Date().toISOString(),
       } satisfies InboxMessage,
       { status: 201 }
@@ -277,7 +315,13 @@ export async function POST(request: NextRequest) {
 }
 
 /** Envío en canal de prueba: guarda el saliente y corre el motor como un envío real. */
-async function sendDemoMessage(params: { conversationId: string; text: string; userId: string }) {
+async function sendDemoMessage(params: {
+  conversationId: string;
+  workspaceId: string;
+  text: string;
+  media: OutgoingMedia | null;
+  userId: string;
+}) {
   const service = await createServiceClient();
   const at = new Date().toISOString();
   const stored = await storeDemoMessage(service, {
@@ -286,11 +330,15 @@ async function sendDemoMessage(params: { conversationId: string; text: string; u
     text: params.text,
     at,
     sentByUserId: params.userId,
+    attachments: params.media ? [{ type: params.media.kind }] : null,
   });
   if (!stored.ok) {
     console.error("[messages] demo store:", stored.error);
     return NextResponse.json({ error: "No se pudo guardar el mensaje de prueba" }, { status: 500 });
   }
+  const mediaView = params.media
+    ? await recordOutgoingMedia({ id: params.conversationId, workspace_id: params.workspaceId }, stored.messageId, params.media, params.userId)
+    : null;
 
   // Igual que un envío real: sella la gestión, registra la primera respuesta y pausa el bot.
   try {
@@ -308,7 +356,7 @@ async function sendDemoMessage(params: { conversationId: string; text: string; u
       id: stored.messageId,
       conversation_id: params.conversationId,
       direction: "outbound",
-      text: params.text,
+      text: params.text || null,
       attachments: null,
       quick_reply_payload: null,
       postback_payload: null,
@@ -320,8 +368,70 @@ async function sendDemoMessage(params: { conversationId: string; text: string; u
       status: "sent",
       error: null,
       story: null,
+      media: mediaView ? [mediaView] : null,
       created_at: at,
     } satisfies InboxMessage,
     { status: 201 }
   );
+}
+
+/** Registra el archivo enviado (message_media) y devuelve cómo mostrarlo. */
+async function recordOutgoingMedia(
+  conversation: { id: string; workspace_id: string },
+  messageId: string,
+  media: OutgoingMedia,
+  userId: string,
+): Promise<InboxMedia | null> {
+  const service = await createServiceClient();
+  const { data, error } = await service
+    .from("message_media")
+    .insert({
+      workspace_id: conversation.workspace_id,
+      conversation_id: conversation.id,
+      platform_message_id: messageId,
+      attachment_index: 0,
+      direction: "outbound",
+      kind: media.kind,
+      storage_path: media.path,
+      mime_type: media.mime,
+      file_name: media.name,
+      size_bytes: media.size,
+      status: "stored",
+      uploaded_by: userId,
+    })
+    .select("id")
+    .single();
+  let id = data?.id ?? null;
+  // Reintento con la misma Idempotency-Key: Zernio repite el mismo id y la fila ya existe.
+  if (error?.code === "23505") {
+    const { data: existing } = await service
+      .from("message_media")
+      .select("id")
+      .eq("conversation_id", conversation.id)
+      .eq("platform_message_id", messageId)
+      .eq("attachment_index", 0)
+      .maybeSingle();
+    id = existing?.id ?? null;
+  } else if (error) {
+    console.error("[messages] message_media:", error.message);
+  }
+  if (!id) return null;
+  return { kind: media.kind, name: media.name, mime: media.mime, size: media.size, status: "stored", url: `/api/v1/media/${id}` };
+}
+
+/** Une los mensajes con sus archivos guardados (RLS de message_media). */
+async function withMedia(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  messages: InboxMessage[],
+  conversationId: string,
+): Promise<InboxMessage[]> {
+  const ids = messages.map((m) => m.id);
+  if (ids.length === 0) return messages;
+  const { data, error } = await supabase
+    .from("message_media")
+    .select("id, platform_message_id, attachment_index, kind, file_name, mime_type, size_bytes, status")
+    .eq("conversation_id", conversationId)
+    .in("platform_message_id", ids);
+  if (error) console.error("[messages] message_media:", error.message);
+  return attachMedia(messages, (data ?? []) as MediaRow[], { conversationId });
 }

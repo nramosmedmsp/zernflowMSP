@@ -2,12 +2,13 @@
 
 // Caja de texto del chat: mensajes al cliente o notas internas (interruptor
 // "Nota interna"), menciones con @, respuestas guardadas con / (en cualquier
-// parte del texto o con el botón Respuestas), borradores por chat, corrector
-// del navegador y revisión al enviar, cuenta regresiva de la ventana de 24 horas
-// de WhatsApp y bloqueo fuera de ella con "Usar plantilla".
+// parte del texto o con el botón Respuestas), fotos y PDF (botón Adjuntar,
+// arrastrar o pegar), borradores por chat, corrector del navegador y revisión
+// al enviar, cuenta regresiva de la ventana de 24 horas de WhatsApp y bloqueo
+// fuera de ella con "Usar plantilla".
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Check, FileText, Loader2, Lock, Send, StickyNote, Timer, Zap } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { Check, FileText, Loader2, Lock, Paperclip, Send, StickyNote, Timer, Zap } from "lucide-react";
 import { addCaseNote, type CaseView } from "@/lib/actions/cases";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -16,8 +17,10 @@ import { firstName } from "@/lib/names";
 import { readDraft, writeDraft, type DraftMode } from "@/lib/drafts";
 import { replaceRange, slashQueryAt } from "@/lib/saved-replies";
 import { applySuggestions, reviewOutgoing, type Suggestion } from "@/lib/send-review";
+import { acceptFor, canSendAttachments } from "@/lib/chat-media";
+import type { OutboxAttachment } from "@/lib/inbox-outbox";
 import { useToast } from "@/components/ui/toast";
-import { SavedReplyPicker } from "@/components/composer/saved-reply-picker";
+import { SavedReplyPicker, type PickedReply } from "@/components/composer/saved-reply-picker";
 import { TemplatePicker } from "@/components/composer/template-picker";
 import {
   filterMembers,
@@ -32,6 +35,8 @@ import type { CaseNote } from "./use-case-notes";
 import { draftStorage, notifyDraftsChanged } from "./use-drafts";
 import { useNow } from "./use-now";
 import { SendReviewPopover } from "./send-review-popover";
+import { AttachmentTray } from "./attachment-tray";
+import { useAttachments } from "./use-attachments";
 
 const REVIEW_OFF_KEY = "zf:send-review:off:";
 
@@ -75,7 +80,7 @@ export function Composer({
   me: { userId: string; name: string };
   teamName: string | null;
   workspaceName: string;
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string, attachments: OutboxAttachment[]) => void;
   onNoteAdded: (note: CaseNote) => void;
   onTemplateSent: () => void;
 }) {
@@ -97,9 +102,14 @@ export function Composer({
   const [customFields, setCustomFields] = useState<Record<string, string>>({});
   const [review, setReview] = useState<Review | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const now = useNow();
   const toast = useToast();
+  const showError = useCallback((message: string) => toast.error(message), [toast]);
+  const attachments = useAttachments(conversation.platform, showError);
+  const canAttach = canSendAttachments(conversation.platform);
 
   const mode: DraftMode = noteMode ? "note" : "message";
   const input = texts[mode];
@@ -210,7 +220,9 @@ export function Composer({
   }
 
   /** Pega la respuesta en lugar de "/búsqueda", sin borrar el resto del texto. */
-  function pickReply({ text, empty }: { text: string; empty: string[] }) {
+  function pickReply({ text, empty, attachment }: PickedReply) {
+    // El archivo de la respuesta queda listo para salir (solo en mensajes).
+    if (attachment && !noteMode) attachments.addReplyFile(attachment);
     const caret = textareaRef.current?.selectionStart ?? input.length;
     const start = slash?.start ?? caret;
     const { value, caret: pos } = replaceRange(input, start, Math.max(start, caret), text);
@@ -243,20 +255,23 @@ export function Composer({
     setReview(null);
     setWarning(null);
     setSlash(null);
-    onSendMessage(text);
+    onSendMessage(text, attachments.take());
     textareaRef.current?.focus();
   }
 
+  const hasFiles = !noteMode && attachments.items.length > 0;
+  const canSubmit = (!!input.trim() || hasFiles) && !savingNote && !(hasFiles && attachments.preparing);
+
   async function handleSubmit() {
     const text = input.trim();
-    if (!text) return;
+    if (!canSubmit) return;
     setError(null);
     setWarning(null);
 
     if (!noteMode) {
       if (blocked) return;
       // Revisión al enviar: solo aparece si encuentra algo (lib/send-review.ts).
-      if (!reviewDisabled(me.userId)) {
+      if (text && !reviewDisabled(me.userId)) {
         const result = reviewOutgoing(text);
         if (result.suggestions.length > 0 || result.unresolved.length > 0) {
           setReview({ text, ...result, chosen: new Set(result.suggestions.map((s) => s.id)) });
@@ -267,7 +282,7 @@ export function Composer({
       return;
     }
 
-    if (!noteCase || savingNote) return;
+    if (!noteCase || savingNote || !text) return;
     setSavingNote(true);
     try {
       const mentions = mentionedIds(text, picked);
@@ -304,6 +319,22 @@ export function Composer({
     } finally {
       setSavingNote(false);
     }
+  }
+
+  const acceptsFiles = canAttach && !noteMode;
+
+  function addFiles(list: FileList | File[] | null | undefined) {
+    const files = Array.from(list ?? []);
+    if (files.length === 0) return;
+    if (!acceptsFiles) {
+      toast.error(noteMode ? "Las notas internas no llevan archivos." : "Este canal no permite enviar archivos.");
+      return;
+    }
+    void attachments.add(files);
+  }
+
+  function hasDraggedFiles(e: DragEvent) {
+    return Array.from(e.dataTransfer.types).includes("Files");
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -404,7 +435,28 @@ export function Composer({
   }
 
   return (
-    <div className={cn("border-t border-border p-4", noteMode && "bg-amber-50/60 dark:bg-amber-950/20")}>
+    <div
+      className={cn("relative border-t border-border p-4", noteMode && "bg-amber-50/60 dark:bg-amber-950/20")}
+      onDragOver={(e) => {
+        if (!acceptsFiles || !hasDraggedFiles(e)) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!acceptsFiles || !hasDraggedFiles(e)) return;
+        e.preventDefault();
+        setDragging(false);
+        addFiles(e.dataTransfer.files);
+      }}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/5 text-sm font-medium text-primary">
+          Suelta aquí la foto o el PDF
+        </div>
+      )}
       <div className="mx-auto max-w-2xl space-y-2">
         <div className="flex items-center justify-between">
           <label
@@ -463,6 +515,10 @@ export function Composer({
             )
           )}
         </div>
+
+        {!noteMode && (
+          <AttachmentTray items={attachments.items} preparing={attachments.preparing} onRemove={attachments.remove} />
+        )}
 
         <div className="relative flex items-end gap-2">
           <div className="relative flex-1">
@@ -539,12 +595,19 @@ export function Composer({
               value={input}
               onChange={(e) => updateInput(e.target.value, e.target.selectionStart ?? e.target.value.length)}
               onKeyDown={handleKeyDown}
+              onPaste={(e) => {
+                if (e.clipboardData.files.length === 0) return;
+                e.preventDefault();
+                addFiles(e.clipboardData.files);
+              }}
               onClick={(e) => {
                 const caret = e.currentTarget.selectionStart ?? input.length;
                 setSlash(slashQueryAt(input, caret));
                 if (noteMode) setMention(mentionQueryAt(input, caret));
               }}
-              placeholder={noteMode ? "Escribe una nota interna..." : "Escribe un mensaje..."}
+              placeholder={
+                noteMode ? "Escribe una nota interna..." : hasFiles ? "Agrega un comentario (opcional)..." : "Escribe un mensaje..."
+              }
               rows={1}
               spellCheck
               lang="es-PE"
@@ -561,11 +624,11 @@ export function Composer({
           </div>
           <button
             onClick={() => void handleSubmit()}
-            disabled={!input.trim() || savingNote}
+            disabled={!canSubmit}
             aria-label={noteMode ? "Guardar nota interna" : "Enviar mensaje"}
             className={cn(
               "flex h-10 w-10 items-center justify-center rounded-lg transition-colors",
-              input.trim() && !savingNote
+              canSubmit
                 ? noteMode
                   ? "bg-amber-500 text-white hover:bg-amber-600"
                   : "bg-primary text-primary-foreground hover:opacity-90"
@@ -582,16 +645,50 @@ export function Composer({
           </button>
         </div>
         <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={openReplies}
-            title="Respuestas guardadas (también escribiendo /)"
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <Zap className="h-3.5 w-3.5" />
-            Respuestas
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={openReplies}
+              title="Respuestas guardadas (también escribiendo /)"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Respuestas
+            </button>
+            {!noteMode && (
+              <>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!canAttach}
+                  title={
+                    canAttach
+                      ? "Adjuntar foto o PDF (también puedes arrastrarlo o pegarlo con Ctrl+V)"
+                      : "Este canal no permite enviar archivos"
+                  }
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                  Adjuntar
+                </button>
+                {canAttach && (
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept={acceptFor(conversation.platform)}
+                    className="hidden"
+                    onChange={(e) => {
+                      addFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                )}
+              </>
+            )}
+          </div>
           {draftSaved && input.trim() && (
             <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
               <Check className="h-3 w-3" />

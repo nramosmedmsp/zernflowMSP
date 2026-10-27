@@ -14,6 +14,8 @@ export type FlowStatus = "draft" | "published" | "archived";
 export type ConversationStatus = "open" | "closed" | "snoozed";
 export type MessageDirection = "inbound" | "outbound";
 export type MessageStatus = "pending" | "sent" | "delivered" | "failed";
+export type MessageMediaKind = "image" | "video" | "audio" | "file" | "sticker";
+export type MessageMediaStatus = "stored" | "too_large" | "failed" | "expired";
 export type BroadcastStatus =
   | "draft"
   | "scheduled"
@@ -934,6 +936,53 @@ export interface Database {
             columns: ["contact_id"];
             isOneToOne: false;
             referencedRelation: "contacts";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      message_media: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          conversation_id: string;
+          platform_message_id: string;
+          attachment_index: number;
+          direction: MessageDirection;
+          kind: MessageMediaKind;
+          storage_path: string | null;
+          mime_type: string | null;
+          file_name: string | null;
+          size_bytes: number | null;
+          status: MessageMediaStatus;
+          uploaded_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          conversation_id: string;
+          platform_message_id: string;
+          attachment_index?: number;
+          direction: MessageDirection;
+          kind: MessageMediaKind;
+          storage_path?: string | null;
+          mime_type?: string | null;
+          file_name?: string | null;
+          size_bytes?: number | null;
+          status?: MessageMediaStatus;
+          uploaded_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          storage_path?: string | null;
+          status?: MessageMediaStatus;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "message_media_conversation_id_fkey";
+            columns: ["conversation_id"];
+            isOneToOne: false;
+            referencedRelation: "conversations";
             referencedColumns: ["id"];
           },
         ];
@@ -2090,6 +2139,9 @@ export interface Database {
           shortcut: string | null;
           body: string;
           attachment_url: string | null;
+          attachment_name: string | null;
+          attachment_mime: string | null;
+          attachment_size: number | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -2105,6 +2157,9 @@ export interface Database {
           shortcut?: string | null;
           body: string;
           attachment_url?: string | null;
+          attachment_name?: string | null;
+          attachment_mime?: string | null;
+          attachment_size?: number | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -2118,6 +2173,9 @@ export interface Database {
           shortcut?: string | null;
           body?: string;
           attachment_url?: string | null;
+          attachment_name?: string | null;
+          attachment_mime?: string | null;
+          attachment_size?: number | null;
           updated_at?: string;
         };
         Relationships: [

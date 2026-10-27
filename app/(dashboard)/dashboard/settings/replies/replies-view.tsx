@@ -3,21 +3,31 @@
 import { useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/ui/toast";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, FileText, Image as ImageIcon, Loader2, Paperclip, Pencil, Plus, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { invalidateSavedRepliesCache } from "@/components/composer/saved-reply-picker";
+import { invalidateSavedRepliesCache, updatedLabel } from "@/components/composer/saved-reply-picker";
+import { compressImage, jpegName } from "@/components/inbox/compress-image";
+import { createClient } from "@/lib/supabase/client";
 import {
+  createReplyUploadUrl,
   createSavedReply,
   deleteSavedReply,
   updateSavedReply,
+  type SavedReplyAttachmentInput,
   type SavedReplyView,
   type SavedRepliesData,
 } from "@/lib/actions/saved-replies";
 import { REPLY_VARIABLES, SAVED_REPLY_BODY_MAX, SAVED_REPLY_TITLE_MAX } from "@/lib/saved-replies";
+import { CHAT_MEDIA_BUCKET, REPLY_IMAGE_MAX_BYTES, baseMime, formatFileSize, validateReplyAttachment } from "@/lib/chat-media";
 import type { SavedReplyScope } from "@/lib/types/database";
 
 type Tab = "workspace" | "team" | "personal";
+
+/** Archivo de la respuesta en el formulario: el que ya tenía o uno nuevo por subir. */
+type FormFile =
+  | { kind: "existing"; name: string; mime: string; size: number | null }
+  | { kind: "new"; blob: Blob; name: string; mime: string; size: number };
 
 interface FormState {
   /** null = respuesta nueva. */
@@ -26,9 +36,26 @@ interface FormState {
   shortcut: string;
   body: string;
   caseTypeId: string;
+  file: FormFile | null;
+  /** Se cambió o se quitó el archivo. */
+  fileChanged: boolean;
 }
 
-const EMPTY_FORM: FormState = { id: null, title: "", shortcut: "", body: "", caseTypeId: "" };
+const EMPTY_FORM: FormState = { id: null, title: "", shortcut: "", body: "", caseTypeId: "", file: null, fileChanged: false };
+
+/** Sube el archivo nuevo directo al bucket y devuelve lo que guarda la respuesta. */
+async function uploadReplyFile(file: FormFile | null, changed: boolean): Promise<SavedReplyAttachmentInput | { error: string }> {
+  if (!changed) return undefined;
+  if (!file) return null;
+  if (file.kind === "existing") return undefined;
+  const target = await createReplyUploadUrl({ mime: file.mime, size: file.size });
+  if ("error" in target) return { error: target.error };
+  const { error } = await createClient()
+    .storage.from(CHAT_MEDIA_BUCKET)
+    .uploadToSignedUrl(target.path, target.token, file.blob, { contentType: file.mime });
+  if (error) return { error: "No se pudo subir el archivo. Inténtalo de nuevo." };
+  return { path: target.path, name: file.name };
+}
 
 const inputClass = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
 
@@ -51,7 +78,35 @@ export function RepliesView({
   const [error, setError] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<SavedReplyView | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [preparingFile, setPreparingFile] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function pickFile(picked: File | undefined) {
+    if (!form || !picked) return;
+    setError(null);
+    let blob: Blob = picked;
+    let name = picked.name || "archivo";
+    let mime = baseMime(picked.type);
+    const check = validateReplyAttachment({ mime, size: picked.size });
+    if (!check.ok) {
+      setError(check.error);
+      return;
+    }
+    if (check.compress) {
+      setPreparingFile(true);
+      const smaller = await compressImage(picked, REPLY_IMAGE_MAX_BYTES);
+      setPreparingFile(false);
+      if (!smaller) {
+        setError("La foto pesa demasiado y no se pudo achicar.");
+        return;
+      }
+      blob = smaller;
+      mime = "image/jpeg";
+      name = jpegName(name);
+    }
+    setForm((f) => (f ? { ...f, file: { kind: "new", blob, name, mime, size: blob.size }, fileChanged: true } : f));
+  }
 
   const caseTypeName = (id: string | null) => data.caseTypes.find((t) => t.id === id)?.name ?? null;
 
@@ -97,11 +152,17 @@ export function RepliesView({
     setSaving(true);
     setError(null);
     try {
+      const attachment = await uploadReplyFile(form.file, form.fileChanged);
+      if (attachment && "error" in attachment) {
+        setError(attachment.error);
+        return;
+      }
       const input = {
         title: form.title,
         shortcut: form.shortcut,
         body: form.body,
         caseTypeId: form.caseTypeId || null,
+        attachment,
       };
       const scope: SavedReplyScope = tab;
       const result = form.id
@@ -306,6 +367,65 @@ export function RepliesView({
                 </p>
               </div>
 
+              <div>
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">Archivo (opcional)</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {form.file ? (
+                    <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs">
+                      {form.file.mime.startsWith("image/") ? (
+                        <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+                      ) : (
+                        <FileText className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                      )}
+                      {form.file.kind === "existing" && form.id ? (
+                        <a
+                          href={`/api/v1/media/reply/${form.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="truncate font-medium hover:underline"
+                        >
+                          {form.file.name}
+                        </a>
+                      ) : (
+                        <span className="truncate font-medium">{form.file.name}</span>
+                      )}
+                      {form.file.size != null && <span className="text-muted-foreground">{formatFileSize(form.file.size)}</span>}
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, file: null, fileChanged: true })}
+                        aria-label="Quitar archivo"
+                        className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={preparingFile}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    {preparingFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                    {form.file ? "Cambiar archivo" : "Subir foto o PDF"}
+                  </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      void pickFile(e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Sale junto con el texto (por ejemplo, la lista de precios en PDF). Si hay archivo, el texto es opcional.
+                  Instagram no acepta PDF.
+                </p>
+              </div>
+
               {data.caseTypes.length > 0 && (
                 <label className="block sm:max-w-xs">
                   <span className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -341,7 +461,7 @@ export function RepliesView({
                 </button>
                 <button
                   onClick={save}
-                  disabled={saving}
+                  disabled={saving || preparingFile}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
                   {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -375,7 +495,27 @@ export function RepliesView({
                         </span>
                       )}
                     </div>
-                    <p className="mt-1 line-clamp-3 whitespace-pre-line text-xs text-muted-foreground">{reply.body}</p>
+                    {reply.body && (
+                      <p className="mt-1 line-clamp-3 whitespace-pre-line text-xs text-muted-foreground">{reply.body}</p>
+                    )}
+                    {reply.attachment && (
+                      <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                        {reply.attachment.mime.startsWith("image/") ? (
+                          <ImageIcon className="h-3 w-3 shrink-0" />
+                        ) : (
+                          <FileText className="h-3 w-3 shrink-0 text-red-500" />
+                        )}
+                        <a
+                          href={`/api/v1/media/reply/${reply.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="truncate hover:underline"
+                        >
+                          {reply.attachment.name}
+                        </a>
+                        <span className="shrink-0">· {updatedLabel(reply.updatedAt)}</span>
+                      </p>
+                    )}
                   </div>
                   {reply.canEdit && (
                     <div className="flex shrink-0 items-center gap-1">
@@ -387,6 +527,10 @@ export function RepliesView({
                             shortcut: reply.shortcut ?? "",
                             body: reply.body,
                             caseTypeId: reply.caseTypeId ?? "",
+                            file: reply.attachment
+                              ? { kind: "existing", name: reply.attachment.name, mime: reply.attachment.mime, size: reply.attachment.size }
+                              : null,
+                            fileChanged: false,
                           });
                           setError(null);
                         }}
