@@ -18,6 +18,9 @@
 # production
 /build
 
+# corrector: lo genera scripts/build-spell-worker.mjs
+/public/spell-worker.js
+
 # misc
 .DS_Store
 *.pem

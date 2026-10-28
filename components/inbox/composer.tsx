@@ -17,6 +17,7 @@ import { firstName } from "@/lib/names";
 import { readDraft, writeDraft, type DraftMode } from "@/lib/drafts";
 import { replaceRange, slashQueryAt } from "@/lib/saved-replies";
 import { applySuggestions, reviewOutgoing, type Suggestion } from "@/lib/send-review";
+import { mergeSpellIssues, normalizeWord, replaceIssue, type SpellIssue } from "@/lib/spell-check";
 import { acceptFor, canSendAttachments } from "@/lib/chat-media";
 import type { OutboxAttachment } from "@/lib/inbox-outbox";
 import { useToast } from "@/components/ui/toast";
@@ -37,6 +38,8 @@ import { useNow } from "./use-now";
 import { SendReviewPopover } from "./send-review-popover";
 import { AttachmentTray } from "./attachment-tray";
 import { useAttachments } from "./use-attachments";
+import { addStoreWord, useSpellcheck } from "./spell/use-spellcheck";
+import { SpellStrip } from "./spell/spell-strip";
 
 const REVIEW_OFF_KEY = "zf:send-review:off:";
 
@@ -109,6 +112,9 @@ export function Composer({
   const [review, setReview] = useState<Review | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
   const [dragging, setDragging] = useState(false);
+  /** Palabras que el asesor eligió ignorar en este mensaje (corrector). */
+  const [ignoredWords, setIgnoredWords] = useState<ReadonlySet<string>>(() => new Set());
+  const reviewing = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const now = useNow();
@@ -122,6 +128,7 @@ export function Composer({
   const contactId = conversation.contact_id;
   const contactName = conversation.contacts?.display_name ?? undefined;
   const canNote = !!noteCase && noteCase.permissions.canNote;
+  const spell = useSpellcheck({ text: input, enabled: true, workspaceId: conversation.workspace_id, ignored: ignoredWords });
 
   // Campos personalizados del contacto para las variables de las respuestas guardadas.
   useEffect(() => {
@@ -271,7 +278,39 @@ export function Composer({
     setReview(null);
     setWarning(null);
     setSlash(null);
+    setIgnoredWords(new Set());
     onSendMessage(text, attachments.take());
+    textareaRef.current?.focus();
+  }
+
+  // ── Corrector (franja "Revisa:") ──
+  function pickSpelling(issue: SpellIssue, word: string) {
+    const next = replaceIssue(input, issue, word);
+    if (!next) return;
+    setInput(next.text);
+    placeCaret(next.caret);
+  }
+
+  function pickAllSpellings() {
+    let value = input;
+    // De atrás hacia adelante: cambiar una palabra no mueve a las anteriores.
+    for (const issue of [...spell.issues].sort((a, b) => b.start - a.start)) {
+      const word = issue.suggestions[0];
+      if (!word) continue;
+      value = replaceIssue(value, issue, word)?.text ?? value;
+    }
+    setInput(value);
+    textareaRef.current?.focus();
+  }
+
+  async function addToDictionary(issue: SpellIssue) {
+    const ok = await addStoreWord(conversation.workspace_id, issue.word, me.userId);
+    if (ok) toast.success(`«${issue.word}» se agregó al diccionario de la tienda.`);
+    else toast.error("No se pudo agregar la palabra. Inténtalo de nuevo.");
+  }
+
+  function ignoreSpelling(issue: SpellIssue) {
+    setIgnoredWords((prev) => new Set(prev).add(normalizeWord(issue.word)));
     textareaRef.current?.focus();
   }
 
@@ -286,12 +325,19 @@ export function Composer({
 
     if (!noteMode) {
       if (blocked) return;
-      // Revisión al enviar: solo aparece si encuentra algo (lib/send-review.ts).
+      // Revisión al enviar: solo aparece si encuentra algo (lib/send-review.ts),
+      // con las palabras que marcó el diccionario (lib/spell-check.ts).
       if (text && !reviewDisabled(me.userId)) {
-        const result = reviewOutgoing(text);
-        if (result.suggestions.length > 0 || result.unresolved.length > 0) {
-          setReview({ text, ...result, chosen: new Set(result.suggestions.map((s) => s.id)) });
-          return;
+        if (reviewing.current) return;
+        reviewing.current = true;
+        try {
+          const result = mergeSpellIssues(reviewOutgoing(text), await spell.checkNow(text));
+          if (result.suggestions.length > 0 || result.unresolved.length > 0) {
+            setReview({ text, ...result, chosen: new Set(result.suggestions.filter((s) => !s.unsure).map((s) => s.id)) });
+            return;
+          }
+        } finally {
+          reviewing.current = false;
         }
       }
       sendMessage(text);
@@ -662,6 +708,13 @@ export function Composer({
             )}
           </button>
         </div>
+        <SpellStrip
+          issues={spell.issues}
+          onPick={pickSpelling}
+          onPickAll={pickAllSpellings}
+          onAdd={(issue) => void addToDictionary(issue)}
+          onIgnore={ignoreSpelling}
+        />
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1">
             <button

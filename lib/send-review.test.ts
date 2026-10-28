@@ -51,7 +51,7 @@ describe("reviewOutgoing: signos de apertura", () => {
   });
 
   it("después del saludo con coma", () => {
-    expect(corrected("Hola Ana, como estás?")).toBe("Hola Ana, ¿como estás?");
+    expect(corrected("Hola Ana, como estás?")).toBe("Hola Ana, ¿cómo estás?");
   });
 
   it("agrega ¡ en exclamaciones", () => {
@@ -88,5 +88,24 @@ describe("applySuggestions", () => {
     const text = "asi es, tambien";
     const [first] = reviewOutgoing(text).suggestions;
     expect(applySuggestions(text, [first])).toBe("así es, tambien");
+  });
+});
+
+describe("reviewOutgoing: tildes en preguntas", () => {
+  const fix = (text: string) => applySuggestions(text, reviewOutgoing(text).suggestions);
+  const sources = (text: string) => reviewOutgoing(text).suggestions.filter((x) => x.kind === "word").map((x) => `${x.from}:${x.source}`);
+
+  it("la palabra que abre la pregunta lleva tilde", () => {
+    expect(fix("como estas?")).toBe("¿cómo estás?");
+    expect(fix("Cuanto cuesta la whey?")).toBe("¿Cuánto cuesta la whey?");
+    expect(fix("Hola Patricia, donde te lo enviamos?")).toBe("Hola Patricia, ¿dónde te lo enviamos?");
+    expect(fix("por que no te llegó?")).toBe("¿por qué no te llegó?");
+    expect(sources("como estas?")).toEqual(["como:pregunta", "estas:pregunta"]);
+  });
+
+  it("fuera de una pregunta, o en medio de ella, no toca nada", () => {
+    expect(reviewOutgoing("como te dije, llega mañana.").suggestions).toEqual([]);
+    expect(reviewOutgoing("sabes como llegar?").suggestions.filter((x) => x.kind === "word")).toEqual([]);
+    expect(reviewOutgoing("es lo que pediste?").suggestions.filter((x) => x.kind === "word")).toEqual([]);
   });
 });

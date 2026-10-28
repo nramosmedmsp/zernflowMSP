@@ -1048,6 +1048,28 @@ export interface Database {
           },
         ];
       };
+      spell_words: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          word: string;
+          normalized: string;
+          added_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          word: string;
+          normalized: string;
+          added_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          word?: string;
+        };
+        Relationships: [];
+      };
       broadcasts: {
         Row: {
           id: string;

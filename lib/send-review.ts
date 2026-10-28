@@ -14,6 +14,10 @@ export interface Suggestion {
   from: string;
   to: string;
   kind: "word" | "mark";
+  /** De dónde sale: la lista fija, el diccionario o la regla de las preguntas. */
+  source?: "lista" | "diccionario" | "pregunta";
+  /** El diccionario no está seguro: la casilla empieza sin marcar. */
+  unsure?: boolean;
   /** Para los signos: la frase antes y después, para mostrarla. */
   preview?: { before: string; after: string };
 }
@@ -26,18 +30,18 @@ export interface ReviewResult {
 
 const WORD_RE = /[\p{L}\p{N}]+/gu;
 // Lo que no se revisa: enlaces, correos, @menciones y {variables}.
-const MASK_RE = /\b(?:https?:\/\/|www\.)\S+|[\w.+-]+@[\w-]+\.[\w.-]+|@[\p{L}\p{N}_.]+|\{[^}\s]*\}/giu;
+export const MASK_RE = /\b(?:https?:\/\/|www\.)\S+|[\w.+-]+@[\w-]+\.[\w.-]+|@[\p{L}\p{N}_.]+|\{[^}\s]*\}/giu;
 
-function maskedRanges(text: string): Array<[number, number]> {
+export function maskedRanges(text: string): Array<[number, number]> {
   return [...text.matchAll(MASK_RE)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length]);
 }
 
-function inside(ranges: Array<[number, number]>, pos: number): boolean {
+export function inside(ranges: Array<[number, number]>, pos: number): boolean {
   return ranges.some(([a, b]) => pos >= a && pos < b);
 }
 
 /** Copia las mayúsculas del original: "Asi" → "Así", "ASI" → "ASÍ". */
-function matchCase(original: string, replacement: string): string {
+export function matchCase(original: string, replacement: string): string {
   if (original.length > 1 && original === original.toUpperCase() && original !== original.toLowerCase()) {
     return replacement.toUpperCase();
   }
@@ -78,6 +82,64 @@ function firstWordStart(text: string, sentence: Sentence): number {
   return m ? sentence.start + m.index : sentence.start;
 }
 
+/** Palabras que llevan tilde cuando abren una pregunta: "¿cómo…?", "¿cuánto…?". */
+const QUESTION_WORDS: Readonly<Record<string, string>> = {
+  como: "cómo",
+  cuanto: "cuánto",
+  cuanta: "cuánta",
+  cuantos: "cuántos",
+  cuantas: "cuántas",
+  donde: "dónde",
+  cuando: "cuándo",
+  que: "qué",
+  quien: "quién",
+  quienes: "quiénes",
+  cual: "cuál",
+  cuales: "cuáles",
+};
+
+/**
+ * Dónde empieza de verdad la frase: la primera palabra, o la que sigue a un
+ * saludo con coma ("Hola Ana, como estas?" → "como").
+ */
+function openingAt(text: string, s: Sentence): number {
+  const body = text.slice(s.start, s.end);
+  const closeAt = s.start + body.replace(/\s+$/, "").length - 1;
+  let at = firstWordStart(text, s);
+  const firstWord = /^[\p{L}\p{N}]+/u.exec(text.slice(at))?.[0]?.toLowerCase() ?? "";
+  const comma = body.indexOf(",");
+  if (GREETING_STARTS.has(firstWord) && comma >= 0 && s.start + comma < closeAt) {
+    const afterComma = /[^\s,]/u.exec(text.slice(s.start + comma + 1));
+    if (afterComma) at = s.start + comma + 1 + afterComma.index;
+  }
+  return at;
+}
+
+/**
+ * Tildes de las preguntas: la palabra que abre la pregunta ("como" → "cómo")
+ * y lo que la sigue en el saludo de siempre ("cómo estas" → "cómo estás",
+ * "por que" → "por qué"). Fuera de una pregunta no se toca nada.
+ */
+function questionFix(
+  words: Array<{ value: string; start: number }>,
+  i: number,
+  opening: number | null,
+): string | null {
+  if (opening === null) return null;
+  const w = words[i];
+  const lower = w.value.toLowerCase();
+  const prev = i > 0 ? words[i - 1] : null;
+  const prevLower = prev?.value.toLowerCase() ?? "";
+  if (w.start === opening) return QUESTION_WORDS[lower] ?? null;
+  if (prev && prev.start === opening) {
+    if (prevLower === "por" && lower === "que") return "qué";
+    if ((prevLower === "como" || prevLower === "cómo") && (lower === "estas" || lower === "esta")) {
+      return lower === "estas" ? "estás" : "está";
+    }
+  }
+  return null;
+}
+
 function wordFixes(text: string, masked: Array<[number, number]>, list: Sentence[]): Suggestion[] {
   const words = [...text.matchAll(WORD_RE)].map((m) => ({ value: m[0], start: m.index ?? 0 }));
   const out: Suggestion[] = [];
@@ -88,7 +150,9 @@ function wordFixes(text: string, masked: Array<[number, number]>, list: Sentence
     const sentence = sentenceOf(list, w.start);
     const question = sentence?.closing === "?";
     const firstOfSentence = sentence ? firstWordStart(text, sentence) === w.start : false;
+    const opening = sentence && question ? openingAt(text, sentence) : null;
     let to: string | null = null;
+    let source: Suggestion["source"] = "lista";
 
     if (ALWAYS_ACCENTED[lower]) to = ALWAYS_ACCENTED[lower];
     else if (lower === "envio") to = prev && ENVIO_AFTER.has(prev) ? "envío" : null;
@@ -97,16 +161,36 @@ function wordFixes(text: string, masked: Array<[number, number]>, list: Sentence
     else if (ABBREVIATIONS[lower]) to = ABBREVIATIONS[lower];
     else if (lower.length > 4 && lower.endsWith("cion")) to = lower.slice(0, -4) + "ción";
     else if (lower.length > 4 && lower.endsWith("sion")) to = lower.slice(0, -4) + "sión";
+    else {
+      to = questionFix(words, i, opening);
+      source = "pregunta";
+    }
 
     if (!to) return;
-    out.push({ id: `w${w.start}`, start: w.start, end: w.start + w.value.length, from: w.value, to: matchCase(w.value, to), kind: "word" });
+    out.push({
+      id: `w${w.start}`,
+      start: w.start,
+      end: w.start + w.value.length,
+      from: w.value,
+      to: matchCase(w.value, to),
+      kind: "word",
+      source,
+    });
   });
 
   // "x favor" → "por favor".
   for (const m of text.matchAll(/\b[xX]\s+favor\b/g)) {
     const start = m.index ?? 0;
     if (inside(masked, start)) continue;
-    out.push({ id: `x${start}`, start, end: start + m[0].length, from: m[0], to: matchCase(m[0][0], "por") + m[0].slice(1), kind: "word" });
+    out.push({
+      id: `x${start}`,
+      start,
+      end: start + m[0].length,
+      from: m[0],
+      to: matchCase(m[0][0], "por") + m[0].slice(1),
+      kind: "word",
+      source: "lista",
+    });
   }
   return out;
 }
@@ -122,13 +206,7 @@ function markFixes(text: string, masked: Array<[number, number]>, list: Sentence
     const closeAt = s.start + body.replace(/\s+$/, "").length - 1;
     if (inside(masked, closeAt)) continue;
 
-    let at = firstWordStart(text, s);
-    const firstWord = /^[\p{L}\p{N}]+/u.exec(text.slice(at))?.[0]?.toLowerCase() ?? "";
-    const comma = body.indexOf(",");
-    if (GREETING_STARTS.has(firstWord) && comma >= 0 && s.start + comma < closeAt) {
-      const afterComma = /[^\s,]/u.exec(text.slice(s.start + comma + 1));
-      if (afterComma) at = s.start + comma + 1 + afterComma.index;
-    }
+    const at = openingAt(text, s);
     if (at >= closeAt) continue;
     const sentenceText = text.slice(at, closeAt + 1);
     out.push({

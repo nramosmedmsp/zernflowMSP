@@ -15,13 +15,14 @@ describe("settingsLinksFor", () => {
         "Atención",
         "Respuestas guardadas",
         "Plantillas de WhatsApp",
+        "Diccionario de la tienda",
         "Cambiar contraseña",
       ]);
     }
   });
 
-  it("el Miembro solo ve Respuestas guardadas, Plantillas de WhatsApp y Cambiar contraseña", () => {
-    const expected = ["Respuestas guardadas", "Plantillas de WhatsApp", "Cambiar contraseña"];
+  it("el Miembro solo ve Respuestas guardadas, Plantillas de WhatsApp, el diccionario y Cambiar contraseña", () => {
+    const expected = ["Respuestas guardadas", "Plantillas de WhatsApp", "Diccionario de la tienda", "Cambiar contraseña"];
     expect(settingsLinksFor("member").map((l) => l.title)).toEqual(expected);
     expect(settingsLinksFor(null).map((l) => l.title)).toEqual(expected);
   });
@@ -38,6 +39,7 @@ describe("settingsLinksFor", () => {
       attention: "/dashboard/settings/attention",
       replies: "/dashboard/settings/replies",
       "whatsapp-templates": "/dashboard/settings/whatsapp-templates",
+      dictionary: "/dashboard/settings/dictionary",
       password: "/cuenta/contrasena",
     });
   });
