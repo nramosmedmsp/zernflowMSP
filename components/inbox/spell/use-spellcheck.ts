@@ -174,6 +174,9 @@ export function useSpellcheck({
   );
 
   // Lo revisado corresponde al texto de ahora (si no, se muestra lo anterior hasta revisar de nuevo).
-  const issues = enabled ? result.issues.filter((i) => !skip.has(normalizeWord(i.word)) && text.includes(i.word)) : [];
+  const issues = useMemo(
+    () => (enabled ? result.issues.filter((i) => !skip.has(normalizeWord(i.word)) && text.includes(i.word)) : []),
+    [enabled, result, skip, text],
+  );
   return { issues, checkNow, ready: !!known };
 }

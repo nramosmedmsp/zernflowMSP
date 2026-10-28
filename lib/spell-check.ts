@@ -1,8 +1,8 @@
 // Corrector en español de la Bandeja: qué palabras revisar, cómo ordenar las
 // sugerencias del diccionario (Hunspell es-PE, corre en un worker del navegador)
-// y cómo sumarlas a la revisión al enviar. Solo lógica pura, para probarla.
+// y cuáles son seguras. Solo lógica pura, para probarla.
 
-import { inside, maskedRanges, matchCase, type ReviewResult, type Suggestion } from "@/lib/send-review";
+import { inside, maskedRanges, matchCase } from "@/lib/send-review";
 
 export interface SpellToken {
   word: string;
@@ -210,34 +210,6 @@ export function replaceIssue(text: string, issue: SpellToken, replacement: strin
     }
   }
   return best ? apply(best.start, best.end) : null;
-}
-
-/**
- * Suma las palabras que marcó el diccionario a la revisión al enviar. Las que
- * ya tienen una corrección de la lista fija o de las preguntas no se repiten.
- * Si la sugerencia no es segura (más que tildes o el mismo sonido), la casilla
- * empieza sin marcar.
- */
-export function mergeSpellIssues(result: ReviewResult, issues: readonly SpellIssue[]): ReviewResult {
-  const taken = result.suggestions.filter((s) => s.kind === "word");
-  const added: Suggestion[] = [];
-  for (const issue of issues) {
-    const to = issue.suggestions[0];
-    if (!to) continue;
-    if (taken.some((s) => issue.start < s.end && s.start < issue.end)) continue;
-    added.push({
-      id: `d${issue.start}`,
-      start: issue.start,
-      end: issue.end,
-      from: issue.word,
-      to,
-      kind: "word",
-      source: "diccionario",
-      unsure: !isSafeFix(issue.word, to),
-    });
-  }
-  if (added.length === 0) return result;
-  return { ...result, suggestions: [...result.suggestions, ...added].sort((a, b) => a.start - b.start) };
 }
 
 const WORD_MAX = 60;

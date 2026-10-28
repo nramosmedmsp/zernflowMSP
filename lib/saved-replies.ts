@@ -141,12 +141,15 @@ export function applyReplyVariables(text: string, context: ReplyContext = {}): s
   return applyReplyVariablesDetailed(text, context).text;
 }
 
+/** Una llave de variable: "{nombre}", "{precio}". */
+export const PLACEHOLDER_RE = /\{[a-z_][a-z0-9_:-]*\}/gi;
+
 /**
  * Llaves que quedaron en un mensaje ("{nombre}", "{precio}"): el cliente las
  * vería tal cual. Para avisar antes de enviar.
  */
 export function findUnresolvedPlaceholders(text: string): string[] {
-  const found = text.match(/\{[a-z_][a-z0-9_:-]*\}/gi) ?? [];
+  const found = text.match(PLACEHOLDER_RE) ?? [];
   return [...new Set(found)];
 }
 

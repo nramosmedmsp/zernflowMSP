@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { reviewOutgoing } from "./send-review";
 import {
   accentVariants,
   cleanSpellWord,
   editDistance,
   soundKey,
   isAccentOnly,
-  mergeSpellIssues,
   rankSuggestions,
   replaceIssue,
   spellTokens,
@@ -61,30 +59,6 @@ describe("replaceIssue", () => {
     expect(replaceIssue("hola grasias", { word: "grasias", start: 5, end: 12 }, "gracias")).toEqual({ text: "hola gracias", caret: 12 });
     expect(replaceIssue("ok, hola grasias", { word: "grasias", start: 5, end: 12 }, "gracias")?.text).toBe("ok, hola gracias");
     expect(replaceIssue("hola", { word: "grasias", start: 5, end: 12 }, "gracias")).toBeNull();
-  });
-});
-
-describe("mergeSpellIssues", () => {
-  it("suma las del diccionario sin repetir las de la lista fija", () => {
-    const text = "asi es, grasias. el preico x dc";
-    const merged = mergeSpellIssues(reviewOutgoing(text), [
-      { word: "asi", start: 0, end: 3, suggestions: ["así"] },
-      { word: "grasias", start: 8, end: 15, suggestions: ["gracias"] },
-      { word: "preico", start: 20, end: 26, suggestions: ["precio"] },
-      { word: "dc", start: 29, end: 31, suggestions: ["de"] },
-      { word: "zzz", start: 0, end: 0, suggestions: [] },
-    ]);
-    expect(merged.suggestions.map((s) => `${s.from}→${s.to}:${s.source}${s.unsure ? "?" : ""}`)).toEqual([
-      "asi→así:lista",
-      "grasias→gracias:diccionario",
-      "preico→precio:diccionario?",
-      "dc→de:diccionario?",
-    ]);
-  });
-
-  it("si solo cambian tildes, va marcada", () => {
-    const merged = mergeSpellIssues(reviewOutgoing("llega manana"), [{ word: "manana", start: 6, end: 12, suggestions: ["mañana"] }]);
-    expect(merged.suggestions[0]).toMatchObject({ to: "mañana", unsure: false });
   });
 });
 
