@@ -4,9 +4,24 @@ import { CASE_NOT_FOUND } from "./access";
 import { isDateString, parseScheduleAt } from "./dates";
 import { applyRulePlan, countWins, loadRules, resumeAutomationIfIdle, type RuleEffects } from "./effects";
 import { emitCaseClosed, emitStageChanged } from "./events";
-import { GENERIC_ERROR, loadCase, loadCaseType, logActivity, type CaseRow, type ContactRow, type Db, type EngineResult } from "./io";
+import {
+  GENERIC_ERROR,
+  caseLink,
+  contactName,
+  loadCase,
+  loadCaseType,
+  logActivity,
+  userDisplayName,
+  type CaseRow,
+  type CaseTypeRow,
+  type ContactRow,
+  type Db,
+  type EngineResult,
+} from "./io";
+import { notifySupervisors } from "./supervisors";
 import {
   CLOSE_TRIGGER,
+  OUTCOME_LABELS,
   needsKeyDate,
   planRules,
   validateClose,
@@ -40,6 +55,9 @@ export const MAX_OUTCOME_NOTE_LENGTH = 2000;
 interface Prepared {
   row: CaseRow;
   contact: ContactRow;
+  type: CaseTypeRow | null;
+  /** Nombre de la etapa final elegida (null si el tipo no define etapas finales). */
+  stageName: string | null;
   kind: OutcomeKind;
   stageId: string | null;
   outcomeReasonId: string | null;
@@ -112,6 +130,8 @@ async function prepareClose(
   return {
     row,
     contact,
+    type,
+    stageName: (stages.data ?? []).find((st) => st.id === validation.stageId)?.name ?? null,
     kind: validation.kind,
     stageId: validation.stageId,
     outcomeReasonId: validation.outcomeReasonId,
@@ -126,6 +146,35 @@ async function prepareClose(
         !!type?.require_outcome_reason &&
         (reasons.data ?? []).some((r) => r.kind === validation.kind && r.archived_at === null),
     },
+  };
+}
+
+export interface CheckedClose {
+  kind: OutcomeKind;
+  stageId: string | null;
+  stageName: string | null;
+  outcomeReasonId: string | null;
+  categoryId: string | null;
+  type: CaseTypeRow | null;
+  row: CaseRow;
+}
+
+/**
+ * Valida un cierre (etapa, categoría y motivo obligatorios) sin escribir nada.
+ * Lo usa el pedido de cierre para no guardar un pedido que luego no se pueda
+ * aprobar.
+ */
+export async function checkClose(db: Db, input: CloseCaseInput): Promise<CheckedClose | { error: string }> {
+  const prepared = await prepareClose(db, input, { preview: false });
+  if ("error" in prepared) return prepared;
+  return {
+    kind: prepared.kind,
+    stageId: prepared.stageId,
+    stageName: prepared.stageName,
+    outcomeReasonId: prepared.outcomeReasonId,
+    categoryId: prepared.categoryId,
+    type: prepared.type,
+    row: prepared.row,
   };
 }
 
@@ -195,7 +244,11 @@ export async function previewClose(
  */
 export async function closeCase(
   db: Db,
-  input: CloseCaseInput & { actorId: string | null },
+  input: CloseCaseInput & {
+    actorId: string | null;
+    /** Datos extra para el registro de actividad (por ejemplo quién pidió el cierre). */
+    activityMeta?: Record<string, unknown>;
+  },
   now: Date = new Date(),
 ): Promise<EngineResult<{ status: OutcomeKind; effects: RuleEffects }>> {
   const prepared = await prepareClose(db, input, { preview: false });
@@ -231,6 +284,8 @@ export async function closeCase(
       next_action_at: null,
       next_action_note: null,
       next_action_notified_at: null,
+      // Cerrar deja sin efecto cualquier pedido de cierre pendiente.
+      close_request: null,
     })
     .eq("id", row.id)
     .eq("status", "open")
@@ -254,6 +309,7 @@ export async function closeCase(
       category_id: prepared.categoryId,
       ...(note ? { note } : {}),
       ...(keyDate ? { key_date: keyDate } : {}),
+      ...(input.activityMeta ?? {}),
     },
   });
   emitStageChanged(db, closed, row.stage_id, prepared.stageId);
@@ -270,5 +326,26 @@ export async function closeCase(
   const effects = await applyRulePlan(db, { plan, caseRow: closed, contact, actorId: input.actorId, keyDate });
 
   await resumeAutomationIfIdle(db, row.workspace_id, row.contact_id);
+
+  // Tipo protegido: se avisa a los supervisores del cierre, sea cual sea el resultado.
+  if (prepared.type?.protected) {
+    try {
+      const actor = await userDisplayName(db, input.actorId);
+      const outcome = prepared.stageName ?? OUTCOME_LABELS[prepared.kind];
+      await notifySupervisors(
+        db,
+        closed,
+        {
+          type: "protected_closed",
+          title: `${prepared.type.name} cerrada como «${outcome}»: ${contactName(contact)}`,
+          body: `${actor}${note ? `: ${note}` : ""}`,
+          link: caseLink(row.contact_id, row.id),
+        },
+        { exclude: [input.actorId] },
+      );
+    } catch (err) {
+      console.error("[cases] notify protected close", err);
+    }
+  }
   return { ok: true, status: prepared.kind, effects };
 }

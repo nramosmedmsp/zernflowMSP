@@ -17,13 +17,17 @@ import {
   loadActiveTeam,
   loadCase,
   loadCaseType,
+  loadContact,
   logActivity,
   notify,
+  userDisplayName,
   type CaseRow,
   type Db,
   type EngineResult,
 } from "./io";
+import { typeLockMessage } from "./protection";
 import { resolveTargetTeamId } from "./routing";
+import { isSupervisorInDb, notifySupervisors } from "./supervisors";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor } from "./visibility";
 
 export const CASE_CLOSED_MESSAGE = "La gestión ya está cerrada.";
@@ -97,14 +101,33 @@ export async function changeStage(
  * y, si cambia el equipo de destino, la reenvía (queda sin responsable y se
  * reparte de nuevo). Al clasificar una gestión "Sin clasificar" corre las
  * reglas de apertura del tipo.
+ *
+ * Control de reclamos: si el tipo actual es protegido, una persona que no sea
+ * supervisor del equipo (ni administrador) no puede cambiarlo. Los flujos
+ * (`actorId` null) no tienen ese límite. `actorIsSupervisor` evita consultar
+ * la base cuando quien llama ya lo sabe.
  */
 export async function classifyCase(
   db: Db,
-  params: { caseId: string; caseTypeId: string; actorId: string | null; flowChain?: readonly string[] },
+  params: {
+    caseId: string;
+    caseTypeId: string;
+    actorId: string | null;
+    actorIsSupervisor?: boolean;
+    flowChain?: readonly string[];
+  },
 ): Promise<EngineResult<{ rerouted: boolean }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
   if (row.case_type_id === params.caseTypeId) return { ok: true, rerouted: false };
+
+  const previousType = row.case_type_id ? await loadCaseType(db, row.workspace_id, row.case_type_id) : null;
+  if (params.actorId && previousType?.protected) {
+    const supervisor =
+      params.actorIsSupervisor ??
+      (await isSupervisorInDb(db, { workspaceId: row.workspace_id, teamId: row.team_id }, params.actorId));
+    if (!supervisor) return { error: typeLockMessage(previousType.name) };
+  }
 
   const type = await loadCaseType(db, row.workspace_id, params.caseTypeId);
   if (!type || type.archived_at) return { error: "El tipo de gestión no existe o está archivado." };
@@ -163,6 +186,28 @@ export async function classifyCase(
   ]);
 
   const fresh = { ...row, case_type_id: type.id, stage_id: stageId, category_id: null };
+  if (previousType?.protected) {
+    try {
+      const [contact, actor] = await Promise.all([
+        loadContact(db, row.workspace_id, row.contact_id),
+        userDisplayName(db, params.actorId),
+      ]);
+      await notifySupervisors(
+        db,
+        row,
+        {
+          type: "protected_type_changed",
+          title: `${actor} cambió el tipo de una ${previousType.name}: ${contactName(contact)}`,
+          body: `${previousType.name} → ${type.name}`,
+          link: caseLink(row.contact_id, row.id),
+        },
+        { exclude: [params.actorId] },
+      );
+    } catch (err) {
+      console.error("[cases] notify type change", err);
+    }
+  }
+
   emitStageChanged(db, fresh, row.stage_id, stageId, params.flowChain);
   if (row.case_type_id === null && row.status === "open") {
     await runEventRules(db, {
@@ -411,7 +456,12 @@ export async function setNextAction(
 
   const { error } = await db
     .from("cases")
-    .update({ next_action_at: at, next_action_note: at ? note : null, next_action_notified_at: null })
+    .update({
+      next_action_at: at,
+      next_action_note: at ? note : null,
+      next_action_notified_at: null,
+      commitment_alerted_at: null,
+    })
     .eq("id", row.id);
   if (error) return { error: GENERIC_ERROR };
 

@@ -12,12 +12,13 @@ import { executeFlow } from "@/lib/flow-engine/engine";
 import type { FlowExecutionContext } from "@/lib/flow-engine/types";
 import { runInboundPipeline, type InboundPipelineInput } from "./inbound-pipeline";
 
-const { matchTrigger, handleInbound } = vi.hoisted(() => ({
+const { matchTrigger, handleInbound, flagComplaint } = vi.hoisted(() => ({
   matchTrigger: vi.fn(),
   handleInbound: vi.fn(async () => null),
+  flagComplaint: vi.fn(async (..._args: unknown[]) => "no_match"),
 }));
 vi.mock("@/lib/flow-engine/trigger-matcher", () => ({ matchTrigger }));
-vi.mock("@/lib/cases", () => ({ handleInbound }));
+vi.mock("@/lib/cases", () => ({ handleInbound, flagComplaint }));
 
 type Row = Record<string, unknown>;
 
@@ -39,6 +40,7 @@ async function setup() {
   matchTrigger.mockReset();
   matchTrigger.mockResolvedValue(null);
   handleInbound.mockClear();
+  flagComplaint.mockClear();
   fake = new FakeDb();
   fake.seed("workspaces", [{ id: WS, name: "Tienda", slug: "tienda", settings: {}, global_keywords: [{ keyword: "baja", action: "unsubscribe" }] }]);
   fake.seed("channels", [{ id: CH, workspace_id: WS, platform: "instagram", late_account_id: null }]);
@@ -180,6 +182,16 @@ describe("entrada de mensajes: retomar la conversación", () => {
     expect(session()).toMatchObject({ status: "active", waiting_for_input: true });
     // La gestión sí se maneja (el motor de gestiones corre antes).
     expect(handleInbound).toHaveBeenCalledTimes(1);
+  });
+
+  it("pasa el texto al detector de reclamos, aunque el bot esté en pausa, y un fallo no corta el mensaje", async () => {
+    await run({ text: "mi pedido llegó roto" }, true);
+    expect(flagComplaint).toHaveBeenCalledTimes(1);
+    expect(flagComplaint.mock.calls[0][1]).toMatchObject({ workspaceId: WS, contactId, conversationId, text: "mi pedido llegó roto" });
+
+    flagComplaint.mockRejectedValueOnce(new Error("boom"));
+    await run({ text: "otro mensaje" }, false);
+    expect(matchTrigger).toHaveBeenCalledTimes(1);
   });
 
   it("registra un message_received por mensaje entrante, con la plataforma, incluso con el bot en pausa", async () => {

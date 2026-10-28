@@ -75,14 +75,18 @@ export function botOutboundPatch(at: string) {
   return { last_outbound_at: at };
 }
 
-/** 3.4: ¿se reabre esta gestión cerrada en vez de abrir otra? (< 24 h) */
+/**
+ * 3.4: ¿se reabre esta gestión cerrada en vez de abrir otra? Dentro de la
+ * ventana del tipo (`case_types.reopen_window_days`) o, por defecto, 24 h.
+ */
 export function shouldReopen(
   closed: { status: CaseStatus; closed_at: string | null },
   at: string,
+  windowMs: number = REOPEN_WINDOW_MS,
 ): boolean {
   if (!isOutcomeKind(closed.status) || !closed.closed_at) return false;
   const elapsed = new Date(at).getTime() - new Date(closed.closed_at).getTime();
-  return elapsed >= 0 && elapsed < REOPEN_WINDOW_MS;
+  return elapsed >= 0 && elapsed < windowMs;
 }
 
 // ── Validación del cierre ──────────────────────────────────────────────────

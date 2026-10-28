@@ -42,3 +42,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 supabase/.temp
+
+# código descargable (lo genera scripts/build-source-zip.mjs)
+/.source-zip/

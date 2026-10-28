@@ -272,7 +272,14 @@ export type ActivityType =
   | "sequence_step_failed"
   // Fase 3 (00024)
   | "human_reply"
-  | "sla_breached";
+  | "sla_breached"
+  // Control de reclamos (00029)
+  | "solution_registered"
+  | "solution_overdue"
+  | "close_requested"
+  | "close_request_approved"
+  | "close_request_rejected"
+  | "complaint_dismissed";
 
 export interface Database {
   public: {
@@ -890,6 +897,11 @@ export interface Database {
           last_message_preview: string | null;
           unread_count: number;
           is_automation_paused: boolean;
+          // ── Detector de reclamos (00029) ──
+          complaint_flagged_at: string | null;
+          complaint_excerpt: string | null;
+          complaint_alerted_at: string | null;
+          complaint_dismissed_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -906,6 +918,10 @@ export interface Database {
           last_message_preview?: string | null;
           unread_count?: number;
           is_automation_paused?: boolean;
+          complaint_flagged_at?: string | null;
+          complaint_excerpt?: string | null;
+          complaint_alerted_at?: string | null;
+          complaint_dismissed_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -917,6 +933,10 @@ export interface Database {
           last_message_preview?: string | null;
           unread_count?: number;
           is_automation_paused?: boolean;
+          complaint_flagged_at?: string | null;
+          complaint_excerpt?: string | null;
+          complaint_alerted_at?: string | null;
+          complaint_dismissed_at?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -1591,6 +1611,12 @@ export interface Database {
           require_outcome_reason: boolean;
           /** Fase 2: plantilla al activarse (ver CaseTypeAutoTemplate), o null. */
           auto_template: Json | null;
+          /** 00029: solo el supervisor cambia el tipo o cierra como perdida (un asesor pide aprobación). */
+          protected: boolean;
+          /** 00029: horas desde que se abre para registrar la solución (null = sin plazo). */
+          solution_deadline_hours: number | null;
+          /** 00029: días tras el cierre en que un mensaje del cliente la reabre (null = 24 h). */
+          reopen_window_days: number | null;
           archived_at: string | null;
           created_at: string;
           updated_at: string;
@@ -1611,6 +1637,9 @@ export interface Database {
           require_category?: boolean;
           require_outcome_reason?: boolean;
           auto_template?: Json | null;
+          protected?: boolean;
+          solution_deadline_hours?: number | null;
+          reopen_window_days?: number | null;
           archived_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1629,6 +1658,9 @@ export interface Database {
           require_category?: boolean;
           require_outcome_reason?: boolean;
           auto_template?: Json | null;
+          protected?: boolean;
+          solution_deadline_hours?: number | null;
+          reopen_window_days?: number | null;
           archived_at?: string | null;
           updated_at?: string;
         };
@@ -1919,6 +1951,20 @@ export interface Database {
           sla_first_response_breached_at: string | null;
           /** Cuándo el cron avisó que se superó el objetivo de resolución. */
           sla_resolution_breached_at: string | null;
+          // ── Control de reclamos (00029) ──
+          /** 'in_progress' = hay una solución en proceso registrada. */
+          solution_status: "in_progress" | null;
+          solution_note: string | null;
+          solution_at: string | null;
+          solution_by: string | null;
+          /** Desde cuándo corre el plazo de la solución (null = opened_at). */
+          solution_clock_at: string | null;
+          /** El cron ya avisó que venció el plazo para registrar la solución. */
+          deadline_alerted_at: string | null;
+          /** El cron ya avisó que venció la fecha compromiso. */
+          commitment_alerted_at: string | null;
+          /** Pedido de cierre sin solución pendiente de aprobación (ver CloseRequest). */
+          close_request: Json | null;
           created_at: string;
           updated_at: string;
         };
@@ -1958,6 +2004,14 @@ export interface Database {
           no_reply_event_minutes?: number | null;
           sla_first_response_breached_at?: string | null;
           sla_resolution_breached_at?: string | null;
+          solution_status?: "in_progress" | null;
+          solution_note?: string | null;
+          solution_at?: string | null;
+          solution_by?: string | null;
+          solution_clock_at?: string | null;
+          deadline_alerted_at?: string | null;
+          commitment_alerted_at?: string | null;
+          close_request?: Json | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1993,6 +2047,14 @@ export interface Database {
           no_reply_event_minutes?: number | null;
           sla_first_response_breached_at?: string | null;
           sla_resolution_breached_at?: string | null;
+          solution_status?: "in_progress" | null;
+          solution_note?: string | null;
+          solution_at?: string | null;
+          solution_by?: string | null;
+          solution_clock_at?: string | null;
+          deadline_alerted_at?: string | null;
+          commitment_alerted_at?: string | null;
+          close_request?: Json | null;
           updated_at?: string;
         };
         Relationships: [

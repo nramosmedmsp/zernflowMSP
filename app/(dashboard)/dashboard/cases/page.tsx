@@ -19,7 +19,7 @@ export default async function CasesPage({
   const [typesRes, teamsRes, membersRes, stagesRes] = await Promise.all([
     supabase
       .from("case_types")
-      .select("id, name, color, archived_at")
+      .select("id, name, color, archived_at, solution_deadline_hours")
       .eq("workspace_id", workspace.id)
       .order("position", { ascending: true }),
     supabase
@@ -75,6 +75,7 @@ export default async function CasesPage({
         name: t.name,
         color: t.color,
         archived: t.archived_at !== null,
+        solutionDeadlineHours: t.solution_deadline_hours ?? null,
       }))}
       stages={(stagesRes.data ?? []).map((s) => ({
         id: s.id,

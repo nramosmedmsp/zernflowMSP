@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_FILTERS,
-  availableViews,
+  activeFilterCount,
+  availableScopes,
   buildRows,
-  caseMatchesView,
-  filtersForView,
+  caseMatchesScope,
+  caseMatchesState,
+  emptyText,
+  filtersForScope,
+  parseStoredView,
+  scopeLabel,
+  viewHint,
   whatsAppWindowChip,
   groupCasesByContact,
   mentionQueryAt,
@@ -75,6 +81,14 @@ function kase(overrides: Partial<InboxCase>): InboxCase {
     no_reply_event_minutes: null,
     sla_first_response_breached_at: null,
     sla_resolution_breached_at: null,
+    solution_status: null,
+    solution_note: null,
+    solution_at: null,
+    solution_by: null,
+    solution_clock_at: null,
+    deadline_alerted_at: null,
+    commitment_alerted_at: null,
+    close_request: null,
     created_at: "2026-10-10T10:00:00Z",
     updated_at: "2026-10-10T10:00:00Z",
     ...overrides,
@@ -95,49 +109,96 @@ function conv(id: string, contactId: string, lastMessageAt: string | null = null
     last_message_preview: null,
     unread_count: 0,
     is_automation_paused: false,
+    complaint_flagged_at: null,
+    complaint_excerpt: null,
+    complaint_alerted_at: null,
+    complaint_dismissed_at: null,
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
     contacts: null,
   };
 }
 
-describe("availableViews", () => {
-  it("asesor: solo sus vistas", () => {
-    expect(availableViews(meta())).toEqual(["mine", "today"]);
+describe("availableScopes", () => {
+  it("asesor: solo Míos", () => {
+    expect(availableScopes(meta())).toEqual(["mine"]);
   });
   it("asesor con cola visible: suma Sin asignar", () => {
-    expect(availableViews(meta({ agentSeesQueue: true }))).toEqual(["mine", "today", "unassigned"]);
+    expect(availableScopes(meta({ agentSeesQueue: true }))).toEqual(["mine", "unassigned"]);
   });
-  it("supervisor: suma Sin asignar y Mi equipo", () => {
-    expect(availableViews(meta({ supervisedTeamIds: [TEAM] }))).toEqual(["mine", "today", "unassigned", "team"]);
+  it("supervisor: suma Sin asignar y Equipo", () => {
+    expect(availableScopes(meta({ supervisedTeamIds: [TEAM] }))).toEqual(["mine", "unassigned", "team"]);
   });
-  it("administrador: todas", () => {
-    expect(availableViews(meta({ isAdmin: true }))).toEqual(["mine", "today", "unassigned", "team", "all"]);
+  it("administrador: todos", () => {
+    expect(availableScopes(meta({ isAdmin: true }))).toEqual(["mine", "unassigned", "team", "all"]);
   });
 });
 
-describe("caseMatchesView", () => {
-  it("Para hoy: próximo contacto vencido o de hoy, o activada hoy", () => {
-    const m = meta();
-    expect(caseMatchesView(kase({ assignee_id: ME, next_action_at: "2026-10-18T22:00:00Z" }), "today", m, null, NOW)).toBe(true);
-    expect(caseMatchesView(kase({ assignee_id: ME, next_action_at: "2026-10-19T15:00:00Z" }), "today", m, null, NOW)).toBe(false);
+describe("caseMatchesState", () => {
+  it("Seguimiento hoy: próximo contacto vencido o de hoy, o activada hoy", () => {
+    expect(caseMatchesState(kase({ next_action_at: "2026-10-18T22:00:00Z" }), "today", NOW)).toBe(true);
+    expect(caseMatchesState(kase({ next_action_at: "2026-10-10T22:00:00Z" }), "today", NOW)).toBe(true);
+    expect(caseMatchesState(kase({ next_action_at: "2026-10-19T15:00:00Z" }), "today", NOW)).toBe(false);
     expect(
-      caseMatchesView(
-        kase({ assignee_id: ME, scheduled_for: "2026-10-18T14:00:00Z", opened_at: "2026-10-18T14:00:01Z" }),
-        "today",
-        m,
-        null,
-        NOW,
-      ),
+      caseMatchesState(kase({ scheduled_for: "2026-10-18T14:00:00Z", opened_at: "2026-10-18T14:00:01Z" }), "today", NOW),
     ).toBe(true);
-    expect(caseMatchesView(kase({ assignee_id: OTHER, next_action_at: "2026-10-18T12:00:00Z" }), "today", m, null, NOW)).toBe(false);
+    expect(caseMatchesState(kase({ status: "scheduled", next_action_at: "2026-10-18T12:00:00Z" }), "today", NOW)).toBe(false);
+  });
+  it("Por responder: tiene waiting_since; Todo no restringe", () => {
+    expect(caseMatchesState(kase({ waiting_since: "2026-10-18T14:00:00Z" }), "waiting", NOW)).toBe(true);
+    expect(caseMatchesState(kase({}), "waiting", NOW)).toBe(false);
+    expect(caseMatchesState(kase({}), "all", NOW)).toBe(true);
+  });
+});
+
+describe("caseMatchesScope", () => {
+  it("Míos y Sin asignar", () => {
+    const m = meta();
+    expect(caseMatchesScope(kase({ assignee_id: ME }), "mine", m, null)).toBe(true);
+    expect(caseMatchesScope(kase({ assignee_id: OTHER }), "mine", m, null)).toBe(false);
+    expect(caseMatchesScope(kase({ assignee_id: null }), "unassigned", m, null)).toBe(true);
+    expect(caseMatchesScope(kase({ assignee_id: null, status: "scheduled" }), "unassigned", m, null)).toBe(false);
   });
 
-  it("Mi equipo: equipo de la gestión o del contacto", () => {
+  it("Equipo: equipo de la gestión o del contacto", () => {
     const m = meta({ supervisedTeamIds: [TEAM] });
-    expect(caseMatchesView(kase({ team_id: TEAM }), "team", m, null, NOW)).toBe(true);
-    expect(caseMatchesView(kase({ team_id: null }), "team", m, TEAM, NOW)).toBe(true);
-    expect(caseMatchesView(kase({ team_id: "otro" }), "team", m, null, NOW)).toBe(false);
+    expect(caseMatchesScope(kase({ team_id: TEAM }), "team", m, null)).toBe(true);
+    expect(caseMatchesScope(kase({ team_id: null }), "team", m, TEAM)).toBe(true);
+    expect(caseMatchesScope(kase({ team_id: "otro" }), "team", m, null)).toBe(false);
+  });
+});
+
+describe("scopeLabel", () => {
+  it("Equipo usa el nombre si hay uno solo", () => {
+    const teams = [{ id: TEAM, name: "Ventas" }, { id: "otro", name: "Soporte" }];
+    expect(scopeLabel(meta({ supervisedTeamIds: [TEAM], teams }), "team")).toBe("Ventas");
+    expect(scopeLabel(meta({ supervisedTeamIds: [TEAM, "otro"], teams }), "team")).toBe("Equipo");
+    expect(scopeLabel(meta({ isAdmin: true, teams }), "team")).toBe("Equipo");
+    expect(scopeLabel(meta({ isAdmin: true, myTeamIds: [TEAM], teams }), "team")).toBe("Ventas");
+    expect(scopeLabel(meta({ supervisedTeamIds: [TEAM] }), "team")).toBe("Equipo");
+    expect(scopeLabel(meta(), "mine")).toBe("Míos");
+    expect(scopeLabel(meta(), "all")).toBe("Todos");
+  });
+});
+
+describe("textos de la vista", () => {
+  it("pista y lista vacía", () => {
+    expect(viewHint("mine", "all")).toBe("Chats asignados a ti. Primero los que más esperan.");
+    expect(viewHint("unassigned", "waiting")).toContain("sin asignar");
+    expect(emptyText("mine", "waiting", false)).toBe("No tienes chats por responder");
+    expect(emptyText("all", "today", false)).toBe("Nadie tiene seguimientos para hoy");
+    expect(emptyText("mine", "all", false)).toBe("No tienes chats asignados");
+    expect(emptyText("mine", "waiting", true)).toBe("No se encontraron conversaciones");
+  });
+});
+
+describe("parseStoredView", () => {
+  it("lee lo guardado y valida el alcance", () => {
+    const raw = JSON.stringify({ scope: "team", state: "waiting" });
+    expect(parseStoredView(raw, ["mine", "team"])).toEqual({ scope: "team", state: "waiting" });
+    expect(parseStoredView(raw, ["mine"])).toEqual({ scope: "mine", state: "waiting" });
+    expect(parseStoredView("no json", ["mine"])).toEqual({ scope: "mine", state: "all" });
+    expect(parseStoredView(null, ["mine"])).toEqual({ scope: "mine", state: "all" });
   });
 });
 
@@ -153,6 +214,7 @@ describe("buildRows", () => {
       [conv("x1", "c1"), conv("x2", "c2"), conv("x3", "c3", "2026-10-18T14:30:00Z"), conv("x4", "c4")],
       groupCasesByContact(cases),
       "mine",
+      "all",
       EMPTY_FILTERS,
       meta(),
       NOW,
@@ -169,12 +231,12 @@ describe("buildRows", () => {
     const grouped = groupCasesByContact(cases);
     const convs = [conv("x1", "c1"), conv("x2", "c2")];
     const admin = meta({ isAdmin: true });
-    expect(buildRows(convs, grouped, "all", EMPTY_FILTERS, admin, NOW)).toHaveLength(2);
-    const none = buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, status: "none" }, admin, NOW);
+    expect(buildRows(convs, grouped, "all", "all", EMPTY_FILTERS, admin, NOW)).toHaveLength(2);
+    const none = buildRows(convs, grouped, "all", "all", { ...EMPTY_FILTERS, status: "none" }, admin, NOW);
     expect(none.map((r) => r.conversation.id)).toEqual(["x2"]);
   });
 
-  it("filtra por esperando respuesta y por responsable", () => {
+  it("filtra por estado Por responder y por responsable", () => {
     const cases = [
       kase({ id: "a", contact_id: "c1", waiting_since: "2026-10-18T14:00:00Z" }),
       kase({ id: "b", contact_id: "c2", assignee_id: OTHER }),
@@ -182,9 +244,10 @@ describe("buildRows", () => {
     const grouped = groupCasesByContact(cases);
     const convs = [conv("x1", "c1"), conv("x2", "c2")];
     const admin = meta({ isAdmin: true });
-    expect(buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, waitingOnly: true }, admin, NOW).map((r) => r.case?.id)).toEqual(["a"]);
-    expect(buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, assigneeId: OTHER }, admin, NOW).map((r) => r.case?.id)).toEqual(["b"]);
-    expect(buildRows(convs, grouped, "all", { ...EMPTY_FILTERS, assigneeId: "none" }, admin, NOW).map((r) => r.case?.id)).toEqual(["a"]);
+    expect(buildRows(convs, grouped, "all", "waiting", EMPTY_FILTERS, admin, NOW).map((r) => r.case?.id)).toEqual(["a"]);
+    expect(buildRows(convs, grouped, "all", "waiting", { ...EMPTY_FILTERS, status: "none" }, admin, NOW)).toEqual([]);
+    expect(buildRows(convs, grouped, "all", "all", { ...EMPTY_FILTERS, assigneeId: OTHER }, admin, NOW).map((r) => r.case?.id)).toEqual(["b"]);
+    expect(buildRows(convs, grouped, "all", "all", { ...EMPTY_FILTERS, assigneeId: "none" }, admin, NOW).map((r) => r.case?.id)).toEqual(["a"]);
   });
 });
 
@@ -219,13 +282,16 @@ describe("menciones", () => {
   });
 });
 
-describe("filtersForView", () => {
-  it("quita el filtro oculto «Sin gestión» fuera de la vista Todas", () => {
+describe("filtersForScope", () => {
+  it("quita el filtro oculto «Sin gestión» fuera del alcance Todos", () => {
     const none = { ...EMPTY_FILTERS, status: "none" as const };
-    expect(filtersForView(none, "mine").status).toBe("");
-    expect(filtersForView(none, "team").status).toBe("");
-    expect(filtersForView(none, "all").status).toBe("none");
-    expect(filtersForView({ ...EMPTY_FILTERS, status: "open" }, "mine").status).toBe("open");
+    expect(filtersForScope(none, "mine").status).toBe("");
+    expect(filtersForScope(none, "team").status).toBe("");
+    expect(filtersForScope(none, "all").status).toBe("none");
+    expect(filtersForScope({ ...EMPTY_FILTERS, status: "open" }, "mine").status).toBe("open");
+  });
+  it("activeFilterCount ya no cuenta el estado", () => {
+    expect(activeFilterCount({ ...EMPTY_FILTERS, status: "open", platform: "whatsapp" })).toBe(2);
   });
 });
 

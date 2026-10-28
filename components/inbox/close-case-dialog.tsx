@@ -13,6 +13,7 @@ import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { OutcomeKind } from "@/lib/types/database";
+import { closeSelection } from "./case-card-model";
 import { ErrorText, Field, Modal, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
 
 const KIND_ORDER: OutcomeKind[] = ["won", "lost", "resolved"];
@@ -27,11 +28,14 @@ const KIND_STYLES: Record<OutcomeKind, string> = {
 export function CloseCaseDialog({
   caseView,
   caseType,
+  initialStageId = null,
   onCancel,
   onClosed,
 }: {
   caseView: CaseView;
   caseType: CaseTypeOption | null;
+  /** Etapa final preseleccionada (la elegida en el menú "Cerrar"). */
+  initialStageId?: string | null;
   onCancel: () => void;
   onClosed: (message: string) => void;
 }) {
@@ -44,8 +48,9 @@ export function CloseCaseDialog({
     [caseType, finalStages],
   );
 
-  const [kind, setKind] = useState<OutcomeKind | null>(kinds[0] ?? null);
-  const [stageId, setStageId] = useState("");
+  const initial = useMemo(() => closeSelection(caseType?.stages, initialStageId), [caseType, initialStageId]);
+  const [kind, setKind] = useState<OutcomeKind | null>(initial?.kind ?? kinds[0] ?? null);
+  const [stageId, setStageId] = useState(initial?.stageId ?? "");
   const [reasonId, setReasonId] = useState("");
   const [categoryId, setCategoryId] = useState(caseView.categoryId ?? "");
   const [note, setNote] = useState("");
@@ -58,6 +63,12 @@ export function CloseCaseDialog({
   const [lastSchedules, setLastSchedules] = useState<ClosePreview["schedules"]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Control de reclamos: en un tipo protegido, resolver pide contar qué se hizo y
+  // cerrar sin solución lo aprueba un supervisor (el asesor solo lo pide).
+  const isProtected = !!caseType?.protected;
+  const noteRequired = isProtected && kind !== null && kind !== "lost";
+  const isRequest = isProtected && kind === "lost" && !caseView.canSupervise;
 
   const stagesOfKind = finalStages.filter((s) => s.kind === kind);
   const reasonsOfKind = (caseType?.outcomeReasons ?? []).filter((r) => r.kind === kind && !r.archived);
@@ -112,6 +123,7 @@ export function CloseCaseDialog({
     if (!kind) return setError("Elige el resultado de la gestión.");
     if (reasonRequired && !reasonId) return setError("Elige el motivo.");
     if (showCategory && !categoryId) return setError("Elige una categoría antes de cerrar.");
+    if (noteRequired && !note.trim()) return setError(`Cuenta qué se hizo antes de cerrar la ${caseType?.name ?? "gestión"}.`);
     if (preview?.askKeyDate && !isDateString(keyDate)) return setError(`Indica la fecha: ${preview.askKeyDate.label}.`);
     setSubmitting(true);
     setError(null);
@@ -129,6 +141,10 @@ export function CloseCaseDialog({
       });
       if ("error" in result) {
         setError(result.error);
+        return;
+      }
+      if (result.requested) {
+        onClosed("Pedido enviado: un supervisor lo revisará. La gestión sigue abierta mientras tanto.");
         return;
       }
       const parts = [`Gestión cerrada como ${OUTCOME_LABELS[result.status].toLowerCase()}.`];
@@ -152,7 +168,7 @@ export function CloseCaseDialog({
   return (
     <Modal
       open
-      title="Cerrar gestión"
+      title={isRequest ? "Pedir cierre sin solución" : "Cerrar gestión"}
       onClose={onCancel}
       footer={
         <>
@@ -161,7 +177,7 @@ export function CloseCaseDialog({
           </button>
           <button onClick={handleSubmit} disabled={submitting || !kind} className={primaryButtonClass}>
             {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Cerrar gestión
+            {isRequest ? "Pedir aprobación" : "Cerrar gestión"}
           </button>
         </>
       }
@@ -232,13 +248,25 @@ export function CloseCaseDialog({
         </Field>
       )}
 
-      <Field label="Nota">
+      {isRequest && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          Un supervisor tiene que aprobar este cierre. Mientras tanto la gestión sigue abierta y le avisamos de tu pedido.
+        </p>
+      )}
+
+      <Field label={noteRequired ? "Qué se hizo (obligatorio)" : isRequest ? "Nota para el supervisor" : "Nota"}>
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={3}
           maxLength={2000}
-          placeholder="Opcional: qué pasó, acuerdos, próximos pasos..."
+          placeholder={
+            noteRequired
+              ? "Cuenta qué se hizo para resolverlo"
+              : isRequest
+                ? "Opcional: qué intentaste y por qué no se pudo resolver"
+                : "Opcional: qué pasó, acuerdos, próximos pasos..."
+          }
           className={cn(inputClass, "resize-none")}
         />
       </Field>

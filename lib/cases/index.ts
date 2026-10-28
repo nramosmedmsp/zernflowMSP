@@ -18,8 +18,10 @@ export { setConversationBotPaused } from "./bot-pause";
 export { closeCase, previewClose, type CloseCaseInput, type ClosePreview } from "./close";
 export {
   activateScheduledCases,
+  notifyCommitmentsOverdue,
   notifyOverdueNextActions,
   notifySlaBreaches,
+  notifySolutionDeadlines,
   retryUnassignedCases,
   runCaseTasks,
   type CaseTaskStats,
@@ -49,3 +51,20 @@ export { zernioMessenger, type CaseMessenger, type SendResult } from "./messagin
 export { detectClientNoReply, nextNoReplyThreshold, noReplyMinutes } from "./no-reply";
 export { renderOffHoursReply, sendOffHoursReply, type OffHoursReplyOutcome } from "./off-hours";
 export { reassignWaitingCases } from "./reassign";
+// Control de reclamos
+export {
+  alertUnhandledComplaints,
+  dismissComplaint,
+  flagComplaint,
+  openComplaintCase,
+  protectedTypes,
+  type FlagOutcome,
+} from "./complaint";
+export {
+  approveCloseRequest,
+  closeOrRequestClose,
+  registerSolutionInProgress,
+  rejectCloseRequest,
+  type CloseOrRequestResult,
+} from "./protected";
+export { isSupervisorInDb, notifySupervisors, supervisorRecipients } from "./supervisors";

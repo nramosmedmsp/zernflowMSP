@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -9,24 +9,35 @@ import { platformLabel } from "@/lib/platforms";
 import type { Platform } from "@/lib/types/database";
 import {
   EMPTY_FILTERS,
-  VIEW_LABELS,
+  DEFAULT_SCOPE,
+  DEFAULT_STATE,
+  INBOX_STATES,
+  STATE_LABELS,
   activeFilterCount,
-  availableViews,
+  availableScopes,
   buildRows,
-  filtersForView,
+  emptyText,
+  filtersForScope,
   memberName,
+  parseStoredView,
+  scopeLabel,
+  viewHint,
   waitingText,
   type InboxCase,
   type InboxConversation,
   type InboxFilters,
   type InboxMeta,
   type InboxRow,
-  type InboxViewKey,
+  type InboxScope,
+  type InboxState,
 } from "./inbox-model";
 import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
 import { useDraftPreviews } from "./use-drafts";
+
+/** Alcance y estado que cada persona dejó la última vez (solo en su navegador). */
+const viewStorageKey = (workspaceId: string, userId: string) => `inbox:view:${workspaceId}:${userId}`;
 
 export function ConversationList({
   workspaceId,
@@ -56,8 +67,9 @@ export function ConversationList({
   /** Botones extra en la cabecera (por ejemplo, los avisos). */
   headerActions?: ReactNode;
 }) {
-  const views = availableViews(meta);
-  const [view, setView] = useState<InboxViewKey>("mine");
+  const scopes = availableScopes(meta);
+  const [scope, setScope] = useState<InboxScope>(DEFAULT_SCOPE);
+  const [state, setState] = useState<InboxState>(DEFAULT_STATE);
   const [filters, setFilters] = useState<InboxFilters>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
   // Los tiempos relativos dependen del reloj del cliente: se muestran después
@@ -66,15 +78,49 @@ export function ConversationList({
   const nowDate = useMemo(() => (now === null ? new Date() : new Date(now)), [now]);
   const drafts = useDraftPreviews({ userId: meta.userId, workspaceId });
 
-  const rowsByView = useMemo(() => {
-    const result = new Map<InboxViewKey, InboxRow[]>();
-    for (const v of views) result.set(v, buildRows(conversations, casesByContact, v, filtersForView(filters, v), meta, nowDate));
-    return result;
-    // `views` se deriva de `meta`.
+  // El último alcance y estado se leen después de montar (no hay localStorage en el servidor).
+  const storageKey = viewStorageKey(workspaceId, meta.userId);
+  useEffect(() => {
+    const id = setTimeout(() => {
+      let raw: string | null = null;
+      try {
+        raw = window.localStorage.getItem(storageKey);
+      } catch {
+        // Sin almacenamiento: se queda en Míos / Todo.
+      }
+      if (!raw) return;
+      const saved = parseStoredView(raw, availableScopes(meta));
+      setScope(saved.scope);
+      setState(saved.state);
+      setFilters((prev) => filtersForScope(prev, saved.scope));
+    }, 0);
+    return () => clearTimeout(id);
+    // Solo al montar o al cambiar de persona; `meta` no cambia el resultado.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations, casesByContact, filters, meta, nowDate]);
+  }, [storageKey]);
 
-  const rows = rowsByView.get(view) ?? [];
+  function choose(nextScope: InboxScope, nextState: InboxState) {
+    setScope(nextScope);
+    setState(nextState);
+    setFilters((prev) => filtersForScope(prev, nextScope));
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify({ scope: nextScope, state: nextState }));
+    } catch {
+      // Sin almacenamiento: la elección vale solo para esta sesión.
+    }
+  }
+
+  // Por responder de cada alcance (insignias) y conteo de cada estado en el alcance actual (chips).
+  const { waitingByScope, countByState, rows } = useMemo(() => {
+    const build = (sc: InboxScope, st: InboxState) =>
+      buildRows(conversations, casesByContact, sc, st, filtersForScope(filters, sc), meta, nowDate);
+    const waiting = new Map<InboxScope, number>();
+    for (const sc of availableScopes(meta)) waiting.set(sc, build(sc, "waiting").length);
+    const byState = new Map<InboxState, InboxRow[]>();
+    for (const st of INBOX_STATES) byState.set(st, build(scope, st));
+    return { waitingByScope: waiting, countByState: byState, rows: byState.get(state) ?? [] };
+  }, [conversations, casesByContact, filters, meta, nowDate, scope, state]);
+
   const demoChannelIds = useMemo(() => new Set(meta.demoChannelIds ?? []), [meta.demoChannelIds]);
   const typeById = useMemo(() => new Map(meta.caseTypes.map((t) => [t.id, t])), [meta.caseTypes]);
   const platforms = useMemo(
@@ -96,9 +142,6 @@ export function ConversationList({
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
         <h2 className="text-sm font-semibold">Bandeja</h2>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">
-            {rows.length} {rows.length === 1 ? "conversación" : "conversaciones"}
-          </span>
           {headerActions}
           {onSync && (
             <button
@@ -115,33 +158,64 @@ export function ConversationList({
       </div>
       {syncError && <p className="border-b border-border px-4 py-1.5 text-xs text-destructive">{syncError}</p>}
 
-      {/* Views */}
-      <div className="flex flex-wrap gap-1 px-3 pt-3">
-        {views.map((v) => {
-          const count = rowsByView.get(v)?.length ?? 0;
+      {/* Ver: de quién son los chats */}
+      {scopes.length > 1 && (
+        <div role="group" aria-label="Ver chats" className="mx-3 mt-3 flex gap-px rounded-lg bg-muted p-0.5">
+          {scopes.map((sc) => {
+            const count = waitingByScope.get(sc) ?? 0;
+            const active = scope === sc;
+            return (
+              <button
+                key={sc}
+                onClick={() => choose(sc, state)}
+                aria-pressed={active}
+                className={cn(
+                  "inline-flex min-w-0 flex-auto items-center justify-center gap-1 whitespace-nowrap rounded-md px-1 py-1 text-xs font-medium transition-colors",
+                  active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <span className="truncate">{scopeLabel(meta, sc)}</span>
+                {count > 0 && (
+                  <span
+                    aria-label={`${count} por responder`}
+                    className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold leading-none text-white"
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Estado: qué hay que hacer */}
+      <div className="flex gap-1 px-3 pt-2">
+        {INBOX_STATES.map((st) => {
+          const count = st === "all" ? 0 : countByState.get(st)?.length ?? 0;
+          const active = state === st;
           return (
             <button
-              key={v}
-              onClick={() => {
-                setView(v);
-                setFilters((prev) => filtersForView(prev, v));
-              }}
+              key={st}
+              onClick={() => choose(scope, st)}
+              aria-pressed={active}
               className={cn(
-                "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                view === v
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-1 text-xs font-medium transition-colors",
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               )}
             >
-              {VIEW_LABELS[v]}
-              <span className={cn("text-[10px]", view === v ? "opacity-80" : "opacity-60")}>{count}</span>
+              {STATE_LABELS[st]}
+              {count > 0 && <span className={cn("text-[10px]", active ? "opacity-80" : "opacity-70")}>{count}</span>}
             </button>
           );
         })}
       </div>
+      <p className="px-3 pt-1.5 text-xs text-muted-foreground">{viewHint(scope, state)}</p>
 
       {/* Search + filters */}
-      <div className="flex gap-2 p-3">
+      <div className="flex gap-2 px-3 pb-3 pt-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -219,7 +293,7 @@ export function ConversationList({
             <option value="">Todos los estados</option>
             <option value="open">Abiertas</option>
             <option value="scheduled">Programadas</option>
-            {view === "all" && <option value="none">Sin gestión</option>}
+            {scope === "all" && <option value="none">Sin gestión</option>}
           </select>
           <select
             value={filters.assigneeId}
@@ -248,14 +322,6 @@ export function ConversationList({
               </option>
             ))}
           </select>
-          <label className="flex items-center gap-1.5 text-xs">
-            <input
-              type="checkbox"
-              checked={filters.waitingOnly}
-              onChange={(e) => setFilter("waitingOnly", e.target.checked)}
-            />
-            Esperando respuesta
-          </label>
           {filterCount > 0 && (
             <button
               onClick={() => setFilters({ ...EMPTY_FILTERS, search: filters.search })}
@@ -273,9 +339,7 @@ export function ConversationList({
           <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
             <MessageSquare className="h-8 w-8 text-muted-foreground/50" />
             <p className="mt-2 text-sm text-muted-foreground">
-              {view === "mine" && filterCount === 0 && !filters.search
-                ? "No tienes gestiones asignadas"
-                : "No se encontraron conversaciones"}
+              {emptyText(scope, state, filterCount > 0 || !!filters.search.trim())}
             </p>
           </div>
         ) : (

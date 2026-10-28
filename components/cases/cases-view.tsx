@@ -21,6 +21,7 @@ import {
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import type { CaseListRow } from "@/app/(dashboard)/dashboard/cases/load-cases";
+import { claimBadge } from "@/lib/cases/protection";
 import type { CaseStatus } from "@/lib/types/database";
 
 interface CaseTypeOption {
@@ -28,6 +29,8 @@ interface CaseTypeOption {
   name: string;
   color: string | null;
   archived: boolean;
+  /** Control de reclamos: horas para registrar la solución (null = sin plazo). */
+  solutionDeadlineHours?: number | null;
 }
 interface StageOption {
   id: string;
@@ -345,6 +348,19 @@ export function CasesView(props: CasesViewProps) {
                   row.nextActionAt !== null &&
                   new Date(row.nextActionAt).getTime() < now.getTime();
                 const waiting = row.status === "open" ? formatWaiting(row.waitingSince, now) : "";
+                const claim = claimBadge(
+                  {
+                    status: row.status,
+                    openedAt: row.openedAt,
+                    solutionClockAt: row.solutionClockAt,
+                    solutionStatus: row.solutionStatus,
+                    solutionNote: row.solutionNote,
+                    nextActionAt: row.nextActionAt,
+                    hasCloseRequest: row.hasCloseRequest,
+                  },
+                  type?.solutionDeadlineHours,
+                  now,
+                );
                 return (
                   <tr
                     key={row.id}
@@ -362,6 +378,18 @@ export function CasesView(props: CasesViewProps) {
                       >
                         {row.contactName ?? "Desconocido"}
                       </Link>
+                      {claim && (
+                        <span
+                          className={cn(
+                            "ml-2 inline-block rounded-full px-2 py-0.5 align-middle text-[10px] font-medium",
+                            claim.kind === "approval"
+                              ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                              : "bg-red-500/10 text-red-600 dark:text-red-300",
+                          )}
+                        >
+                          {claim.label}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {type ? (

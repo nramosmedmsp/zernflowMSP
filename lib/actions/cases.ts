@@ -19,6 +19,7 @@ import {
   type CasePermissions,
 } from "@/lib/cases/access";
 import { isDateString } from "@/lib/cases/dates";
+import { isCaseSupervisor, parseCloseRequest } from "@/lib/cases/protection";
 import { GENERIC_ERROR, type CaseRow, type Db } from "@/lib/cases/io";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor, type WorkspaceActor } from "@/lib/cases/visibility";
 import { isOutcomeKind } from "@/lib/cases/rules";
@@ -73,6 +74,37 @@ export interface CaseView {
   legalDueAt: string | null;
   createdAt: string;
   permissions: CasePermissions;
+  // ── Control de reclamos ──
+  solutionStatus: "in_progress" | null;
+  solutionNote: string | null;
+  solutionAt: string | null;
+  solutionBy: string | null;
+  /** Desde cuándo corre el plazo de la solución (null = desde que se abrió). */
+  solutionClockAt: string | null;
+  /** Pedido de cierre «sin solución» esperando a un supervisor. */
+  closeRequest: CloseRequestView | null;
+  /** ¿Puede actuar como supervisor de esta gestión? (administrador o supervisor de su equipo) */
+  canSupervise: boolean;
+}
+
+export interface CloseRequestView {
+  stageId: string | null;
+  reasonId: string | null;
+  note: string | null;
+  categoryId: string | null;
+  requestedBy: string;
+  requestedAt: string;
+}
+
+/** Una fila del historial de una gestión (tabla `activity`). */
+export interface CaseHistoryRow {
+  id: number;
+  type: string;
+  actorId: string | null;
+  fromValue: string | null;
+  toValue: string | null;
+  meta: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface CaseTypeOption {
@@ -84,6 +116,11 @@ export interface CaseTypeOption {
   archived: boolean;
   requireCategory: boolean;
   requireOutcomeReason: boolean;
+  /** Control de reclamos: solo el supervisor cambia el tipo o cierra sin solución. */
+  protected: boolean;
+  /** Horas desde que se abre para registrar la solución (null = sin plazo). */
+  solutionDeadlineHours: number | null;
+  reopenWindowDays: number | null;
   stages: { id: string; name: string; color: string | null; kind: StageKind; archived: boolean }[];
   categories: { id: string; name: string; isHighPriority: boolean; archived: boolean }[];
   outcomeReasons: { id: string; name: string; kind: OutcomeKind; archived: boolean }[];
@@ -224,7 +261,21 @@ async function withCase(
   return { s, access };
 }
 
-function toCaseView(row: CaseRow, permissions: CasePermissions): CaseView {
+function toCloseRequestView(value: unknown): CloseRequestView | null {
+  const r = parseCloseRequest(value);
+  return r
+    ? {
+        stageId: r.stageId,
+        reasonId: r.reasonId,
+        note: r.note,
+        categoryId: r.categoryId,
+        requestedBy: r.requestedBy,
+        requestedAt: r.requestedAt,
+      }
+    : null;
+}
+
+function toCaseView(row: CaseRow, permissions: CasePermissions, canSupervise: boolean): CaseView {
   return {
     id: row.id,
     contactId: row.contact_id,
@@ -251,6 +302,13 @@ function toCaseView(row: CaseRow, permissions: CasePermissions): CaseView {
     legalDueAt: row.legal_due_at,
     createdAt: row.created_at,
     permissions,
+    solutionStatus: row.solution_status ?? null,
+    solutionNote: row.solution_note ?? null,
+    solutionAt: row.solution_at ?? null,
+    solutionBy: row.solution_by ?? null,
+    solutionClockAt: row.solution_clock_at ?? null,
+    closeRequest: toCloseRequestView(row.close_request),
+    canSupervise,
   };
 }
 
@@ -360,6 +418,9 @@ export async function getContactCases(
     archived: t.archived_at !== null,
     requireCategory: t.require_category,
     requireOutcomeReason: t.require_outcome_reason,
+    protected: t.protected ?? false,
+    solutionDeadlineHours: t.solution_deadline_hours ?? null,
+    reopenWindowDays: t.reopen_window_days ?? null,
     stages: (stages ?? [])
       .filter((x) => x.case_type_id === t.id)
       .map((x) => ({ id: x.id, name: x.name, color: x.color, kind: x.kind, archived: x.archived_at !== null })),
@@ -371,7 +432,8 @@ export async function getContactCases(
       .map((x) => ({ id: x.id, name: x.name, kind: x.kind, archived: x.archived_at !== null })),
   }));
 
-  const views = activeCases.map((row) => toCaseView(row, permsOf(row)));
+  const supervisesOf = (row: CaseRow) => isCaseSupervisor(s.actor, row.team_id);
+  const views = activeCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row)));
   let activeCaseId: string | null = null;
   if (caseId && [...activeCases, ...closedCases].some((c) => c.id === caseId)) {
     activeCaseId = caseId;
@@ -397,7 +459,7 @@ export async function getContactCases(
       },
       activeCaseId,
       cases: views,
-      recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row))),
+      recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row))),
       caseTypes,
       contactTypes: (contactTypes ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color, isDefault: t.is_default })),
       teams: s.actor.teams,
@@ -472,7 +534,13 @@ export async function classifyCase(
   if (!isId(caseTypeId)) return { error: INVALID };
   const ctx = await withCase(caseId, (p) => p.canEdit);
   if ("error" in ctx) return ctx;
-  return engine.classifyCase(ctx.s.db, { caseId: ctx.access.row.id, caseTypeId, actorId: ctx.s.userId });
+  return engine.classifyCase(ctx.s.db, {
+    caseId: ctx.access.row.id,
+    caseTypeId,
+    actorId: ctx.s.userId,
+    // Control de reclamos: un tipo protegido solo lo cambia el supervisor del equipo.
+    actorIsSupervisor: isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id),
+  });
 }
 
 /**
@@ -702,15 +770,155 @@ export async function previewCloseCase(
   return engine.previewClose(ctx.s.db, { ...parsed, caseId: ctx.access.row.id });
 }
 
-/** Cierra la gestión con resultado, motivo, nota y lo que pidan las reglas. */
+/**
+ * Cierra la gestión con resultado, motivo, nota y lo que pidan las reglas. En
+ * un tipo protegido (control de reclamos) un asesor que la cierra como perdida
+ * no la cierra: deja un pedido (`requested: true`) que el supervisor aprueba.
+ */
 export async function closeCase(
   input: CloseCaseActionInput,
-): Promise<CaseActionResult<{ status: OutcomeKind; effects: RuleEffects }>> {
+): Promise<CaseActionResult<engine.CloseOrRequestResult>> {
   const parsed = closeInput(input);
   if (!parsed) return { error: INVALID };
   const ctx = await withCase(parsed.caseId, (p) => p.canClose);
   if ("error" in ctx) return ctx;
-  return engine.closeCase(ctx.s.db, { ...parsed, caseId: ctx.access.row.id, actorId: ctx.s.userId });
+  return engine.closeOrRequestClose(
+    ctx.s.db,
+    { ...parsed, caseId: ctx.access.row.id, actorId: ctx.s.userId },
+    { actorIsSupervisor: isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id) },
+  );
+}
+
+const SUPERVISOR_ONLY = "Solo el supervisor del equipo o un administrador puede responder un pedido de cierre.";
+
+/** El supervisor aprueba el pedido de cierre: se cierra con lo que pidió el asesor. */
+export async function approveCloseRequest(caseId: string): Promise<CaseActionResult<{ status: OutcomeKind }>> {
+  const ctx = await withCase(caseId, () => true);
+  if ("error" in ctx) return ctx;
+  if (!isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id)) return { error: SUPERVISOR_ONLY };
+  return engine.approveCloseRequest(ctx.s.db, { caseId: ctx.access.row.id, actorId: ctx.s.userId });
+}
+
+/** El supervisor rechaza el pedido de cierre (con un comentario opcional): la gestión sigue abierta. */
+export async function rejectCloseRequest(caseId: string, comment?: string | null): Promise<CaseActionResult> {
+  if (comment != null && typeof comment !== "string") return { error: INVALID };
+  const ctx = await withCase(caseId, () => true);
+  if ("error" in ctx) return ctx;
+  if (!isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id)) return { error: SUPERVISOR_ONLY };
+  return engine.rejectCloseRequest(ctx.s.db, {
+    caseId: ctx.access.row.id,
+    actorId: ctx.s.userId,
+    comment: comment ?? null,
+  });
+}
+
+/**
+ * Registra la solución en proceso (qué se está haciendo y hasta cuándo):
+ * cumple el plazo del tipo y deja la fecha compromiso como próximo contacto.
+ * `commitmentAt` es "YYYY-MM-DD" (a las 09:00 de Lima) o un instante ISO.
+ */
+export async function registerSolutionInProgress(
+  caseId: string,
+  note: string,
+  commitmentAt: string,
+): Promise<CaseActionResult<{ commitmentAt: string }>> {
+  if (typeof note !== "string" || typeof commitmentAt !== "string") return { error: INVALID };
+  const ctx = await withCase(caseId, (p) => p.canEdit);
+  if ("error" in ctx) return ctx;
+  return engine.registerSolutionInProgress(ctx.s.db, {
+    caseId: ctx.access.row.id,
+    note,
+    commitmentAt,
+    actorId: ctx.s.userId,
+  });
+}
+
+/** Historial de la gestión (más reciente primero): quién hizo qué y cuándo. */
+export async function getCaseHistory(caseId: string): Promise<CaseActionResult<{ rows: CaseHistoryRow[] }>> {
+  const ctx = await withCase(caseId, (p) => p.canView);
+  if ("error" in ctx) return ctx;
+  const { data, error } = await ctx.s.db
+    .from("activity")
+    .select("id, type, actor_id, from_value, to_value, meta, created_at")
+    .eq("workspace_id", ctx.s.workspaceId)
+    .eq("case_id", ctx.access.row.id)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(200);
+  if (error) return { error: GENERIC_ERROR };
+  return {
+    ok: true,
+    rows: (data ?? []).map((r) => ({
+      id: r.id,
+      type: r.type,
+      actorId: r.actor_id,
+      fromValue: r.from_value,
+      toValue: r.to_value,
+      meta: r.meta && typeof r.meta === "object" && !Array.isArray(r.meta) ? (r.meta as Record<string, unknown>) : {},
+      createdAt: r.created_at,
+    })),
+  };
+}
+
+/** Conversación (del espacio) y contacto que el usuario puede ver, o un error. */
+async function visibleConversation(
+  s: Session,
+  conversationId: unknown,
+): Promise<
+  { error: string } | { conversation: { id: string; contact_id: string }; contact: { id: string; owner_id: string | null; team_id: string | null } }
+> {
+  if (!isId(conversationId)) return { error: INVALID };
+  const { data: conversation } = await s.db
+    .from("conversations")
+    .select("id, contact_id")
+    .eq("id", conversationId)
+    .eq("workspace_id", s.workspaceId)
+    .maybeSingle();
+  if (!conversation) return { error: "Conversación no encontrada." };
+  const { data: contact } = await s.db
+    .from("contacts")
+    .select("id, owner_id, team_id")
+    .eq("id", conversation.contact_id)
+    .eq("workspace_id", s.workspaceId)
+    .maybeSingle();
+  const summaries = contact ? await loadContactCaseSummaries(s.db, contact.id) : [];
+  if (!contact || !actorSeesContact(s.actor, contact, summaries)) return { error: "Conversación no encontrada." };
+  return { conversation, contact };
+}
+
+/**
+ * «Abrir Postventa» del aviso de reclamo: clasifica la gestión sin clasificar
+ * como el tipo protegido o abre una nueva de ese tipo, y quita el aviso.
+ */
+export async function openComplaintCase(
+  conversationId: string,
+): Promise<CaseActionResult<{ caseId: string; classified: boolean }>> {
+  const s = await session();
+  if ("error" in s) return s;
+  const seen = await visibleConversation(s, conversationId);
+  if ("error" in seen) return seen;
+  return engine.openComplaintCase(s.db, {
+    workspaceId: s.workspaceId,
+    conversationId,
+    actorId: s.userId,
+    canClassify: (row) =>
+      casePermissions(s.actor, {
+        status: row.status,
+        assigneeId: row.assignee_id,
+        teamId: row.team_id,
+        contactTeamId: seen.contact.team_id,
+        canSeeContact: true,
+      }).canEdit,
+  });
+}
+
+/** «No es un reclamo»: quita el aviso y lo deja anotado. */
+export async function dismissComplaintFlag(conversationId: string): Promise<CaseActionResult> {
+  const s = await session();
+  if ("error" in s) return s;
+  const seen = await visibleConversation(s, conversationId);
+  if ("error" in seen) return seen;
+  return engine.dismissComplaint(s.db, { workspaceId: s.workspaceId, conversationId, actorId: s.userId });
 }
 
 /** Abre una gestión a mano (en paralelo a las que tenga), o la programa para una fecha. */

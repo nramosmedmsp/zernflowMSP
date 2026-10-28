@@ -38,7 +38,9 @@ import type {
 } from "@/lib/types/database";
 import {
   CASE_TYPE_ICONS,
+  MAX_REOPEN_DAYS,
   MAX_SLA_HOURS,
+  MAX_SOLUTION_HOURS,
   MAX_SLA_MINUTES,
   NAME_ERROR,
   OUTCOME_KINDS,
@@ -315,6 +317,9 @@ async function loadConfig(db: Db, workspaceId: string): Promise<CaseConfigData> 
     slaResolutionHours: t.sla_resolution_hours,
     requireCategory: t.require_category,
     requireOutcomeReason: t.require_outcome_reason,
+    protected: t.protected ?? false,
+    solutionDeadlineHours: t.solution_deadline_hours ?? null,
+    reopenWindowDays: t.reopen_window_days ?? null,
     archived: t.archived_at !== null,
     updatedAt: t.updated_at,
     stages: (stages?.data ?? []).filter((r) => r.case_type_id === t.id).map((r) => toStage(r as ChildRow)),
@@ -362,6 +367,9 @@ interface TypeRow {
   sla_resolution_hours: number | null;
   require_category: boolean;
   require_outcome_reason: boolean;
+  protected?: boolean;
+  solution_deadline_hours?: number | null;
+  reopen_window_days?: number | null;
   archived_at: string | null;
 }
 
@@ -536,6 +544,12 @@ export interface UpdateCaseTypeInput {
   slaResolutionHours?: number | string | null;
   requireCategory?: boolean;
   requireOutcomeReason?: boolean;
+  /** Control de reclamos: solo el supervisor cambia el tipo o cierra sin solución. */
+  protected?: boolean;
+  /** Horas para registrar la solución (número, texto con número o vacío = sin plazo). */
+  solutionDeadlineHours?: number | string | null;
+  /** Días tras el cierre en que un mensaje del cliente la reabre (vacío = 24 horas). */
+  reopenWindowDays?: number | string | null;
 }
 
 /** Cambia los datos generales, el destino, los tiempos y los interruptores de un tipo. Solo toca lo que viene. */
@@ -579,6 +593,26 @@ export async function updateCaseType(input: UpdateCaseTypeInput): Promise<Config
     if (input.requireOutcomeReason !== undefined) {
       patch.require_outcome_reason = input.requireOutcomeReason === true;
       before.require_outcome_reason = row.require_outcome_reason;
+    }
+    if (input.protected !== undefined) {
+      patch.protected = input.protected === true;
+      before.protected = row.protected ?? false;
+    }
+    if (input.solutionDeadlineHours !== undefined) {
+      const hours = parseOptionalPositiveInt(input.solutionDeadlineHours, MAX_SOLUTION_HOURS);
+      if (hours === undefined) {
+        return { error: `El plazo debe ser un número entero de horas, de 1 a ${MAX_SOLUTION_HOURS}, o vacío.` };
+      }
+      patch.solution_deadline_hours = hours;
+      before.solution_deadline_hours = row.solution_deadline_hours ?? null;
+    }
+    if (input.reopenWindowDays !== undefined) {
+      const days = parseOptionalPositiveInt(input.reopenWindowDays, MAX_REOPEN_DAYS);
+      if (days === undefined) {
+        return { error: `La ventana debe ser un número entero de días, de 1 a ${MAX_REOPEN_DAYS}, o vacía.` };
+      }
+      patch.reopen_window_days = days;
+      before.reopen_window_days = row.reopen_window_days ?? null;
     }
     if (input.suggestedForContactTypeIds !== undefined) {
       const ids = [...new Set(input.suggestedForContactTypeIds)];

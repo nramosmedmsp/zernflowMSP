@@ -75,6 +75,10 @@ export interface CaseTypeConfig {
   slaResolutionHours: number | null;
   requireCategory: boolean;
   requireOutcomeReason: boolean;
+  /** Control de reclamos (00029). */
+  protected: boolean;
+  solutionDeadlineHours: number | null;
+  reopenWindowDays: number | null;
   archived: boolean;
   updatedAt: string;
   stages: StageConfig[];
@@ -202,6 +206,8 @@ export const KEY_DATE_LABEL_SUGGESTIONS: readonly string[] = ["Última compra", 
 export const MAX_NAME_LENGTH = 100;
 export const MAX_SLA_MINUTES = 525_600; // un año
 export const MAX_SLA_HOURS = 8_760; // un año
+export const MAX_SOLUTION_HOURS = 720; // control de reclamos: 30 días
+export const MAX_REOPEN_DAYS = 365;
 export const MAX_RULE_DAYS = 3_650;
 export const MAX_NTH_WIN = 1_000;
 

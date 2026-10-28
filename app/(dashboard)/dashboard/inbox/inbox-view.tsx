@@ -8,6 +8,7 @@ import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactPanel } from "@/components/inbox/contact-panel";
 import { CaseCard } from "@/components/inbox/case-card";
+import { ComplaintBannerConnected, showComplaintBanner } from "@/components/inbox/complaint-banner";
 import { useInboxData } from "@/components/inbox/use-inbox-data";
 import { useContactCases } from "@/components/inbox/use-contact-cases";
 import { useCaseNotes } from "@/components/inbox/use-case-notes";
@@ -57,6 +58,8 @@ export function InboxView({
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; contactId?: string } | null>(null);
+  // Aviso de reclamo ya atendido en este navegador (hasta que llegue el cambio en tiempo real).
+  const [handledComplaint, setHandledComplaint] = useState<string | null>(null);
 
   const selected = conversations.find((c) => c.id === selectedId) ?? null;
   const contactId = selected?.contact_id ?? null;
@@ -159,6 +162,11 @@ export function InboxView({
     },
     [contactId, syncUrl],
   );
+
+  // Control de reclamos: aviso «Parece un reclamo» mientras no haya una Postventa atendiéndolo.
+  const complaintKey = selected?.complaint_flagged_at ? `${selected.id}|${selected.complaint_flagged_at}` : null;
+  const showComplaint =
+    !!selected && complaintKey !== handledComplaint && showComplaintBanner(selected.complaint_flagged_at, casesData);
 
   // Después de una acción: vuelve a leer la tarjeta y las gestiones del contacto en la lista.
   const reloadContactCases = contactCases.reload;
@@ -337,21 +345,35 @@ export function InboxView({
               onServerMessages={handleServerMessages}
               caseSlot={
                 selected ? (
-                  casesData ? (
-                    <CaseCard
-                      data={casesData}
-                      activeCaseId={activeCase?.id ?? null}
-                      members={meta.members}
-                      onSelectCase={handleSelectCase}
-                      onChanged={handleCaseChanged}
-                    />
-                  ) : contactCases.error ? (
-                    <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-destructive">
-                      {contactCases.error}
-                    </div>
-                  ) : (
-                    <div className="h-[41px] shrink-0 border-b border-border bg-muted/30" />
-                  )
+                  <>
+                    {casesData ? (
+                      <CaseCard
+                        data={casesData}
+                        activeCaseId={activeCase?.id ?? null}
+                        members={meta.members}
+                        onSelectCase={handleSelectCase}
+                        onChanged={handleCaseChanged}
+                      />
+                    ) : contactCases.error ? (
+                      <div className="shrink-0 border-b border-border px-4 py-2 text-xs text-destructive">
+                        {contactCases.error}
+                      </div>
+                    ) : (
+                      <div className="h-[41px] shrink-0 border-b border-border bg-muted/30" />
+                    )}
+                    {showComplaint && casesData && (
+                      <ComplaintBannerConnected
+                        conversationId={selected.id}
+                        excerpt={selected.complaint_excerpt}
+                        typeName={casesData.caseTypes.find((t) => t.protected && !t.archived)?.name}
+                        onChanged={async (caseId) => {
+                          setHandledComplaint(complaintKey);
+                          await handleCaseChanged();
+                          if (caseId) handleSelectCase(caseId);
+                        }}
+                      />
+                    )}
+                  </>
                 ) : null
               }
               notes={notes}

@@ -7,10 +7,20 @@ import { pickSuggestedCaseTypeId, resolveReopenStageId } from "./decisions";
 import { runEventRules } from "./effects";
 import { emitCaseOpened, emitStageChanged } from "./events";
 import { businessSecondsBetween } from "./hours";
-import { firstOpenStageId, loadContact, logActivity, type CaseRow, type Db } from "./io";
+import { caseLink, contactName, firstOpenStageId, loadContact, logActivity, type CaseRow, type Db } from "./io";
+import { reopenWindowMs } from "./protection";
+import { notifySupervisors } from "./supervisors";
 import type { CaseMessenger } from "./messaging";
 import { sendOffHoursReply, type OffHoursReplyOutcome } from "./off-hours";
 import { botOutboundPatch, humanOutboundPatch, inboundPatch, shouldReopen } from "./rules";
+
+interface ReopenType {
+  id: string;
+  name: string;
+  protected: boolean;
+  reopen_window_days: number | null;
+  solution_deadline_hours: number | null;
+}
 
 export interface InboundResult {
   caseId: string;
@@ -75,7 +85,7 @@ async function latestOpenCase(db: Db, contactId: string): Promise<CaseRow | null
 /**
  * Mensaje entrante (después de guardar contacto y conversación):
  * 1. usa la gestión abierta más reciente del contacto; si no hay, reabre la
- *    cerrada hace menos de 24 h o abre una nueva (tipo sugerido por el tipo
+ *    cerrada dentro de la ventana de su tipo (24 h si no define otra) o abre una nueva (tipo sugerido por el tipo
  *    de contacto, primera etapa abierta). Sin tipo de contacto, le pone el
  *    de por defecto;
  * 2. sella last_inbound_at y, si no había espera, waiting_since;
@@ -107,17 +117,29 @@ export async function handleInbound(
   let opened = false;
   let reopened = false;
 
-  // 1b. Reapertura dentro de 24 h.
+  // 1b. Reapertura dentro de la ventana del tipo (por defecto 24 h).
   if (!row) {
-    const { data: lastClosed } = await db
+    const { data: recentClosed } = await db
       .from("cases")
       .select("*")
       .eq("contact_id", contact.id)
       .in("status", ["won", "lost", "resolved"])
       .order("closed_at", { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle();
-    if (lastClosed && shouldReopen(lastClosed, at)) {
+      .limit(5);
+    const typeIds = [...new Set((recentClosed ?? []).map((c) => c.case_type_id).filter((id): id is string => !!id))];
+    const { data: types } = typeIds.length
+      ? await db
+          .from("case_types")
+          .select("id, name, protected, reopen_window_days, solution_deadline_hours")
+          .in("id", typeIds)
+      : { data: [] as ReopenType[] };
+    const typeById = new Map<string, ReopenType>((types ?? []).map((t) => [t.id, t]));
+    // La cerrada más reciente cuya ventana siga abierta (cada tipo tiene la suya).
+    const lastClosed = (recentClosed ?? []).find((c) =>
+      shouldReopen(c, at, reopenWindowMs(c.case_type_id ? typeById.get(c.case_type_id)?.reopen_window_days : null)),
+    );
+    const reopenedType = lastClosed?.case_type_id ? (typeById.get(lastClosed.case_type_id) ?? null) : null;
+    if (lastClosed) {
       const stageId = await reopenStageId(db, lastClosed);
       const { data: updated } = await db
         .from("cases")
@@ -130,6 +152,18 @@ export async function handleInbound(
           outcome_note: null,
           last_inbound_at: at,
           waiting_since: at,
+          // El plazo de la solución vuelve a correr desde la reapertura.
+          ...(reopenedType?.solution_deadline_hours
+            ? {
+                solution_status: null,
+                solution_note: null,
+                solution_at: null,
+                solution_by: null,
+                solution_clock_at: at,
+                deadline_alerted_at: null,
+                commitment_alerted_at: null,
+              }
+            : {}),
         })
         .eq("id", lastClosed.id)
         .eq("status", lastClosed.status)
@@ -145,9 +179,27 @@ export async function handleInbound(
           conversation_id: params.conversationId ?? null,
           from_value: lastClosed.status,
           to_value: "open",
-          meta: { closed_at: lastClosed.closed_at },
+          meta: { closed_at: lastClosed.closed_at, reason: "customer_message" },
         });
         emitStageChanged(db, row, lastClosed.stage_id, row.stage_id);
+        if (reopenedType?.protected) {
+          try {
+            await notifySupervisors(
+              db,
+              lastClosed,
+              {
+                type: "protected_reopened",
+                title: `${reopenedType.name} reabierta: ${contactName(contact)}`,
+                body: "El cliente volvió a escribir después del cierre.",
+                link: caseLink(row.contact_id, row.id),
+              },
+              // Quien la cerró también se entera (aunque no sea supervisor).
+              { extra: lastClosed.closed_by ? [lastClosed.closed_by] : [] },
+            );
+          } catch (err) {
+            console.error("[cases] notify reopen", err);
+          }
+        }
       } else {
         // Otro mensaje simultáneo la reabrió primero.
         row = await latestOpenCase(db, contact.id);
