@@ -3,8 +3,8 @@
 // Caja de texto del chat: mensajes al cliente o notas internas (interruptor
 // "Nota interna"), menciones con @, respuestas guardadas con / (en cualquier
 // parte del texto o con el botón Respuestas), fotos y PDF (botón Adjuntar,
-// arrastrar o pegar), borradores por chat, corrector del navegador y revisión
-// al enviar, cuenta regresiva de la ventana de 24 horas de WhatsApp y bloqueo
+// arrastrar o pegar), borradores por chat, corrector con subrayado en la caja y
+// revisión al enviar en un solo lugar (franja de abajo), cuenta regresiva de la ventana de 24 horas de WhatsApp y bloqueo
 // fuera de ella con "Usar plantilla".
 
 import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
@@ -16,8 +16,14 @@ import { formatDate, formatTime } from "@/lib/format";
 import { firstName } from "@/lib/names";
 import { readDraft, writeDraft, type DraftMode } from "@/lib/drafts";
 import { replaceRange, slashQueryAt } from "@/lib/saved-replies";
-import { applySuggestions, reviewOutgoing, type Suggestion } from "@/lib/send-review";
-import { mergeSpellIssues, normalizeWord, replaceIssue, type SpellIssue } from "@/lib/spell-check";
+import {
+  applyReviewItems,
+  buildReviewItems,
+  safeReviewItems,
+  underlineMarks,
+  type ReviewItem,
+  type TextRange,
+} from "@/lib/review-items";
 import { acceptFor, canSendAttachments } from "@/lib/chat-media";
 import type { OutboxAttachment } from "@/lib/inbox-outbox";
 import { useToast } from "@/components/ui/toast";
@@ -35,11 +41,11 @@ import {
 import type { CaseNote } from "./use-case-notes";
 import { draftStorage, notifyDraftsChanged } from "./use-drafts";
 import { useNow } from "./use-now";
-import { SendReviewPopover } from "./send-review-popover";
 import { AttachmentTray } from "./attachment-tray";
 import { useAttachments } from "./use-attachments";
 import { addOrRequestStoreWord, useSpellcheck } from "./spell/use-spellcheck";
-import { SpellStrip } from "./spell/spell-strip";
+import { HighlightedTextarea, type TextMark } from "./spell/highlighted-textarea";
+import { ReviewStrip } from "./spell/review-strip";
 
 const REVIEW_OFF_KEY = "zf:send-review:off:";
 
@@ -55,12 +61,8 @@ function reviewDisabled(userId: string): boolean {
   }
 }
 
-interface Review {
-  text: string;
-  suggestions: Suggestion[];
-  unresolved: string[];
-  chosen: Set<string>;
-}
+/** Cuánto se ve en verde lo recién corregido. */
+const FIXED_FLASH_MS = 1500;
 
 /**
  * Se monta una vez por chat (la vista usa key por conversación): el texto
@@ -112,12 +114,18 @@ export function Composer({
   const [browsing, setBrowsing] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [customFields, setCustomFields] = useState<Record<string, string>>({});
-  const [review, setReview] = useState<Review | null>(null);
+  /** Modo revisión: se intentó enviar con cosas por revisar; la franja pasa a ser el panel. */
+  const [reviewMode, setReviewMode] = useState(false);
+  /** Sube con cada Enter que no envía por haber cosas pendientes (sacude el panel). */
+  const [nudge, setNudge] = useState(0);
+  /** Lo recién corregido, resaltado un momento en la caja. */
+  const [fixed, setFixed] = useState<TextRange[] | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
   const [dragging, setDragging] = useState(false);
-  /** Palabras que el asesor eligió ignorar en este mensaje (corrector). */
+  /** Lo que el asesor eligió ignorar en este mensaje (clave de cada ítem de la revisión). */
   const [ignoredWords, setIgnoredWords] = useState<ReadonlySet<string>>(() => new Set());
-  const reviewing = useRef(false);
+  /** Hay una revisión al enviar en curso (para no lanzar dos). */
+  const checking = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const now = useNow();
@@ -132,6 +140,9 @@ export function Composer({
   const contactName = conversation.contacts?.display_name ?? undefined;
   const canNote = !!noteCase && noteCase.permissions.canNote;
   const spell = useSpellcheck({ text: input, enabled: true, workspaceId: conversation.workspace_id, ignored: ignoredWords });
+  // Una sola lista de cosas por revisar, en vivo: la caja la subraya y la franja la muestra.
+  const items = buildReviewItems(input, spell.issues, ignoredWords);
+  const marks: TextMark[] = [...underlineMarks(items), ...(fixed ?? []).map((r) => ({ ...r, tone: "fixed" as const }))];
 
   // Campos personalizados del contacto para las variables de las respuestas guardadas.
   useEffect(() => {
@@ -184,31 +195,28 @@ export function Composer({
     [saveDraft],
   );
 
-  // El tamaño de la caja sigue al texto (también con el borrador inicial):
-  // arranca en unas 3 líneas y crece hasta unas 10; recién ahí aparece la barra.
-  const autoResize = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    // scrollHeight no cuenta el borde: sin sumarlo aparecen las flechas de desplazamiento.
-    const border = el.offsetHeight - el.clientHeight;
-    const wanted = el.scrollHeight + border;
-    el.style.height = `${Math.min(Math.max(wanted, COMPOSER_MIN_HEIGHT), COMPOSER_MAX_HEIGHT)}px`;
-    el.style.overflowY = wanted > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
-  }, []);
+  // Lo recién corregido se apaga solo.
   useEffect(() => {
-    autoResize();
-  }, [input, autoResize]);
+    if (!fixed) return;
+    const timer = setTimeout(() => setFixed(null), FIXED_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [fixed]);
 
   const blocked = !noteMode && now !== null && outsideWhatsAppWindow(conversation.platform, lastInboundAt, now);
   const windowChip = !noteMode && now !== null ? whatsAppWindowChip(conversation.platform, lastInboundAt, now) : null;
-  const replyOpen = (browsing || (!!slash && !replyDismissed)) && !review && (noteMode || !blocked);
+  const replyOpen = (browsing || (!!slash && !replyDismissed)) && (noteMode || !blocked);
   const mentionOptions = noteMode && mention ? filterMembers(members, mention.query) : [];
   const mentionOpen = mentionOptions.length > 0;
 
   function setInput(value: string) {
     setTexts((prev) => ({ ...prev, [mode]: value }));
     setDraftSaved(false);
+    setFixed(null);
+    // Caja vacía: se sale de la revisión y se olvida lo ignorado.
+    if (!value.trim()) {
+      setReviewMode(false);
+      setIgnoredWords((prev) => (prev.size > 0 ? new Set() : prev));
+    }
   }
 
   function updateInput(value: string, caret: number) {
@@ -278,7 +286,8 @@ export function Composer({
   function sendMessage(text: string) {
     setTexts((prev) => ({ ...prev, message: "" }));
     saveDraft("message", "");
-    setReview(null);
+    setReviewMode(false);
+    setFixed(null);
     setWarning(null);
     setSlash(null);
     setIgnoredWords(new Set());
@@ -286,50 +295,63 @@ export function Composer({
     textareaRef.current?.focus();
   }
 
-  // ── Corrector (franja "Revisa:") ──
-  function pickSpelling(issue: SpellIssue, word: string) {
-    const next = replaceIssue(input, issue, word);
-    if (!next) return;
-    setInput(next.text);
-    placeCaret(next.caret);
-  }
-
-  function pickAllSpellings() {
-    let value = input;
-    // De atrás hacia adelante: cambiar una palabra no mueve a las anteriores.
-    for (const issue of [...spell.issues].sort((a, b) => b.start - a.start)) {
-      const word = issue.suggestions[0];
-      if (!word) continue;
-      value = replaceIssue(value, issue, word)?.text ?? value;
-    }
-    setInput(value);
-    textareaRef.current?.focus();
+  // ── Revisión (franja de abajo y subrayado de la caja) ──
+  /** Corrige en la caja (una sugerencia u otra) y resalta lo cambiado un momento. */
+  function applyItems(list: ReviewItem[], choice?: string) {
+    const applied = applyReviewItems(input, list, choice);
+    if (applied.changed.length === 0) return;
+    setInput(applied.text);
+    setFixed(applied.changed);
+    placeCaret(applied.caret);
   }
 
   /** Administradores: la agrega. Los demás: la pide (y se ignora en este mensaje). */
-  async function addToDictionary(issue: SpellIssue) {
-    const result = await addOrRequestStoreWord(conversation.workspace_id, issue.word);
+  async function addToDictionary(item: ReviewItem) {
+    const result = await addOrRequestStoreWord(conversation.workspace_id, item.from);
     if ("error" in result) {
       toast.error(result.error);
       return;
     }
     if (result.status === "approved") {
-      toast.success(`«${issue.word}» se agregó al diccionario de la tienda.`);
+      toast.success(`«${item.from}» se agregó al diccionario de la tienda.`);
       return;
     }
-    setIgnoredWords((prev) => new Set(prev).add(normalizeWord(issue.word)));
-    toast.success(`Pediste agregar «${issue.word}». Un administrador lo revisará.`);
+    setIgnoredWords((prev) => new Set(prev).add(item.key));
+    toast.success(`Pediste agregar «${item.from}». Un administrador lo revisará.`);
   }
 
-  function ignoreSpelling(issue: SpellIssue) {
-    setIgnoredWords((prev) => new Set(prev).add(normalizeWord(issue.word)));
+  function ignoreItem(item: ReviewItem) {
+    setIgnoredWords((prev) => new Set(prev).add(item.key));
     textareaRef.current?.focus();
+  }
+
+  /** "Corregir las seguras y enviar": las dudosas quedan como están. */
+  function sendWithSafeFixes() {
+    if (!canSubmit || blocked) return;
+    sendMessage(applyReviewItems(input, safeReviewItems(items)).text.trim());
+  }
+
+  /** "No volver a revisar en este equipo": se apaga la revisión y el mensaje sale como está. */
+  function disableReview() {
+    try {
+      window.localStorage.setItem(REVIEW_OFF_KEY + me.userId, "1");
+    } catch {
+      // Sin almacenamiento: la revisión sigue activa.
+    }
+    toast.success("Listo: ya no revisaremos la ortografía al enviar en este equipo.");
+    void handleSubmit({ asIs: true });
   }
 
   const hasFiles = !noteMode && attachments.items.length > 0;
   const canSubmit = (!!input.trim() || hasFiles) && !savingNote && !(hasFiles && attachments.preparing);
 
-  async function handleSubmit() {
+  /**
+   * Enter y el botón Enviar hacen lo mismo. En un mensaje: sin nada por revisar
+   * (o con la revisión apagada) sale; con algo, no sale y se pasa al modo
+   * revisión. `asIs` (Ctrl+Enter, "Enviar así") envía siempre. Las notas
+   * internas nunca se frenan.
+   */
+  async function handleSubmit({ asIs = false }: { asIs?: boolean } = {}) {
     const text = input.trim();
     if (!canSubmit) return;
     setError(null);
@@ -337,20 +359,24 @@ export function Composer({
 
     if (!noteMode) {
       if (blocked) return;
-      // Revisión al enviar: solo aparece si encuentra algo (lib/send-review.ts),
-      // con las palabras que marcó el diccionario (lib/spell-check.ts).
-      if (text && !reviewDisabled(me.userId)) {
-        if (reviewing.current) return;
-        reviewing.current = true;
-        try {
-          const result = mergeSpellIssues(reviewOutgoing(text), await spell.checkNow(text));
-          if (result.suggestions.length > 0 || result.unresolved.length > 0) {
-            setReview({ text, ...result, chosen: new Set(result.suggestions.filter((s) => !s.unsure).map((s) => s.id)) });
-            return;
-          }
-        } finally {
-          reviewing.current = false;
+      // Sin texto (solo archivos) no hay nada que revisar.
+      if (!text || asIs || reviewDisabled(me.userId)) {
+        sendMessage(text);
+        return;
+      }
+      if (checking.current) return;
+      checking.current = true;
+      try {
+        const found = buildReviewItems(input, await spell.checkNow(input), ignoredWords);
+        // Si siguió escribiendo mientras se revisaba, no sale lo anterior.
+        if (latestTexts.current.message !== input) return;
+        if (found.length > 0) {
+          if (reviewMode) setNudge((n) => n + 1);
+          else setReviewMode(true);
+          return;
         }
+      } finally {
+        checking.current = false;
       }
       sendMessage(text);
       return;
@@ -442,11 +468,17 @@ export function Composer({
       setReplyDismissed(true);
       return;
     }
+    if (e.key === "Escape" && reviewMode) {
+      e.preventDefault();
+      setReviewMode(false);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       // Con el buscador abierto, Enter elige una respuesta (lo maneja el buscador).
       if (replyOpen) return;
-      void handleSubmit();
+      // Ctrl+Enter / Cmd+Enter: enviar así, sin revisar.
+      void handleSubmit({ asIs: e.ctrlKey || e.metaKey });
     }
   }
 
@@ -550,7 +582,7 @@ export function Composer({
                 setMention(null);
                 setSlash(null);
                 setBrowsing(false);
-                setReview(null);
+                setReviewMode(false);
                 setError(null);
                 setWarning(null);
                 textareaRef.current?.focus();
@@ -597,37 +629,6 @@ export function Composer({
 
         <div className="relative flex items-end gap-2">
           <div className="relative flex-1">
-            {review && (
-              <SendReviewPopover
-                suggestions={review.suggestions}
-                unresolved={review.unresolved}
-                chosen={review.chosen}
-                onToggle={(id) =>
-                  setReview((r) => {
-                    if (!r) return r;
-                    const chosen = new Set(r.chosen);
-                    if (chosen.has(id)) chosen.delete(id);
-                    else chosen.add(id);
-                    return { ...r, chosen };
-                  })
-                }
-                onApply={() => sendMessage(applySuggestions(review.text, review.suggestions.filter((s) => review.chosen.has(s.id))))}
-                onSendAsIs={() => sendMessage(review.text)}
-                onCancel={() => {
-                  setReview(null);
-                  textareaRef.current?.focus();
-                }}
-                onDisable={() => {
-                  try {
-                    window.localStorage.setItem(REVIEW_OFF_KEY + me.userId, "1");
-                  } catch {
-                    // Sin almacenamiento: la revisión sigue activa.
-                  }
-                  sendMessage(review.text);
-                  toast.success("Listo: ya no revisaremos la ortografía al enviar en este equipo.");
-                }}
-              />
-            )}
             {replyOpen && (
               <SavedReplyPicker
                 open={replyOpen}
@@ -666,9 +667,12 @@ export function Composer({
                 ))}
               </div>
             )}
-            <textarea
+            <HighlightedTextarea
               ref={textareaRef}
               value={input}
+              marks={marks}
+              minHeight={COMPOSER_MIN_HEIGHT}
+              maxHeight={COMPOSER_MAX_HEIGHT}
               onChange={(e) => updateInput(e.target.value, e.target.selectionStart ?? e.target.value.length)}
               onKeyDown={handleKeyDown}
               onPaste={(e) => {
@@ -685,17 +689,16 @@ export function Composer({
                 noteMode ? "Escribe una nota interna..." : hasFiles ? "Agrega un comentario (opcional)..." : "Escribe un mensaje..."
               }
               rows={3}
-              spellCheck
+              spellCheck={false}
               lang="es-PE"
               autoCapitalize="sentences"
               autoCorrect="on"
               className={cn(
-                "w-full resize-none rounded-lg border bg-background px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2",
+                "w-full resize-none rounded-lg border px-4 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2",
                 noteMode
                   ? "border-amber-300 focus:ring-amber-400 dark:border-amber-800"
                   : "border-input focus:ring-ring",
               )}
-              style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
             />
           </div>
           <button
@@ -720,13 +723,18 @@ export function Composer({
             )}
           </button>
         </div>
-        <SpellStrip
-          issues={spell.issues}
-          onPick={pickSpelling}
-          onPickAll={pickAllSpellings}
-          onAdd={(issue) => void addToDictionary(issue)}
-          onIgnore={ignoreSpelling}
+        <ReviewStrip
+          items={items}
+          reviewing={reviewMode && !noteMode}
+          nudge={nudge}
           canAddWords={isAdmin}
+          onPick={(item, word) => applyItems([item], word)}
+          onApplySafe={() => applyItems(safeReviewItems(items))}
+          onAdd={(item) => void addToDictionary(item)}
+          onIgnore={ignoreItem}
+          onSendAsIs={() => void handleSubmit({ asIs: true })}
+          onApplySafeAndSend={sendWithSafeFixes}
+          onDisable={disableReview}
         />
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1">
