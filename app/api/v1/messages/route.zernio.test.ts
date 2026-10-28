@@ -27,18 +27,22 @@ vi.mock("@/lib/workspace-secrets", () => ({ getLateApiKey: vi.fn(async () => "sk
 vi.mock("@/lib/zernio-client", () => ({
   createZernioClient: vi.fn(() => ({
     messages: {
+      // El SDK real lanza ZernioApiError cuando Zernio responde 4xx/5xx.
       getInboxConversationMessages: vi.fn(async (args: unknown) => {
         state.listCalls.push(args);
+        if (state.listResult instanceof Error) throw state.listResult;
         return state.listResult;
       }),
       sendInboxMessage: vi.fn(async (args: unknown) => {
         state.sendCalls.push(args);
+        if (state.sendResult instanceof Error) throw state.sendResult;
         return state.sendResult;
       }),
     },
   })),
 }));
 
+import { ZernioApiError } from "@zernio/node";
 import { GET, POST } from "./route";
 
 function seed() {
@@ -101,6 +105,14 @@ describe("GET /api/v1/messages en canal real", () => {
     const res = await GET(new NextRequest(`http://localhost/api/v1/messages?conversationId=${id}`));
     expect(res.status).toBe(502);
   });
+
+  it("si el SDK lanza el error de Zernio, también responde 502 con el motivo en español", async () => {
+    const id = seed();
+    state.listResult = new ZernioApiError("Unauthorized", 401, undefined, undefined, { error: "Invalid API key" });
+    const res = await GET(new NextRequest(`http://localhost/api/v1/messages?conversationId=${id}`));
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toContain("Revisa la clave en Configuración");
+  });
 });
 
 describe("POST /api/v1/messages en canal real", () => {
@@ -137,5 +149,28 @@ describe("POST /api/v1/messages en canal real", () => {
     const res = await post({ conversationId: id, text: "Hola" });
     expect(res.status).toBe(502);
     expect((await res.json()).error).toContain("Recipient not reachable");
+  });
+
+  it("el SDK lanza un 409 (mismo envío en curso): no es un rechazo", async () => {
+    const id = seed();
+    state.sendResult = new ZernioApiError("in flight", 409, undefined, undefined, { error: "in flight" });
+    const res = await post({ conversationId: id, text: "Hola", clientMessageId: "6f1c7a7e-3a52-4c0e-9b8e-2a1d0c9e5f11" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "in_progress" });
+  });
+
+  it("el SDK lanza un rechazo (400): 502 con el motivo, no 'revisa tu conexión'", async () => {
+    const id = seed();
+    state.sendResult = new ZernioApiError("Outside 24h window", 400, "platform_api_error", undefined, { error: "Outside 24h window" });
+    const res = await post({ conversationId: id, text: "Hola" });
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe("Zernio rechazó el mensaje (Outside 24h window)");
+  });
+
+  it("un 5xx de Zernio queda como dudoso (500): el reintento revisa si salió", async () => {
+    const id = seed();
+    state.sendResult = new ZernioApiError("Internal", 503, undefined, undefined, { error: "Internal" });
+    const res = await post({ conversationId: id, text: "Hola" });
+    expect(res.status).toBe(500);
   });
 });

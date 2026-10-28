@@ -43,6 +43,7 @@ describe("mapZernioMessage", () => {
     expect(mapZernioMessage({ message: "sin id" }, "c")).toBeNull();
     expect(mapZernioMessage({ id: "a", attachments: [] }, "c")?.attachments).toBeNull();
     expect(mapZernioMessage({ id: "b", attachments: [{ type: "image" }] }, "c")?.attachments).toEqual([{ type: "image" }]);
+    expect(mapZernioMessage({ id: "t", attachments: [{ type: "template" }] }, "c")?.attachments).toBeNull();
   });
 });
 

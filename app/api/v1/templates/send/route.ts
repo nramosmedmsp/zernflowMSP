@@ -14,7 +14,7 @@ import {
   phoneDigits,
   summarizeTemplate,
 } from "@/components/composer/whatsapp-templates";
-import { zernioErrorMessage, zernioFailed } from "../zernio-error";
+import { zernioErrorMessage, zernioFailed, zernioThrown } from "../zernio-error";
 
 const MAX_PARAMS = 20;
 
@@ -231,6 +231,8 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     console.error("[templates/send] error:", error);
+    const rejected = zernioThrown(error);
+    if (rejected) return NextResponse.json({ error: zernioErrorMessage(rejected, "No se pudo enviar la plantilla") }, { status: 502 });
     return NextResponse.json({ error: "No se pudo enviar la plantilla" }, { status: 500 });
   }
 }

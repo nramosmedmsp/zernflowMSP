@@ -87,7 +87,11 @@ export function mapZernioMessage(raw: ZernioListMessage, conversationId: string)
   if (!raw?.id) return null;
   const outbound = OUTGOING.has(String(raw.direction ?? "").toLowerCase());
   const status = statusOf(raw, outbound);
-  const attachments = Array.isArray(raw.attachments) && raw.attachments.length > 0 ? raw.attachments : null;
+  // Las plantillas de WhatsApp llegan como un adjunto "template": no son archivos.
+  const files = Array.isArray(raw.attachments)
+    ? raw.attachments.filter((a) => (a as { type?: unknown } | null)?.type !== "template")
+    : [];
+  const attachments = files.length > 0 ? files : null;
   const story = raw.isStoryMention ? "mention" : raw.storyReply ? "reply" : null;
   return {
     id: raw.id,

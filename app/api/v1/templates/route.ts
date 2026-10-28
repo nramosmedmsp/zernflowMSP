@@ -8,7 +8,7 @@ import {
   summarizeTemplate,
   validateTemplateCreate,
 } from "@/components/composer/whatsapp-templates";
-import { zernioErrorMessage, zernioFailed } from "./zernio-error";
+import { zernioErrorMessage, zernioFailed, zernioThrown } from "./zernio-error";
 
 const NO_CHANNEL = "Conecta un canal de WhatsApp para usar plantillas.";
 
@@ -105,6 +105,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ templates });
   } catch (error) {
     console.error("[templates] list error:", error);
+    const rejected = zernioThrown(error);
+    if (rejected) {
+      return NextResponse.json({ error: zernioErrorMessage(rejected, "No se pudieron cargar las plantillas de WhatsApp") }, { status: 502 });
+    }
     return NextResponse.json({ error: "No se pudieron cargar las plantillas de WhatsApp" }, { status: 500 });
   }
 }
@@ -184,6 +188,8 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     console.error("[templates] create error:", error);
+    const rejected = zernioThrown(error);
+    if (rejected) return NextResponse.json({ error: zernioErrorMessage(rejected, "No se pudo crear la plantilla") }, { status: 502 });
     return NextResponse.json({ error: "No se pudo crear la plantilla" }, { status: 500 });
   }
 }
