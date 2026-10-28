@@ -17,7 +17,6 @@ import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
 import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
 import { SimulateInboundDialog } from "./simulate-inbound-dialog";
-import { PostponeMenu } from "./postpone-menu";
 import { latestIso, memberName, messageAuthor, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
 import { useThreadMessages } from "./use-thread-messages";
@@ -579,9 +578,6 @@ export function MessageThread({
                 Bot en pausa
               </span>
             )
-          )}
-          {noteCase && noteCase.status === "open" && noteCase.permissions.canEdit && (
-            <PostponeMenu caseView={noteCase} onDone={onCaseActivity} />
           )}
         </div>
       </div>

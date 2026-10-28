@@ -13,6 +13,7 @@ import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { OutcomeKind } from "@/lib/types/database";
+import { closeSelection } from "./case-card-model";
 import { ErrorText, Field, Modal, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
 
 const KIND_ORDER: OutcomeKind[] = ["won", "lost", "resolved"];
@@ -27,11 +28,14 @@ const KIND_STYLES: Record<OutcomeKind, string> = {
 export function CloseCaseDialog({
   caseView,
   caseType,
+  initialStageId = null,
   onCancel,
   onClosed,
 }: {
   caseView: CaseView;
   caseType: CaseTypeOption | null;
+  /** Etapa final preseleccionada (la elegida en el menú "Cerrar"). */
+  initialStageId?: string | null;
   onCancel: () => void;
   onClosed: (message: string) => void;
 }) {
@@ -44,8 +48,9 @@ export function CloseCaseDialog({
     [caseType, finalStages],
   );
 
-  const [kind, setKind] = useState<OutcomeKind | null>(kinds[0] ?? null);
-  const [stageId, setStageId] = useState("");
+  const initial = useMemo(() => closeSelection(caseType?.stages, initialStageId), [caseType, initialStageId]);
+  const [kind, setKind] = useState<OutcomeKind | null>(initial?.kind ?? kinds[0] ?? null);
+  const [stageId, setStageId] = useState(initial?.stageId ?? "");
   const [reasonId, setReasonId] = useState("");
   const [categoryId, setCategoryId] = useState(caseView.categoryId ?? "");
   const [note, setNote] = useState("");
