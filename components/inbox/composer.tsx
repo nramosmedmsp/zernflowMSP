@@ -40,6 +40,10 @@ import { useAttachments } from "./use-attachments";
 
 const REVIEW_OFF_KEY = "zf:send-review:off:";
 
+/** Alto de la caja de texto: unas 3 líneas al empezar, hasta unas 10. */
+const COMPOSER_MIN_HEIGHT = 84;
+const COMPOSER_MAX_HEIGHT = 240;
+
 function reviewDisabled(userId: string): boolean {
   try {
     return window.localStorage.getItem(REVIEW_OFF_KEY + userId) === "1";
@@ -170,12 +174,17 @@ export function Composer({
     [saveDraft],
   );
 
-  // El tamaño de la caja sigue al texto (también con el borrador inicial).
+  // El tamaño de la caja sigue al texto (también con el borrador inicial):
+  // arranca en unas 3 líneas y crece hasta unas 10; recién ahí aparece la barra.
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+    // scrollHeight no cuenta el borde: sin sumarlo aparecen las flechas de desplazamiento.
+    const border = el.offsetHeight - el.clientHeight;
+    const wanted = el.scrollHeight + border;
+    el.style.height = `${Math.min(Math.max(wanted, COMPOSER_MIN_HEIGHT), COMPOSER_MAX_HEIGHT)}px`;
+    el.style.overflowY = wanted > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
   }, []);
   useEffect(() => {
     autoResize();
@@ -617,7 +626,7 @@ export function Composer({
               placeholder={
                 noteMode ? "Escribe una nota interna..." : hasFiles ? "Agrega un comentario (opcional)..." : "Escribe un mensaje..."
               }
-              rows={1}
+              rows={3}
               spellCheck
               lang="es-PE"
               autoCapitalize="sentences"
@@ -628,7 +637,7 @@ export function Composer({
                   ? "border-amber-300 focus:ring-amber-400 dark:border-amber-800"
                   : "border-input focus:ring-ring",
               )}
-              style={{ maxHeight: 150 }}
+              style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
             />
           </div>
           <button
