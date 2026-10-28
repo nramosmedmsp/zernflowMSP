@@ -17,6 +17,7 @@ export type SettingsLinkKey =
   | "replies"
   | "whatsapp-templates"
   | "dictionary"
+  | "source"
   | "password";
 
 export interface SettingsLink {
@@ -82,6 +83,13 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     title: "Atención",
     description: "Qué ve cada asesor, reparto, respuesta fuera de horario y reasignación por espera.",
     href: "/dashboard/settings/attention",
+    adminOnly: true,
+  },
+  {
+    key: "source",
+    title: "Código de la app",
+    description: "Descarga el código fuente para revisarlo o dárselo a un colaborador.",
+    href: "/dashboard/settings/codigo",
     adminOnly: true,
   },
   {

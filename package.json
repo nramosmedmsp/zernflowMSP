@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node scripts/build-spell-worker.mjs && next dev --turbopack",
-    "build": "node scripts/build-spell-worker.mjs && next build",
+    "build": "node scripts/build-spell-worker.mjs && node scripts/build-source-zip.mjs && next build",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
@@ -19,6 +19,7 @@
     "@zernio/node": "^0.2.1365",
     "ai": "^6.0.85",
     "clsx": "^2.1.1",
+    "fflate": "^0.8.2",
     "lucide-react": "^0.563.0",
     "next": "^16.1.6",
     "nodemailer": "^10.1.6",
