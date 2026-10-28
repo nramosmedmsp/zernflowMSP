@@ -3,6 +3,7 @@
 // activity y notifications no tienen políticas de escritura para usuarios).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { displayName } from "@/lib/team-rules";
 import type { ActivityType, Database, Json } from "@/lib/types/database";
 
 export type Db = SupabaseClient<Database>;
@@ -70,7 +71,17 @@ export type NotificationType =
   // Diccionario de la tienda (corrector de la Bandeja)
   | "spell_word_request"
   | "spell_word_approved"
-  | "spell_word_rejected";
+  | "spell_word_rejected"
+  // Control de reclamos (00029)
+  | "protected_type_changed"
+  | "protected_closed"
+  | "protected_reopened"
+  | "close_requested"
+  | "close_request_approved"
+  | "close_request_rejected"
+  | "solution_overdue"
+  | "commitment_overdue"
+  | "complaint_unclassified";
 
 export interface NotificationInput {
   workspace_id: string;
@@ -128,6 +139,23 @@ export async function teamSupervisorIds(db: Db, teamId: string): Promise<string[
     .eq("team_id", teamId)
     .eq("role", "supervisor");
   return (data ?? []).map((r) => r.user_id);
+}
+
+/** Enlace al chat de un contacto (sin gestión concreta). */
+export function contactLink(contactId: string): string {
+  return `/dashboard/inbox?contact=${encodeURIComponent(contactId)}`;
+}
+
+/** Nombre de una persona para los avisos ("Marco"). Sin id, "El sistema". */
+export async function userDisplayName(db: Db, userId: string | null | undefined): Promise<string> {
+  if (!userId) return "El sistema";
+  try {
+    const { data } = await db.auth.admin.getUserById(userId);
+    const user = data?.user;
+    return displayName(user ? { id: user.id, email: user.email, user_metadata: user.user_metadata } : null);
+  } catch {
+    return "Alguien";
+  }
 }
 
 export function contactName(contact: { display_name: string | null } | null | undefined): string {

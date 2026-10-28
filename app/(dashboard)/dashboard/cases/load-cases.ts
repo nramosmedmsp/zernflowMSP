@@ -32,6 +32,11 @@ export interface CaseListRow {
   waitingSince: string | null;
   closedAt: string | null;
   hasConversation: boolean;
+  /** Control de reclamos. */
+  solutionStatus: string | null;
+  solutionNote: string | null;
+  solutionClockAt: string | null;
+  hasCloseRequest: boolean;
 }
 
 export interface CaseListResult {
@@ -41,7 +46,7 @@ export interface CaseListResult {
 }
 
 const COLUMNS =
-  "id, contact_id, case_type_id, stage_id, status, origin, assignee_id, team_id, opened_at, scheduled_for, next_action_at, next_action_note, waiting_since, closed_at, created_at, contacts!inner(id, display_name)";
+  "id, contact_id, case_type_id, stage_id, status, origin, assignee_id, team_id, opened_at, scheduled_for, next_action_at, next_action_note, waiting_since, closed_at, created_at, solution_status, solution_note, solution_clock_at, close_request, contacts!inner(id, display_name)";
 
 type Db = SupabaseClient<Database>;
 
@@ -60,6 +65,10 @@ interface RawRow {
   next_action_note: string | null;
   waiting_since: string | null;
   closed_at: string | null;
+  solution_status: string | null;
+  solution_note: string | null;
+  solution_clock_at: string | null;
+  close_request: unknown;
   contacts: { display_name: string | null } | { display_name: string | null }[] | null;
 }
 
@@ -188,6 +197,10 @@ export async function loadCases(
       waitingSince: r.waiting_since,
       closedAt: r.closed_at,
       hasConversation: withConversation.has(r.contact_id),
+      solutionStatus: r.solution_status,
+      solutionNote: r.solution_note,
+      solutionClockAt: r.solution_clock_at,
+      hasCloseRequest: r.close_request !== null && r.close_request !== undefined,
     };
   });
   return { rows, total: res.count ?? rows.length, page };

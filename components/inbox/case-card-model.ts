@@ -3,6 +3,7 @@
 // Todo en hora de Lima (UTC-5, sin horario de verano).
 
 import { addDays, limaDateOf, limaDateTimeIso } from "@/lib/cases/dates";
+import { formatSpan, solutionState, typeLockMessage, type SolutionCaseInput } from "@/lib/cases/protection";
 import type { OutcomeKind, StageKind } from "@/lib/types/database";
 
 interface StageLike {
@@ -86,6 +87,140 @@ export function closeSelection(
   if (!stage) return null;
   const first = finals.find((s) => s.kind === stage.kind);
   return { kind: stage.kind as OutcomeKind, stageId: first?.id === stage.id ? "" : stage.id };
+}
+
+export interface CloseMenuItem {
+  option: CloseOption;
+  /** Texto del menú; agrega «(requiere aprobación)» cuando un asesor pide el cierre. */
+  label: string;
+  needsApproval: boolean;
+  /** Por qué no se puede elegir ahora (null = disponible). */
+  disabledReason: string | null;
+}
+
+/**
+ * Entradas del menú «Cerrar» con el control de reclamos: en un tipo protegido,
+ * cerrar como perdida (sin solución) pide la aprobación de un supervisor, y
+ * mientras haya un pedido pendiente no se puede pedir otro.
+ */
+export function closeMenuItems(
+  options: readonly CloseOption[],
+  ctx: { isProtected: boolean; canSupervise: boolean; hasPendingRequest: boolean },
+): CloseMenuItem[] {
+  return options.map((option) => {
+    const needsApproval = ctx.isProtected && !ctx.canSupervise && option.kind === "lost";
+    return {
+      option,
+      needsApproval,
+      label: needsApproval ? `${option.name} (requiere aprobación)` : option.name,
+      disabledReason:
+        needsApproval && ctx.hasPendingRequest ? "Ya hay un pedido de cierre esperando a un supervisor." : null,
+    };
+  });
+}
+
+/** Motivo por el que no se puede cambiar el tipo (tipo protegido y sin ser supervisor), o null. */
+export function typeChangeLock(
+  type: { name: string; protected: boolean } | null | undefined,
+  canSupervise: boolean,
+): string | null {
+  return type?.protected && !canSupervise ? typeLockMessage(type.name) : null;
+}
+
+/** «Pedido de cierre «Sin solución» por Marco · motivo · nota». */
+export function closeRequestLine(p: {
+  stageName: string | null;
+  requesterName: string;
+  reasonName: string | null;
+  note: string | null;
+}): string {
+  return ["Pedido de cierre «" + (p.stageName ?? "Sin solución") + "» por " + p.requesterName, p.reasonName, p.note]
+    .filter((x): x is string => !!x)
+    .join(" · ");
+}
+
+// -------------------------------------------- Plazo de la solución (reclamos)
+
+export type SolutionTone = "amber" | "red" | "ok";
+
+export interface SolutionBanner {
+  tone: SolutionTone;
+  text: string;
+  /** Botón: registrar la solución (falta) o actualizarla (ya está en proceso). */
+  action: "register" | "update";
+  actionLabel: string;
+}
+
+/**
+ * Línea de la tarjeta para un tipo con plazo de solución. Ámbar mientras hay
+ * tiempo, roja cuando se pasó el plazo o venció el compromiso; verde cuando
+ * hay una solución en proceso al día. Null si el tipo no pide solución o la
+ * gestión no está abierta.
+ */
+export function solutionBanner(
+  input: { typeName: string; deadlineHours: number | null; case: SolutionCaseInput },
+  now: Date,
+): SolutionBanner | null {
+  const state = solutionState(input.case, input.deadlineHours, now);
+  switch (state.kind) {
+    case "none":
+      return null;
+    case "pending":
+      return {
+        tone: "amber",
+        text: `${input.typeName}: registra la solución antes de ${relativeDayTime(new Date(state.dueAt), now)} (quedan ${formatSpan(state.msLeft, { round: "up" })})`,
+        action: "register",
+        actionLabel: "Registrar solución",
+      };
+    case "overdue":
+      return {
+        tone: "red",
+        text: `Atrasada: debía registrarse la solución hace ${formatSpan(state.msLate)}`,
+        action: "register",
+        actionLabel: "Registrar solución",
+      };
+    case "in_progress": {
+      const note = state.note?.trim() || "sin detalle";
+      const when = state.commitmentAt ? relativeDayTime(new Date(state.commitmentAt), now) : null;
+      return state.commitmentOverdue
+        ? {
+            tone: "red",
+            text: `Compromiso vencido${when ? ` (${when})` : ""}: ${note}`,
+            action: "update",
+            actionLabel: "Actualizar",
+          }
+        : {
+            tone: "ok",
+            text: `Solución en proceso: ${note}${when ? ` · compromiso ${when}` : ""}`,
+            action: "update",
+            actionLabel: "Actualizar",
+          };
+    }
+  }
+}
+
+export interface CommitmentOption {
+  key: "today" | "tomorrow" | "in-two-days";
+  label: string;
+  /** Instante ISO (18:00 de Lima). */
+  at: string;
+  /** "hoy 18:00", "jue 18:00". */
+  detail: string;
+}
+
+const COMMITMENT_HOUR = 18;
+
+/** Fechas compromiso rápidas: hoy (si queda tiempo antes de las 18:00), mañana y en 2 días. */
+export function commitmentOptions(now: Date): CommitmentOption[] {
+  const today = limaDateOf(now);
+  const make = (key: CommitmentOption["key"], label: string, days: number): CommitmentOption => {
+    const at = limaDateTimeIso(addDays(today, days), COMMITMENT_HOUR);
+    return { key, label, at, detail: relativeDayTime(new Date(at), now) };
+  };
+  const options: CommitmentOption[] = [];
+  if (limaParts(now).hour < COMMITMENT_HOUR - 1) options.push(make("today", "Hoy", 0));
+  options.push(make("tomorrow", "Mañana", 1), make("in-two-days", "En 2 días", 2));
+  return options;
 }
 
 // ----------------------------------------------------- Próximo contacto

@@ -13,6 +13,7 @@ import { StagesTab } from "./stages-tab";
 import { CategoriesTab } from "./categories-tab";
 import { RoutingTab } from "./routing-tab";
 import { TimesTab } from "./times-tab";
+import { ClaimsTab } from "./claims-tab";
 import { RulesTab } from "./rules-tab";
 import { FunnelPreview } from "./funnel-preview";
 import {
@@ -32,6 +33,7 @@ const TABS = [
   { key: "categories", label: "Categorías y motivos" },
   { key: "routing", label: "Destino" },
   { key: "times", label: "Tiempos" },
+  { key: "claims", label: "Control de reclamos" },
   { key: "rules", label: "Reglas" },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
@@ -217,6 +219,7 @@ export function CasesSettingsView({ data, templates }: { data: CaseConfigData; t
                   {tab === "categories" && <CategoriesTab key={selected.id} type={selected} data={data} run={run} busy={busy} notify={setNotice} />}
                   {tab === "routing" && <RoutingTab key={`${selected.id}:${selected.updatedAt}`} type={selected} data={data} run={run} busy={busy} notify={setNotice} />}
                   {tab === "times" && <TimesTab key={`${selected.id}:${selected.updatedAt}`} type={selected} data={data} run={run} busy={busy} notify={setNotice} />}
+                  {tab === "claims" && <ClaimsTab key={`${selected.id}:${selected.updatedAt}`} type={selected} data={data} run={run} busy={busy} notify={setNotice} />}
                   {tab === "rules" && <RulesTab key={selected.id} type={selected} data={data} run={run} busy={busy} notify={setNotice} />}
                 </div>
 

@@ -63,7 +63,7 @@ const NONE: CasePermissions = {
   canTransfer: false,
 };
 
-export function supervisedTeamIds(actor: ActorInfo): Set<string> {
+export function supervisedTeamIds(actor: Pick<ActorInfo, "memberships">): Set<string> {
   return new Set(actor.memberships.filter((m) => m.role === "supervisor").map((m) => m.teamId));
 }
 

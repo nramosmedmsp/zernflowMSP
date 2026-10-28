@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { SolutionCaseInput } from "@/lib/cases/protection";
 import {
+  closeMenuItems,
   closeOptions,
+  closeRequestLine,
   closeSelection,
+  commitmentOptions,
   nextContactChip,
   nextContactOptions,
   relativeDayTime,
+  solutionBanner,
   stageSteps,
+  typeChangeLock,
 } from "./case-card-model";
 
 const stage = (id: string, name: string, kind: "open" | "won" | "lost" | "resolved" = "open", archived = false) => ({
@@ -149,5 +155,126 @@ describe("nextContactOptions", () => {
     const monday = new Date("2026-11-02T15:00:00Z");
     const monOpt = nextContactOptions(monday).find((o) => o.key === "monday");
     expect(monOpt?.at).toBe("2026-11-09T14:00:00.000Z");
+  });
+});
+
+// ------------------------------------------------------ Control de reclamos
+
+describe("closeMenuItems", () => {
+  const options = closeOptions([stage("a", "Nueva"), stage("r", "Resuelta", "resolved"), stage("l", "Sin solución", "lost")]);
+
+  it("el asesor ve que cerrar sin solución requiere aprobación", () => {
+    const items = closeMenuItems(options, { isProtected: true, canSupervise: false, hasPendingRequest: false });
+    expect(items.map((i) => [i.label, i.needsApproval, i.disabledReason])).toEqual([
+      ["Resuelta", false, null],
+      ["Sin solución (requiere aprobación)", true, null],
+    ]);
+  });
+
+  it("con un pedido pendiente no puede pedir otro", () => {
+    const items = closeMenuItems(options, { isProtected: true, canSupervise: false, hasPendingRequest: true });
+    expect(items[1].disabledReason).toMatch(/pedido de cierre/);
+    expect(items[0].disabledReason).toBeNull();
+  });
+
+  it("el supervisor y los tipos sin protección cierran directo", () => {
+    for (const ctx of [
+      { isProtected: true, canSupervise: true, hasPendingRequest: true },
+      { isProtected: false, canSupervise: false, hasPendingRequest: false },
+    ]) {
+      expect(closeMenuItems(options, ctx).map((i) => [i.label, i.needsApproval, i.disabledReason])).toEqual([
+        ["Resuelta", false, null],
+        ["Sin solución", false, null],
+      ]);
+    }
+  });
+});
+
+describe("typeChangeLock", () => {
+  it("bloquea a quien no es supervisor en un tipo protegido", () => {
+    expect(typeChangeLock({ name: "Postventa", protected: true }, false)).toBe(
+      "Solo el supervisor puede cambiar el tipo de una Postventa.",
+    );
+    expect(typeChangeLock({ name: "Postventa", protected: true }, true)).toBeNull();
+    expect(typeChangeLock({ name: "Venta", protected: false }, false)).toBeNull();
+    expect(typeChangeLock(null, false)).toBeNull();
+  });
+});
+
+describe("closeRequestLine", () => {
+  it("junta quién, motivo y nota", () => {
+    expect(
+      closeRequestLine({ stageName: "Sin solución", requesterName: "Marco", reasonName: "No responde", note: "3 intentos" }),
+    ).toBe("Pedido de cierre «Sin solución» por Marco · No responde · 3 intentos");
+    expect(closeRequestLine({ stageName: null, requesterName: "Marco", reasonName: null, note: null })).toBe(
+      "Pedido de cierre «Sin solución» por Marco",
+    );
+  });
+});
+
+describe("solutionBanner", () => {
+  const base: SolutionCaseInput = {
+    status: "open",
+    openedAt: "2026-10-28T10:00:00Z", // 5:00 en Lima
+    solutionStatus: null,
+    solutionNote: null,
+    nextActionAt: null,
+  };
+  const banner = (c: Partial<SolutionCaseInput>, now = NOW, hours: number | null = 24) =>
+    solutionBanner({ typeName: "Postventa", deadlineHours: hours, case: { ...base, ...c } }, now);
+
+  it("ámbar con la hora límite y cuánto queda", () => {
+    // Abierta 5:00, vence mañana 5:00; ahora 10:00 → quedan 19 h.
+    expect(banner({})).toEqual({
+      tone: "amber",
+      text: "Postventa: registra la solución antes de mañana 5:00 (quedan 19 h)",
+      action: "register",
+      actionLabel: "Registrar solución",
+    });
+    expect(banner({ openedAt: "2026-10-27T16:00:00Z" })?.text).toBe(
+      "Postventa: registra la solución antes de hoy 11:00 (quedan 1 h)",
+    );
+  });
+
+  it("roja cuando se pasó el plazo", () => {
+    const b = banner({ openedAt: "2026-10-27T10:00:00Z" });
+    expect(b).toMatchObject({ tone: "red", action: "register" });
+    expect(b?.text).toBe("Atrasada: debía registrarse la solución hace 5 h");
+  });
+
+  it("el plazo corre desde la reapertura cuando existe", () => {
+    expect(banner({ openedAt: "2026-10-01T10:00:00Z", solutionClockAt: "2026-10-28T14:00:00Z" })?.tone).toBe("amber");
+  });
+
+  it("solución en proceso al día y con el compromiso vencido", () => {
+    const ok = banner({ solutionStatus: "in_progress", solutionNote: "Cambio del producto", nextActionAt: "2026-10-30T23:00:00Z" });
+    expect(ok).toEqual({
+      tone: "ok",
+      text: "Solución en proceso: Cambio del producto · compromiso vie 18:00",
+      action: "update",
+      actionLabel: "Actualizar",
+    });
+    const late = banner({ solutionStatus: "in_progress", solutionNote: "Cambio del producto", nextActionAt: "2026-10-28T13:00:00Z" });
+    expect(late).toMatchObject({ tone: "red", text: "Compromiso vencido (hoy 8:00): Cambio del producto" });
+  });
+
+  it("no muestra nada sin plazo o si la gestión no está abierta", () => {
+    expect(banner({}, NOW, null)).toBeNull();
+    expect(banner({ status: "resolved" })).toBeNull();
+  });
+});
+
+describe("commitmentOptions", () => {
+  it("hoy, mañana y en 2 días a las 18:00 de Lima", () => {
+    expect(commitmentOptions(NOW).map((o) => [o.label, o.at, o.detail])).toEqual([
+      ["Hoy", "2026-10-28T23:00:00.000Z", "hoy 18:00"],
+      ["Mañana", "2026-10-29T23:00:00.000Z", "mañana 18:00"],
+      ["En 2 días", "2026-10-30T23:00:00.000Z", "vie 18:00"],
+    ]);
+  });
+
+  it("pasadas las 17:00 ya no ofrece «Hoy»", () => {
+    const late = new Date("2026-10-28T22:30:00Z"); // 17:30
+    expect(commitmentOptions(late).map((o) => o.label)).toEqual(["Mañana", "En 2 días"]);
   });
 });

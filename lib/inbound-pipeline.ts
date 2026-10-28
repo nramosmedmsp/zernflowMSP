@@ -4,7 +4,7 @@
 // prueba (lib/actions/demo.ts), para que se comporten igual.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { handleInbound } from "@/lib/cases";
+import { flagComplaint, handleInbound } from "@/lib/cases";
 import { executeFlow, FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import { resolveGlobalKeyword, type GlobalKeyword } from "@/lib/flow-engine/global-keywords";
 import { applyWaitingMenuReply } from "@/lib/flow-engine/menu-reply";
@@ -49,6 +49,22 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
     });
   } catch (err) {
     console.error("Case engine (handleInbound) error:", err);
+  }
+
+  // ── Detector de reclamos (control de reclamos) ───────────────────────────
+  // Si el texto parece un reclamo y no hay una Postventa abierta, marca la
+  // conversación. Solo consulta la base cuando el texto coincide; un fallo no
+  // corta el flujo. Ya corre después de responder al webhook (after()).
+  try {
+    await flagComplaint(supabase, {
+      workspaceId: channel.workspace_id,
+      contactId,
+      conversationId: conversation.id,
+      text: msg.text,
+      at: input.at ?? new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Complaint detector error:", err);
   }
 
   // ── Volumen de mensajes entrantes (fase 3) ───────────────────────────────

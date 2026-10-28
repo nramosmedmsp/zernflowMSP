@@ -7,13 +7,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowRightLeft,
   BriefcaseBusiness,
   CalendarClock,
   Check,
+  CheckCircle2,
   ChevronDown,
   Hand,
+  History,
+  Hourglass,
   Loader2,
+  Lock,
   MoreHorizontal,
   Plus,
   Repeat,
@@ -22,10 +27,13 @@ import {
   X,
 } from "lucide-react";
 import {
+  approveCloseRequest,
   assignCase,
   changeCaseStage,
   classifyCase,
   postponeCase,
+  registerSolutionInProgress,
+  rejectCloseRequest,
   setCaseCategory,
   setNextAction,
   takeCase,
@@ -40,9 +48,22 @@ import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { formatDate, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
+import { CaseHistoryDialog } from "./case-history";
 import { CloseCaseDialog } from "./close-case-dialog";
 import { NewCaseDialog } from "./new-case-dialog";
-import { closeOptions, nextContactChip, nextContactOptions, stageSteps, type CloseOption } from "./case-card-model";
+import {
+  closeMenuItems,
+  closeOptions,
+  closeRequestLine,
+  nextContactChip,
+  nextContactOptions,
+  solutionBanner,
+  stageSteps,
+  typeChangeLock,
+  type CloseOption,
+  type SolutionTone,
+} from "./case-card-model";
+import { SolutionForm } from "./solution-form";
 import { memberName, type InboxMember } from "./inbox-model";
 import { Popover, inputClass, primaryButtonClass, secondaryButtonClass, selectClass } from "./ui";
 import { useNow } from "./use-now";
@@ -56,6 +77,12 @@ const menuItem =
 const menuHeading = "px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase text-muted-foreground";
 
 const HEX = /^#[0-9a-f]{6}$/i;
+
+const BANNER_TONE: Record<SolutionTone, string> = {
+  amber: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200",
+  red: "border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
+  ok: "border-green-200 bg-green-50 text-green-800 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300",
+};
 
 function TypeDot({ color }: { color: string | null }) {
   return (
@@ -91,6 +118,10 @@ export function CaseCard({
   const [nextCustom, setNextCustom] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [solutionOpen, setSolutionOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectComment, setRejectComment] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const active =
     data.cases.find((c) => c.id === activeCaseId) ??
@@ -128,6 +159,8 @@ export function CaseCard({
   }, []);
   const closeCloseMenu = useCallback(() => setCloseOpen(false), []);
   const closeMore = useCallback(() => setMoreOpen(false), []);
+  const closeSolution = useCallback(() => setSolutionOpen(false), []);
+  const closeReject = useCallback(() => setRejectOpen(false), []);
 
   const newCaseButton = data.canOpenCase && (
     <button onClick={() => setCreating(true)} className={chipButton}>
@@ -150,6 +183,9 @@ export function CaseCard({
             onSelectCase(caseId);
           }}
         />
+      )}
+      {historyOpen && active && (
+        <CaseHistoryDialog caseId={active.id} data={data} members={members} onClose={() => setHistoryOpen(false)} />
       )}
       {closing && active && (
         <CloseCaseDialog
@@ -184,6 +220,20 @@ export function CaseCard({
   const categories = (caseType?.categories ?? []).filter((c) => !c.archived || c.id === active.categoryId);
   const steps = caseType ? stageSteps(caseType.stages, active.stageId) : [];
   const canClassify = perms.canEdit && busy === null;
+  // Control de reclamos: un tipo protegido solo lo cambia el supervisor.
+  const typeLock = typeChangeLock(caseType, active.canSupervise);
+  const request = active.closeRequest;
+  const banner =
+    !isClosed && caseType && now !== null
+      ? solutionBanner(
+          {
+            typeName: caseType.name,
+            deadlineHours: caseType.solutionDeadlineHours,
+            case: active,
+          },
+          new Date(now),
+        )
+      : null;
 
   // Personas a las que puedo asignar: administrador a cualquiera; supervisor
   // a las del equipo de la gestión (o del contacto).
@@ -241,7 +291,7 @@ export function CaseCard({
     closeNext();
   }
 
-  const hasMore = (data.canOpenCase || (perms.canEdit && !!caseType)) && !isClosed;
+  const hasMore = !isClosed;
 
   return (
     <div className="shrink-0 space-y-1.5 border-b border-border bg-muted/30 px-4 py-2">
@@ -277,7 +327,13 @@ export function CaseCard({
                 : `Cerrada como ${OUTCOME_LABELS[active.status as keyof typeof OUTCOME_LABELS]?.toLowerCase() ?? active.status}`}
               {active.closedAt ? ` el ${formatDate(active.closedAt)}` : ""}
             </span>
-            <div className="ml-auto flex items-center gap-1.5">{newCaseButton}</div>
+            <div className="ml-auto flex items-center gap-1.5">
+              <button onClick={() => setHistoryOpen(true)} className={chipButton} title="Qué se hizo en esta gestión">
+                <History className="h-3.5 w-3.5" />
+                Historial
+              </button>
+              {newCaseButton}
+            </div>
           </>
         ) : (
           <>
@@ -319,9 +375,9 @@ export function CaseCard({
                 trigger={
                   <button
                     onClick={() => setTypeOpen((v) => !v)}
-                    disabled={!canClassify}
-                    title="Cambiar el tipo de gestión"
-                    aria-label={`Tipo de gestión: ${caseType.name}. Cambiar`}
+                    disabled={!canClassify || !!typeLock}
+                    title={typeLock ?? "Cambiar el tipo de gestión"}
+                    aria-label={typeLock ? `Tipo de gestión: ${caseType.name}. ${typeLock}` : `Tipo de gestión: ${caseType.name}. Cambiar`}
                     className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-70"
                     style={
                       caseType.color && HEX.test(caseType.color)
@@ -331,7 +387,11 @@ export function CaseCard({
                   >
                     <TypeDot color={caseType.color} />
                     {caseType.name}
-                    {canClassify && <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+                    {typeLock ? (
+                      <Lock className="h-3 w-3 text-muted-foreground" aria-hidden />
+                    ) : (
+                      canClassify && <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    )}
                   </button>
                 }
                 className="w-52"
@@ -542,7 +602,7 @@ export function CaseCard({
                   open={closeOpen}
                   onClose={closeCloseMenu}
                   align="right"
-                  className="w-52"
+                  className={caseType?.protected && !active.canSupervise ? "w-64" : "w-52"}
                   trigger={
                     <button
                       onClick={() => setCloseOpen((v) => !v)}
@@ -557,10 +617,16 @@ export function CaseCard({
                   }
                 >
                   <p className={menuHeading}>Cerrar como…</p>
-                  {closeOptions(caseType?.stages).map((o) => (
+                  {closeMenuItems(closeOptions(caseType?.stages), {
+                    isProtected: !!caseType?.protected,
+                    canSupervise: active.canSupervise,
+                    hasPendingRequest: !!request,
+                  }).map(({ option: o, label, needsApproval, disabledReason }) => (
                     <button
                       key={o.stageId ?? o.kind}
                       className={menuItem}
+                      disabled={!!disabledReason}
+                      title={disabledReason ?? (needsApproval ? "Un supervisor tiene que aprobar este cierre" : undefined)}
                       onClick={() => {
                         setCloseOpen(false);
                         setClosing(o);
@@ -572,7 +638,7 @@ export function CaseCard({
                         <X className="h-3.5 w-3.5 text-red-600" aria-hidden />
                       )}
                       <span className={o.tone === "positive" ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}>
-                        {o.name}
+                        {label}
                       </span>
                     </button>
                   ))}
@@ -611,15 +677,27 @@ export function CaseCard({
                   {perms.canEdit && caseType && (
                     <button
                       className={menuItem}
+                      disabled={!!typeLock}
+                      title={typeLock ?? undefined}
                       onClick={() => {
                         setMoreOpen(false);
                         setTypeOpen(true);
                       }}
                     >
-                      <Repeat className="h-3.5 w-3.5" />
+                      {typeLock ? <Lock className="h-3.5 w-3.5" /> : <Repeat className="h-3.5 w-3.5" />}
                       Cambiar tipo
                     </button>
                   )}
+                  <button
+                    className={menuItem}
+                    onClick={() => {
+                      setMoreOpen(false);
+                      setHistoryOpen(true);
+                    }}
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    Historial
+                  </button>
                 </Popover>
               )}
             </div>
@@ -660,7 +738,119 @@ export function CaseCard({
         </div>
       )}
 
-      {active.nextActionNote && active.nextActionAt && !isClosed && (
+      {/* Control de reclamos: plazo de la solución */}
+      {banner && (
+        <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2.5 py-1.5 text-[11px]", BANNER_TONE[banner.tone])}>
+          {banner.tone === "ok" ? (
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          ) : (
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          )}
+          <span className="min-w-0 flex-1 basis-48 break-words font-medium">{banner.text}</span>
+          {perms.canEdit && (
+            <Popover
+              open={solutionOpen}
+              onClose={closeSolution}
+              align="right"
+              className="w-80"
+              trigger={
+                <button
+                  onClick={() => setSolutionOpen((v) => !v)}
+                  disabled={busy !== null}
+                  className={cn(chipButton, "font-medium text-foreground")}
+                >
+                  {banner.actionLabel}
+                </button>
+              }
+            >
+              <SolutionForm
+                initialNote={active.solutionNote}
+                initialCommitment={active.solutionStatus === "in_progress" ? active.nextActionAt : null}
+                now={now}
+                saving={busy === "solution"}
+                onSave={async (note, commitmentAt) => {
+                  const ok = await run(
+                    "solution",
+                    () => registerSolutionInProgress(active.id, note, commitmentAt),
+                    "Solución registrada.",
+                  );
+                  if (ok) setSolutionOpen(false);
+                }}
+              />
+            </Popover>
+          )}
+        </div>
+      )}
+
+      {/* Control de reclamos: pedido de cierre sin solución */}
+      {request && !isClosed && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          <Hourglass className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1 basis-48 break-words font-medium">
+            {closeRequestLine({
+              stageName: caseType?.stages.find((st) => st.id === request.stageId)?.name ?? null,
+              requesterName: request.requestedBy === data.me.userId ? "ti" : memberName(members, request.requestedBy),
+              reasonName: caseType?.outcomeReasons.find((r) => r.id === request.reasonId)?.name ?? null,
+              note: request.note,
+            })}
+          </span>
+          {active.canSupervise && (
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                onClick={() => void run("approve", () => approveCloseRequest(active.id), "Cierre aprobado: la gestión quedó cerrada.")}
+                disabled={busy !== null}
+                className={cn(primaryButtonClass, "px-2.5 py-1 text-xs")}
+              >
+                {busy === "approve" && <Loader2 className="h-3 w-3 animate-spin" />}
+                Aprobar
+              </button>
+              <Popover
+                open={rejectOpen}
+                onClose={closeReject}
+                align="right"
+                className="w-72"
+                trigger={
+                  <button onClick={() => setRejectOpen((v) => !v)} disabled={busy !== null} className={cn(chipButton, "text-foreground")}>
+                    Rechazar
+                  </button>
+                }
+              >
+                <div className="space-y-2 p-1 text-foreground">
+                  <label htmlFor="reject-comment" className="text-xs font-medium">
+                    ¿Qué debe hacer antes de cerrarla? (opcional)
+                  </label>
+                  <textarea
+                    id="reject-comment"
+                    value={rejectComment}
+                    onChange={(e) => setRejectComment(e.target.value)}
+                    rows={2}
+                    maxLength={500}
+                    className={cn(inputClass, "resize-none py-1 text-xs")}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={async () => {
+                        const ok = await run("reject", () => rejectCloseRequest(active.id, rejectComment.trim() || null), "Pedido rechazado: la gestión sigue abierta.");
+                        if (ok) {
+                          setRejectOpen(false);
+                          setRejectComment("");
+                        }
+                      }}
+                      disabled={busy !== null}
+                      className={cn(primaryButtonClass, "py-1 text-xs")}
+                    >
+                      {busy === "reject" && <Loader2 className="h-3 w-3 animate-spin" />}
+                      Rechazar pedido
+                    </button>
+                  </div>
+                </div>
+              </Popover>
+            </div>
+          )}
+        </div>
+      )}
+
+      {active.nextActionNote && active.nextActionAt && !isClosed && active.solutionStatus !== "in_progress" && (
         <p className="truncate text-[11px] text-muted-foreground">Nota: {active.nextActionNote}</p>
       )}
       {dialogs}

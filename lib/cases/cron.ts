@@ -23,6 +23,8 @@ import type { CaseMessenger } from "./messaging";
 import { detectClientNoReply } from "./no-reply";
 import { reassignWaitingCases } from "./reassign";
 import { resolveTargetTeamId } from "./routing";
+import { alertUnhandledComplaints } from "./complaint";
+import { solutionDueAt } from "./protection";
 
 const BATCH = 50;
 
@@ -39,6 +41,10 @@ export interface CaseTaskStats {
   noReplyEvents: number;
   /** Fase 3: avisos de objetivo de tiempo superado (primera respuesta y resolución). */
   slaAlerts: number;
+  /** Control de reclamos: plazo de solución vencido, compromisos vencidos y reclamos sin atender. */
+  solutionAlerts: number;
+  commitmentAlerts: number;
+  complaintAlerts: number;
   stoppedEarly: boolean;
 }
 
@@ -459,6 +465,178 @@ export async function notifySlaBreaches(
   return { alerted, stoppedEarly: false };
 }
 
+const SOLUTION_MAX_SCAN = 1000;
+
+/**
+ * Control de reclamos, plazo de la solución: las gestiones abiertas de un tipo
+ * con `solution_deadline_hours` que pasaron el plazo sin cerrarse ni registrar
+ * una solución en proceso avisan una sola vez a los supervisores
+ * (`deadline_alerted_at`).
+ */
+export async function notifySolutionDeadlines(
+  db: Db,
+  opts: { deadline: number; now?: Date },
+): Promise<{ alerted: number; stoppedEarly: boolean }> {
+  const now = opts.now ?? new Date();
+  const nowIso = now.toISOString();
+  let alerted = 0;
+  let scanned = 0;
+
+  const { data: types, error } = await db
+    .from("case_types")
+    .select("id, name, solution_deadline_hours")
+    .not("solution_deadline_hours", "is", null);
+  if (error) {
+    console.error("[cases cron] solution types", error.message);
+    return { alerted, stoppedEarly: false };
+  }
+
+  for (const type of types ?? []) {
+    const hours = type.solution_deadline_hours;
+    if (!hours || hours <= 0) continue;
+    const cutoff = new Date(now.getTime() - hours * 3_600_000).toISOString();
+    let lastId: string | null = null;
+
+    while (scanned < SOLUTION_MAX_SCAN) {
+      if (!timeLeft(opts.deadline)) return { alerted, stoppedEarly: true };
+      let query = db
+        .from("cases")
+        .select("id, workspace_id, contact_id, team_id, opened_at, solution_clock_at")
+        .eq("status", "open")
+        .eq("case_type_id", type.id)
+        .is("solution_status", null)
+        .is("deadline_alerted_at", null)
+        .not("opened_at", "is", null)
+        .lte("opened_at", cutoff)
+        .order("id", { ascending: true })
+        .limit(BATCH);
+      if (lastId) query = query.gt("id", lastId);
+      const { data: rows, error: rowsError } = await query;
+      if (rowsError) {
+        console.error("[cases cron] solution cases", rowsError.message);
+        break;
+      }
+      if (!rows || rows.length === 0) break;
+      lastId = rows[rows.length - 1].id;
+
+      for (const row of rows) {
+        scanned++;
+        // La reapertura reinicia el reloj: la base filtra por opened_at, aquí se afina.
+        const due = solutionDueAt({ openedAt: row.opened_at, solutionClockAt: row.solution_clock_at }, hours);
+        if (!due || due.getTime() > now.getTime()) continue;
+
+        // Reclamo condicional: solo avisa quien selló la fila.
+        const { data: claimed } = await db
+          .from("cases")
+          .update({ deadline_alerted_at: nowIso })
+          .eq("id", row.id)
+          .eq("status", "open")
+          .is("solution_status", null)
+          .is("deadline_alerted_at", null)
+          .select("id");
+        if (!claimed || claimed.length === 0) continue;
+        alerted++;
+
+        await logActivity(db, {
+          workspace_id: row.workspace_id,
+          type: "solution_overdue",
+          case_id: row.id,
+          contact_id: row.contact_id,
+          meta: { kind: "deadline", hours },
+        });
+        const contacts = await names(db, [row.contact_id]);
+        const recipients = await supervisorsOrAdmins(db, row.workspace_id, row.team_id);
+        await notify(
+          db,
+          recipients.map((userId) => ({
+            workspace_id: row.workspace_id,
+            user_id: userId,
+            type: "solution_overdue" as const,
+            title: `${type.name} sin solución registrada: ${contacts.get(row.contact_id) ?? "Contacto sin nombre"}`,
+            body: `Pasaron más de ${hours} h y nadie registró la solución ni la cerró.`,
+            link: caseLink(row.contact_id, row.id),
+          })),
+        );
+      }
+      if (rows.length < BATCH) break;
+    }
+  }
+  return { alerted, stoppedEarly: false };
+}
+
+/**
+ * Control de reclamos, fecha compromiso: una solución en proceso cuya fecha
+ * compromiso (next_action_at) ya pasó y la gestión sigue abierta avisa una
+ * sola vez por compromiso al responsable y a los supervisores
+ * (`commitment_alerted_at`; cambiar la fecha lo vuelve a null).
+ */
+export async function notifyCommitmentsOverdue(
+  db: Db,
+  opts: { deadline: number; now?: Date },
+): Promise<{ alerted: number; stoppedEarly: boolean }> {
+  const now = opts.now ?? new Date();
+  const nowIso = now.toISOString();
+  let alerted = 0;
+
+  while (timeLeft(opts.deadline)) {
+    const { data: due, error } = await db
+      .from("cases")
+      .select("id")
+      .eq("status", "open")
+      .eq("solution_status", "in_progress")
+      .is("commitment_alerted_at", null)
+      .not("next_action_at", "is", null)
+      .lte("next_action_at", nowIso)
+      .order("next_action_at", { ascending: true })
+      .limit(BATCH);
+    if (error) {
+      console.error("[cases cron] commitments", error.message);
+      break;
+    }
+    if (!due || due.length === 0) return { alerted, stoppedEarly: false };
+
+    const { data: claimed, error: claimError } = await db
+      .from("cases")
+      .update({ commitment_alerted_at: nowIso })
+      .in("id", due.map((r) => r.id))
+      .is("commitment_alerted_at", null)
+      .select("id, workspace_id, contact_id, team_id, assignee_id, case_type_id, solution_note");
+    if (claimError) {
+      console.error("[cases cron] claim commitments", claimError.message);
+      break;
+    }
+    const rows = claimed ?? [];
+    const contacts = await names(db, rows.map((r) => r.contact_id));
+
+    const notifications: NotificationInput[] = [];
+    for (const row of rows) {
+      await logActivity(db, {
+        workspace_id: row.workspace_id,
+        type: "solution_overdue",
+        case_id: row.id,
+        contact_id: row.contact_id,
+        meta: { kind: "commitment" },
+      });
+      const recipients = new Set(await supervisorsOrAdmins(db, row.workspace_id, row.team_id));
+      if (row.assignee_id) recipients.add(row.assignee_id);
+      for (const userId of recipients) {
+        notifications.push({
+          workspace_id: row.workspace_id,
+          user_id: userId,
+          type: "commitment_overdue",
+          title: `Compromiso vencido: ${contacts.get(row.contact_id) ?? "Contacto sin nombre"}`,
+          body: row.solution_note ? `La solución en proceso: ${row.solution_note}` : "La fecha compromiso de la solución ya pasó.",
+          link: caseLink(row.contact_id, row.id),
+        });
+      }
+      alerted++;
+    }
+    await notify(db, notifications);
+    if (due.length < BATCH) break;
+  }
+  return { alerted, stoppedEarly: !timeLeft(opts.deadline) };
+}
+
 /** Todas las tareas en orden, compartiendo la memoria de reparto y la fecha límite. */
 export async function runCaseTasks(
   db: Db,
@@ -476,6 +654,9 @@ export async function runCaseTasks(
     overdueNotified: 0,
     noReplyEvents: 0,
     slaAlerts: 0,
+    solutionAlerts: 0,
+    commitmentAlerts: 0,
+    complaintAlerts: 0,
     stoppedEarly: false,
   };
 
@@ -534,6 +715,30 @@ export async function runCaseTasks(
       async () => {
         const r = await notifySlaBreaches(db, { deadline: opts.deadline, cache, now: opts.now });
         stats.slaAlerts = r.alerted;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "solution_deadline",
+      async () => {
+        const r = await notifySolutionDeadlines(db, { deadline: opts.deadline, now: opts.now });
+        stats.solutionAlerts = r.alerted;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "commitments",
+      async () => {
+        const r = await notifyCommitmentsOverdue(db, { deadline: opts.deadline, now: opts.now });
+        stats.commitmentAlerts = r.alerted;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "complaints",
+      async () => {
+        const r = await alertUnhandledComplaints(db, { deadline: opts.deadline, now: opts.now });
+        stats.complaintAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
