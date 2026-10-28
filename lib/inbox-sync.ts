@@ -10,6 +10,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Zernio } from "./zernio-client";
 import { messagePreview } from "@/lib/message-preview";
+import { isDemoChannel } from "@/lib/demo";
 
 /** Cap per channel: 4 pages x 50 conversations. */
 const MAX_PAGES_PER_CHANNEL = 4;
@@ -114,7 +115,8 @@ export async function upsertContactForSender({
  * under a different late_conversation_id is left to the webhook, so the
  * webhook-maintained late_conversation_id / status / last_message_at /
  * unread_count are never clobbered. A failing channel is logged and skipped,
- * not fatal.
+ * not fatal. Los canales de prueba (lib/demo.ts) no existen en Zernio y se
+ * omiten sin llamarlo.
  */
 export async function backfillInboxConversations({
   supabase,
@@ -130,6 +132,8 @@ export async function backfillInboxConversations({
   let imported = 0;
 
   for (const channel of channels) {
+    // Un account id "demo-*" no es válido en Zernio ("Invalid accountId format").
+    if (isDemoChannel(channel)) continue;
     try {
       imported += await backfillChannel({ supabase, zernio, workspaceId, channel });
     } catch (err) {

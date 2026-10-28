@@ -189,6 +189,29 @@ describe("backfillInboxConversations", () => {
     });
   });
 
+  it("skips demo channels without calling Zernio", async () => {
+    const fake = makeFakeSupabase({});
+    const z = fakeZernio([
+      { data: [conv("c1")], pagination: { hasMore: false } },
+    ]);
+
+    const res = await backfillInboxConversations({
+      supabase: fake.client,
+      zernio: z.client,
+      workspaceId: "ws-1",
+      channels: [
+        { ...channel, id: "ch-demo", late_account_id: "demo-instagram" },
+        channel,
+      ],
+    });
+
+    expect(z.list).toHaveBeenCalledTimes(1);
+    expect(z.list).toHaveBeenCalledWith({
+      query: { accountId: "acc-1", limit: 50, sortOrder: "desc", cursor: undefined },
+    });
+    expect(res.imported).toBe(1);
+  });
+
   it("imports archived Zernio conversations as closed, not open", async () => {
     const fake = makeFakeSupabase({});
     const z = fakeZernio([
