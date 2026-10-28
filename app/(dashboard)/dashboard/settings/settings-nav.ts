@@ -101,7 +101,7 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
   {
     key: "dictionary",
     title: "Diccionario de la tienda",
-    description: "Marcas y palabras de la tienda que el corrector no debe marcar.",
+    description: "Marcas y palabras que el corrector no debe marcar. Los asesores piden; los administradores aprueban.",
     href: "/dashboard/settings/dictionary",
     adminOnly: false,
   },

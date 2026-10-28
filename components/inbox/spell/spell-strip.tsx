@@ -17,6 +17,7 @@ function Chip({
   onPick,
   onAdd,
   onIgnore,
+  canAddWords,
 }: {
   issue: SpellIssue;
   open: boolean;
@@ -24,6 +25,7 @@ function Chip({
   onPick: (word: string) => void;
   onAdd: () => void;
   onIgnore: () => void;
+  canAddWords: boolean;
 }) {
   const [first, ...rest] = issue.suggestions;
   return (
@@ -86,7 +88,7 @@ function Chip({
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent"
           >
             <BookPlus className="h-3.5 w-3.5 shrink-0 text-primary" />
-            Agregar «{issue.word}» al diccionario de la tienda
+            {canAddWords ? `Agregar «${issue.word}» al diccionario de la tienda` : `Pedir agregar «${issue.word}» al diccionario`}
           </button>
           <button
             type="button"
@@ -110,12 +112,15 @@ export function SpellStrip({
   onPickAll,
   onAdd,
   onIgnore,
+  canAddWords = false,
 }: {
   issues: SpellIssue[];
   onPick: (issue: SpellIssue, word: string) => void;
   onPickAll: () => void;
   onAdd: (issue: SpellIssue) => void;
   onIgnore: (issue: SpellIssue) => void;
+  /** Administradores agregan; los demás piden que se agregue. */
+  canAddWords?: boolean;
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -166,6 +171,7 @@ export function SpellStrip({
             close();
             onIgnore(issue);
           }}
+          canAddWords={canAddWords}
         />
       ))}
       {issues.length > MAX_CHIPS && (

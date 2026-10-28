@@ -38,7 +38,7 @@ import { useNow } from "./use-now";
 import { SendReviewPopover } from "./send-review-popover";
 import { AttachmentTray } from "./attachment-tray";
 import { useAttachments } from "./use-attachments";
-import { addStoreWord, useSpellcheck } from "./spell/use-spellcheck";
+import { addOrRequestStoreWord, useSpellcheck } from "./spell/use-spellcheck";
 import { SpellStrip } from "./spell/spell-strip";
 
 const REVIEW_OFF_KEY = "zf:send-review:off:";
@@ -77,6 +77,7 @@ export function Composer({
   onSendMessage,
   onNoteAdded,
   onTemplateSent,
+  isAdmin = false,
 }: {
   conversation: InboxConversation;
   /** Gestión a la que se agregan las notas (abierta o programada). */
@@ -90,6 +91,8 @@ export function Composer({
   onSendMessage: (text: string, attachments: OutboxAttachment[]) => void;
   onNoteAdded: (note: CaseNote) => void;
   onTemplateSent: () => void;
+  /** Dueño o Administrador: agrega palabras al diccionario; los demás las piden. */
+  isAdmin?: boolean;
 }) {
   const scope = { userId: me.userId, workspaceId: conversation.workspace_id };
   const [texts, setTexts] = useState<Record<DraftMode, string>>(() => ({
@@ -303,10 +306,19 @@ export function Composer({
     textareaRef.current?.focus();
   }
 
+  /** Administradores: la agrega. Los demás: la pide (y se ignora en este mensaje). */
   async function addToDictionary(issue: SpellIssue) {
-    const ok = await addStoreWord(conversation.workspace_id, issue.word, me.userId);
-    if (ok) toast.success(`«${issue.word}» se agregó al diccionario de la tienda.`);
-    else toast.error("No se pudo agregar la palabra. Inténtalo de nuevo.");
+    const result = await addOrRequestStoreWord(conversation.workspace_id, issue.word);
+    if ("error" in result) {
+      toast.error(result.error);
+      return;
+    }
+    if (result.status === "approved") {
+      toast.success(`«${issue.word}» se agregó al diccionario de la tienda.`);
+      return;
+    }
+    setIgnoredWords((prev) => new Set(prev).add(normalizeWord(issue.word)));
+    toast.success(`Pediste agregar «${issue.word}». Un administrador lo revisará.`);
   }
 
   function ignoreSpelling(issue: SpellIssue) {
@@ -714,6 +726,7 @@ export function Composer({
           onPickAll={pickAllSpellings}
           onAdd={(issue) => void addToDictionary(issue)}
           onIgnore={ignoreSpelling}
+          canAddWords={isAdmin}
         />
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1">

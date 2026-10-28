@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeWord, spellTokens, type SpellIssue } from "@/lib/spell-check";
+import { addOrRequestSpellWord } from "@/lib/actions/spell-words";
 
 type Results = Record<string, string[]>;
 
@@ -65,6 +66,8 @@ function loadStoreWords(workspaceId: string): Promise<Set<string>> {
         .from("spell_words")
         .select("normalized")
         .eq("workspace_id", workspaceId)
+        // Los pedidos sin aprobar todavía se marcan como error.
+        .eq("status", "approved")
         .then(({ data, error }) => {
           if (error) console.error("[corrector] diccionario de la tienda:", error.message);
           const set = new Set((data ?? []).map((r) => r.normalized));
@@ -77,23 +80,23 @@ function loadStoreWords(workspaceId: string): Promise<Set<string>> {
   return loaded;
 }
 
-/** Agrega una palabra al diccionario de la tienda (para toda la empresa). */
-export async function addStoreWord(workspaceId: string, word: string, userId: string): Promise<boolean> {
-  const clean = word.trim();
-  const normalized = normalizeWord(clean);
-  if (!normalized) return false;
-  const { error } = await createClient()
-    .from("spell_words")
-    .insert({ workspace_id: workspaceId, word: clean, normalized, added_by: userId });
-  // Ya estaba (la agregó otra persona): igual vale.
-  if (error && error.code !== "23505") {
-    console.error("[corrector] agregar palabra:", error.message);
-    return false;
+/**
+ * Agrega la palabra al diccionario de la tienda (administradores) o deja el
+ * pedido para que un administrador la apruebe (los demás).
+ */
+export async function addOrRequestStoreWord(
+  workspaceId: string,
+  word: string,
+): Promise<{ status: "approved" | "pending" } | { error: string }> {
+  const result = await addOrRequestSpellWord(word);
+  if ("error" in result) return result;
+  if (result.status === "approved") {
+    const normalized = normalizeWord(result.word.word);
+    (await loadStoreWords(workspaceId)).add(normalized);
+    spellClient()?.addWords([normalized]);
+    listeners.forEach((fn) => fn());
   }
-  (await loadStoreWords(workspaceId)).add(normalized);
-  spellClient()?.addWords([normalized]);
-  listeners.forEach((fn) => fn());
-  return true;
+  return { status: result.status };
 }
 
 // ── Hook ────────────────────────────────────────────────────────────────────

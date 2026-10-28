@@ -13,6 +13,9 @@ export type { Platform };
 export type FlowStatus = "draft" | "published" | "archived";
 export type ConversationStatus = "open" | "closed" | "snoozed";
 export type MessageDirection = "inbound" | "outbound";
+/** Palabra del diccionario de la tienda: aprobada o pedida por un miembro. */
+export type SpellWordStatus = "approved" | "pending";
+
 export type MessageStatus = "pending" | "sent" | "delivered" | "read" | "failed";
 export type MessageMediaKind = "image" | "video" | "audio" | "file" | "sticker";
 export type MessageMediaStatus = "stored" | "too_large" | "failed" | "expired";
@@ -1054,7 +1057,11 @@ export interface Database {
           workspace_id: string;
           word: string;
           normalized: string;
+          /** Quién la agregó o pidió agregarla (null = lista inicial). */
           added_by: string | null;
+          status: SpellWordStatus;
+          approved_by: string | null;
+          approved_at: string | null;
           created_at: string;
         };
         Insert: {
@@ -1063,10 +1070,15 @@ export interface Database {
           word: string;
           normalized: string;
           added_by?: string | null;
+          status?: SpellWordStatus;
+          approved_by?: string | null;
+          approved_at?: string | null;
           created_at?: string;
         };
         Update: {
-          word?: string;
+          status?: SpellWordStatus;
+          approved_by?: string | null;
+          approved_at?: string | null;
         };
         Relationships: [];
       };
