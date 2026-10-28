@@ -1,5 +1,8 @@
-// Mensajes de error en español para las llamadas a Zernio de las plantillas.
-// El SDK no lanza excepciones: devuelve { data, error, response }.
+// Mensajes de error en español para las llamadas a Zernio.
+//
+// Ojo: cuando Zernio responde con un error (4xx o 5xx), el SDK lanza un
+// ZernioApiError en lugar de devolver { error, response }. `zernioThrown`
+// convierte esa excepción al mismo formato, para dar el mismo mensaje.
 
 interface ZernioResultLike {
   error?: unknown;
@@ -17,6 +20,17 @@ function detailOf(error: unknown): string | null {
     }
   }
   return null;
+}
+
+/**
+ * El error que lanzó el SDK, en el formato { error, response }; null si no es
+ * un rechazo de Zernio (por ejemplo, sin conexión o un error de programación).
+ */
+export function zernioThrown(err: unknown): ZernioResultLike | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as { name?: unknown; statusCode?: unknown; body?: unknown; message?: unknown };
+  if (e.name !== "ZernioApiError" || typeof e.statusCode !== "number") return null;
+  return { error: e.body ?? e.message ?? null, response: { status: e.statusCode } };
 }
 
 /** ¿La respuesta de Zernio trae un error? */

@@ -5,7 +5,7 @@
 import { demoTemplateText, isDemoChannel } from "@/lib/demo";
 import { demoConversationByLateId, demoConversationByPhone, storeDemoMessage } from "@/lib/demo-messages";
 import { getLateApiKey } from "@/lib/workspace-secrets";
-import { zernioErrorMessage, zernioFailed } from "@/lib/zernio-error";
+import { zernioErrorMessage, zernioFailed, zernioThrown } from "@/lib/zernio-error";
 import type { Db } from "./io";
 
 export type SendResult = { ok: true; messageId: string | null } | { ok: false; error: string };
@@ -89,6 +89,8 @@ export function zernioMessenger(db: Db, options: MessengerOptions = {}): CaseMes
         }
         return { ok: true, messageId: messageIdOf(res.data) };
       } catch (err) {
+        const rejected = zernioThrown(err);
+        if (rejected) return { ok: false, error: zernioErrorMessage(rejected, "Zernio rechazó el mensaje") };
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },
@@ -126,6 +128,8 @@ export function zernioMessenger(db: Db, options: MessengerOptions = {}): CaseMes
         }
         return { ok: true, messageId: messageIdOf(res.data) };
       } catch (err) {
+        const rejected = zernioThrown(err);
+        if (rejected) return { ok: false, error: zernioErrorMessage(rejected, "No se pudo enviar la plantilla") };
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },

@@ -6,7 +6,7 @@ import { inboundPreview } from "@/lib/message-preview";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { isDemoChannel } from "@/lib/demo";
 import { storeDemoMessage } from "@/lib/demo-messages";
-import { zernioErrorMessage, zernioFailed } from "../templates/zernio-error";
+import { zernioErrorMessage, zernioFailed, zernioThrown } from "../templates/zernio-error";
 import {
   attachLocalMeta,
   attachMedia,
@@ -138,9 +138,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(page);
   } catch (error) {
     console.error("Failed to fetch messages from Zernio API:", error);
+    const rejected = zernioThrown(error);
     return NextResponse.json(
-      { error: "No se pudieron cargar los mensajes" },
-      { status: 500 }
+      { error: rejected ? zernioErrorMessage(rejected, "No se pudieron cargar los mensajes de Zernio") : "No se pudieron cargar los mensajes" },
+      { status: rejected ? 502 : 500 }
     );
   }
 }
@@ -258,7 +259,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const messageId = (res.data as any)?.data?.messageId ?? null;
+    const messageId = res.data.data?.messageId ?? null;
 
     // El archivo enviado queda registrado para verlo en el chat (2 meses).
     const mediaView = media && messageId ? await recordOutgoingMedia(conversation, messageId, media, user.id) : null;
@@ -321,8 +322,18 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     console.error("Failed to send message via Zernio API:", error);
+    const rejected = zernioThrown(error);
+    const status = rejected?.response?.status;
+    // 409: Zernio todavía procesa un envío con la misma clave (doble clic o reintento muy rápido).
+    if (status === 409) {
+      return NextResponse.json({ error: "Este mensaje ya se está enviando.", code: "in_progress" }, { status: 409 });
+    }
+    // Rechazo de Zernio o de la plataforma (4xx): no salió. Con 5xx no se sabe.
+    if (rejected && typeof status === "number" && status < 500) {
+      return NextResponse.json({ error: zernioErrorMessage(rejected, "Zernio rechazó el mensaje") }, { status: 502 });
+    }
     return NextResponse.json(
-      { error: "No se pudo enviar el mensaje. Revisa tu conexión e inténtalo de nuevo." },
+      { error: rejected ? zernioErrorMessage(rejected, "No se pudo enviar el mensaje") : "No se pudo enviar el mensaje. Revisa tu conexión e inténtalo de nuevo." },
       { status: 500 }
     );
   }
