@@ -10,6 +10,14 @@ import { cn } from "@/lib/utils";
 import type { Suggestion } from "@/lib/send-review";
 import { primaryButtonClass, secondaryButtonClass } from "./ui";
 
+/** De dónde sale la sugerencia, a la derecha de cada fila. */
+function noteFor(s: Suggestion): string {
+  if (s.kind === "mark") return `falta ${s.to}`;
+  if (s.source === "diccionario") return s.unsure ? "diccionario · revisa" : "diccionario";
+  if (s.source === "pregunta") return "pregunta";
+  return "lista fija";
+}
+
 export function SendReviewPopover({
   suggestions,
   unresolved,
@@ -96,7 +104,7 @@ export function SendReviewPopover({
                   <span className="min-w-0 truncate text-sm font-medium text-green-700 dark:text-green-400">
                     {s.kind === "mark" ? s.preview?.after : s.to}
                   </span>
-                  {s.kind === "mark" && <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">falta {s.to}</span>}
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{noteFor(s)}</span>
                 </button>
               </li>
             );

@@ -283,6 +283,7 @@ export function MessageThread({
   onCaseActivity,
   isDemo = false,
   canSimulate = false,
+  isAdmin = false,
 }: {
   conversation: InboxConversation | null;
   /** Envíos de la bandeja de este chat que aún no aparecen en la lista de Zernio. */
@@ -309,6 +310,8 @@ export function MessageThread({
   isDemo?: boolean;
   /** Administrador: botón "Simular mensaje del cliente" (solo con isDemo). */
   canSimulate?: boolean;
+  /** Dueño o Administrador (diccionario de la tienda). */
+  isAdmin?: boolean;
 }) {
   const toast = useToast();
   const [simulateOpen, setSimulateOpen] = useState(false);
@@ -699,6 +702,7 @@ export function MessageThread({
         me={me}
         teamName={teamName}
         workspaceName={workspaceName}
+        isAdmin={isAdmin}
         onSendMessage={(text, attachments) => onSend?.(text, attachments)}
         onNoteAdded={(note) => onNoteAdded?.(note)}
         onTemplateSent={() => {

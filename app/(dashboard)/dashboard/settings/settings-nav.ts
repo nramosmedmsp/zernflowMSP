@@ -16,6 +16,7 @@ export type SettingsLinkKey =
   | "attention"
   | "replies"
   | "whatsapp-templates"
+  | "dictionary"
   | "password";
 
 export interface SettingsLink {
@@ -95,6 +96,13 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     title: "Plantillas de WhatsApp",
     description: "Plantillas aprobadas para escribir pasadas las 24 horas.",
     href: "/dashboard/settings/whatsapp-templates",
+    adminOnly: false,
+  },
+  {
+    key: "dictionary",
+    title: "Diccionario de la tienda",
+    description: "Marcas y palabras que el corrector no debe marcar. Los asesores piden; los administradores aprueban.",
+    href: "/dashboard/settings/dictionary",
     adminOnly: false,
   },
   {

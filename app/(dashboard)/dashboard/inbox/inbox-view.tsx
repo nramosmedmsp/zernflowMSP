@@ -364,6 +364,7 @@ export function InboxView({
               onCaseActivity={() => void handleCaseChanged()}
               isDemo={!!selected && (meta.demoChannelIds ?? []).includes(selected.channel_id)}
               canSimulate={meta.isAdmin}
+              isAdmin={meta.isAdmin}
             />
           )}
         </div>

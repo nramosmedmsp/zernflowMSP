@@ -66,7 +66,11 @@ export type NotificationType =
   | "wait_exceeded"
   | "auto_template_failed"
   // Fase 3
-  | "sla_breached";
+  | "sla_breached"
+  // Diccionario de la tienda (corrector de la Bandeja)
+  | "spell_word_request"
+  | "spell_word_approved"
+  | "spell_word_rejected";
 
 export interface NotificationInput {
   workspace_id: string;

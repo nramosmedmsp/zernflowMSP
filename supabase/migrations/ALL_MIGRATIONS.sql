@@ -3611,3 +3611,84 @@ create policy messages_insert on public.messages
       where conv.id = messages.conversation_id and public.can_see_contact(conv.contact_id)
     )
   );
+
+-- ============================================================
+-- MIGRATION 27: SPELL WORDS
+-- ============================================================
+
+-- Diccionario de la tienda para el corrector de la Bandeja: marcas, productos
+-- y palabras propias que el diccionario de español no conoce (whey, isolate,
+-- Yape…). Las agrega cualquier miembro desde el chat ("Agregar al diccionario
+-- de la tienda"); las quita el Dueño o un Administrador en Configuración.
+--
+-- Aplicar en cada base (tienda y gimnasio).
+
+create table if not exists public.spell_words (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  word text not null check (char_length(btrim(word)) between 1 and 60),
+  -- En minúsculas: "Yape" y "yape" son la misma palabra.
+  normalized text not null check (normalized = lower(normalized)),
+  added_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint spell_words_unique unique (workspace_id, normalized)
+);
+
+alter table public.spell_words enable row level security;
+
+drop policy if exists spell_words_select on public.spell_words;
+create policy spell_words_select on public.spell_words
+  for select using (public.is_workspace_member(workspace_id));
+
+drop policy if exists spell_words_insert on public.spell_words;
+create policy spell_words_insert on public.spell_words
+  for insert with check (public.is_workspace_member(workspace_id) and added_by = auth.uid());
+
+drop policy if exists spell_words_delete on public.spell_words;
+create policy spell_words_delete on public.spell_words
+  for delete using (public.is_ws_admin(workspace_id));
+
+-- Lista inicial (added_by vacío): palabras de una tienda de suplementos.
+insert into public.spell_words (workspace_id, word, normalized)
+select w.id, x.word, lower(x.word)
+from public.workspaces w
+cross join (values
+  ('whey'), ('isolate'), ('gainer'), ('scoop'), ('scoops'), ('shaker'), ('preworkout'), ('workout'),
+  ('creatine'), ('protein'), ('gym'), ('fitness'), ('delivery'), ('stock'), ('ok'), ('okey'),
+  ('wsp'), ('whatsapp'), ('instagram'), ('facebook'), ('link'), ('online'), ('promo'), ('promos'),
+  ('combo'), ('combos'), ('Yape'), ('yapeo'), ('Plin'), ('Olva'), ('Shalom'), ('lb'), ('lbs'), ('kg'), ('mg'),
+  ('kcal'), ('porfa'), ('cel'), ('celu'), ('dni'), ('ruc')
+) as x(word)
+on conflict (workspace_id, normalized) do nothing;
+
+-- ============================================================
+-- MIGRATION 28: SPELL WORD REQUESTS
+-- ============================================================
+
+-- Diccionario de la tienda: solo el Dueño o un Administrador agrega palabras.
+-- Los demás miembros piden agregarlas ("pending"); un administrador las aprueba
+-- (pasan a "approved") o las rechaza (se borran). El corrector solo usa las
+-- aprobadas.
+--
+-- Aplicar en cada base (tienda y gimnasio).
+
+alter table public.spell_words
+  add column if not exists status text not null default 'approved' check (status in ('approved', 'pending'));
+alter table public.spell_words add column if not exists approved_by uuid references auth.users(id) on delete set null;
+alter table public.spell_words add column if not exists approved_at timestamptz;
+
+create index if not exists idx_spell_words_pending on public.spell_words(workspace_id) where status = 'pending';
+
+-- Miembros: solo pedidos a su nombre. Administradores: también aprobadas.
+drop policy if exists spell_words_insert on public.spell_words;
+create policy spell_words_insert on public.spell_words
+  for insert with check (
+    public.is_workspace_member(workspace_id)
+    and added_by = auth.uid()
+    and (status = 'pending' or public.is_ws_admin(workspace_id))
+  );
+
+-- Aprobar: solo administradores.
+drop policy if exists spell_words_update on public.spell_words;
+create policy spell_words_update on public.spell_words
+  for update using (public.is_ws_admin(workspace_id)) with check (public.is_ws_admin(workspace_id));
