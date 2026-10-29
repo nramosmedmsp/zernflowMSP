@@ -13,7 +13,13 @@ export async function loadRules(db: Db, caseTypeId: string | null): Promise<Pars
     .eq("enabled", true)
     .order("position", { ascending: true });
   if (error) console.error("[cases] load rules", error.message);
-  return (data ?? []).map(parseRule).filter((r): r is ParsedRule => r !== null);
+  const parsed = (data ?? []).map(parseRule).filter((r): r is ParsedRule => r !== null);
+  // R2-4: una regla que cambia el contacto a un tipo archivado no se aplica, y no debe tapar a la válida.
+  const targets = [...new Set(parsed.flatMap((r) => (r.action === "set_contact_type" ? [r.params.contact_type_id] : [])))];
+  if (targets.length === 0) return parsed;
+  const { data: archived } = await db.from("contact_types").select("id").in("id", targets).not("archived_at", "is", null);
+  const gone = new Set((archived ?? []).map((t) => t.id));
+  return parsed.filter((r) => !(r.action === "set_contact_type" && gone.has(r.params.contact_type_id)));
 }
 
 /** Gestiones ganadas del contacto, sin contar `excludeCaseId`. */

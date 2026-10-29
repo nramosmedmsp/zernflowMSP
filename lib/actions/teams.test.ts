@@ -237,7 +237,7 @@ describe("acciones de equipos: miembros", () => {
   it("valida los tipos de gestión: activos, no vacíos; todos = null", async () => {
     const base = { role: "agent" as const };
     expect(await addTeamMember(SEDE_A, ANA, { ...base, caseTypeIds: [ARCHIVADO] })).toMatchObject({
-      error: expect.stringContaining("archivado"),
+      error: expect.stringContaining("al menos un tipo"),
     });
     expect(await addTeamMember(SEDE_A, ANA, { ...base, caseTypeIds: [randomUUID()] })).toMatchObject({
       error: expect.stringContaining("no existe"),
@@ -252,6 +252,26 @@ describe("acciones de equipos: miembros", () => {
     // Marcar todos los tipos activos equivale a "todos" (null).
     expect(await addTeamMember(SEDE_A, ANA, { ...base, caseTypeIds: [VENTAS, SOPORTE] })).toEqual({ ok: true });
     expect(fake.rows("team_members")[0].case_type_ids).toBeNull();
+  });
+
+  it("R2-9: se puede cambiar el rol de quien atiende un tipo que luego se archivó", async () => {
+    await addTeamMember(SEDE_A, ANA, { role: "agent", caseTypeIds: [VENTAS] });
+    // Ventas se archiva después; la persona sigue con ese id guardado.
+    fake.rows("case_types").find((t) => t.id === VENTAS)!.archived_at = "2026-10-01T00:00:00.000Z";
+    fake.rows("team_members")[0].case_type_ids = [VENTAS, SOPORTE];
+    expect(await updateTeamMember(SEDE_A, ANA, { role: "supervisor", caseTypeIds: [VENTAS, SOPORTE] })).toEqual({ ok: true });
+    // Queda solo Soporte, que es el único activo => equivale a "todos".
+    expect(fake.rows("team_members")[0]).toMatchObject({ role: "supervisor" });
+  });
+
+  it("R2-8: no se archiva un equipo que es destino fijo de un tipo de gestión", async () => {
+    const t = fake.rows("case_types").find((x) => x.id === SOPORTE)!;
+    t.routing = "fixed_team";
+    t.fixed_team_id = SEDE_B;
+    expect(await setTeamArchived(SEDE_B, true)).toEqual({ error: expect.stringContaining("«Soporte»") });
+    expect(team(SEDE_B).archived_at ?? null).toBeNull();
+    t.routing = "contact_owner";
+    expect(await setTeamArchived(SEDE_B, true)).toEqual({ ok: true });
   });
 
   it("actualiza y quita miembros; actualizar a quien no está falla", async () => {

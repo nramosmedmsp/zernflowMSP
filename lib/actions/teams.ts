@@ -142,6 +142,23 @@ export async function setTeamArchived(teamId: string, archived: boolean): Promis
   const team = await loadTeam(ctx, teamId);
   if (!team) return { error: TEAM_NOT_FOUND };
 
+  // R2-8: un tipo con este equipo como destino fijo mandaría sus gestiones a otro lado en silencio.
+  if (archived && !team.archived_at) {
+    const { data: fixedTypes } = await ctx.db
+      .from("case_types")
+      .select("name")
+      .eq("workspace_id", ctx.workspaceId)
+      .eq("fixed_team_id", team.id)
+      .eq("routing", "fixed_team")
+      .is("archived_at", null);
+    if ((fixedTypes ?? []).length > 0) {
+      const names = (fixedTypes ?? []).map((t) => `«${t.name}»`).join(", ");
+      return {
+        error: `Estos tipos de gestión mandan sus gestiones a este equipo: ${names}. Cambia su destino en Configuración → Gestiones antes de archivarlo.`,
+      };
+    }
+  }
+
   if (archived && team.is_default && !team.archived_at) {
     const { data: others } = await ctx.db
       .from("teams")
@@ -266,7 +283,21 @@ async function checkMemberInput(
   input: TeamMemberInput,
 ): Promise<{ role: TeamRole; caseTypeIds: string[] | null } | { error: string }> {
   if (!input || !isTeamRole(input.role)) return { error: "El rol de equipo no es válido." };
-  const selection = normalizeCaseTypeSelection(input.caseTypeIds, await activeCaseTypeIds(ctx));
+  // R2-9: los tipos archivados que la persona ya tenía guardados se descartan en vez de rechazar
+  // todo el cambio (si no, no se le podría ni cambiar el rol).
+  let wanted: unknown = input.caseTypeIds;
+  if (Array.isArray(wanted) && wanted.length > 0) {
+    const { data: archived } = await ctx.db
+      .from("case_types")
+      .select("id")
+      .eq("workspace_id", ctx.workspaceId)
+      .not("archived_at", "is", null);
+    const gone = new Set((archived ?? []).map((t) => t.id));
+    const kept = wanted.filter((id) => !(typeof id === "string" && gone.has(id)));
+    // Si solo tenía tipos archivados, queda lista vacía y se pide elegir (no se vuelve "todos" a escondidas).
+    wanted = kept;
+  }
+  const selection = normalizeCaseTypeSelection(wanted, await activeCaseTypeIds(ctx));
   if ("error" in selection) return selection;
   return { role: input.role, caseTypeIds: selection.value };
 }

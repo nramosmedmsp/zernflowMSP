@@ -4,6 +4,7 @@ import {
   applyTemplateWithStore,
   isBusinessTemplateKey,
   normalizeName,
+  previewTemplateWithStore,
   supabaseTemplateStore,
 } from "./business-templates";
 import { FakeDb } from "./cases/fake-db.test-helper";
@@ -190,7 +191,9 @@ describe("applyBusinessTemplate", () => {
     const again = await applyTemplateWithStore(store, WS, "ecommerce");
     expect(again.added).toEqual({ ...ZERO, stages: 1 });
     const readded = fake.rows("case_stages").find((s) => s.case_type_id === venta.id && s.name === "Asesorando")!;
-    expect(readded.position).toBe(6);
+    // R2-16: ya no queda al final, después de las etapas de cierre.
+    const closing = fake.rows("case_stages").filter((s) => s.case_type_id === venta.id && s.kind !== "open");
+    expect(closing.every((c) => (c.position as number) > (readded.position as number))).toBe(true);
   });
 
   it("otra plantilla suma lo suyo sin duplicar nombres comunes ni cambiar la etiqueta de fecha clave", async () => {
@@ -224,5 +227,40 @@ describe("applyBusinessTemplate", () => {
     const contacto = fake.rows("contact_types")[0];
     expect(contacto).toMatchObject({ name: "Contacto", is_default: true });
     expect(fake.rows("case_types")[0]).toMatchObject({ name: "General", suggested_for_contact_type_ids: [contacto.id] });
+  });
+});
+
+describe("R2-16: volver a agregar una plantilla", () => {
+  it("las etapas abiertas que faltan se insertan antes de las de cierre", async () => {
+    const fake = freshDb();
+    const store = supabaseTemplateStore(fake.asDb());
+    await applyTemplateWithStore(store, WS, "ecommerce");
+    const venta = fake.rows("case_types").find((c) => c.name === "Venta")!;
+    const first = fake.rows("case_stages").filter((s) => s.case_type_id === venta.id).find((s) => s.kind === "open")!;
+    fake.tables.case_stages = fake.rows("case_stages").filter((s) => s.id !== first.id);
+    const again = await applyTemplateWithStore(store, WS, "ecommerce");
+    expect(again.added.stages).toBe(1);
+    const ordered = fake.rows("case_stages").filter((s) => s.case_type_id === venta.id).sort((a, b) => (a.position as number) - (b.position as number));
+    const kinds = ordered.map((s) => s.kind);
+    expect(kinds.lastIndexOf("open")).toBeLessThan(kinds.findIndex((k) => k !== "open"));
+    expect(new Set(ordered.map((s) => s.position)).size).toBe(ordered.length);
+    expect(ordered.map((s) => s.name)).toContain(first.name);
+  });
+
+  it("la vista previa dice qué se volvería a crear y no escribe nada", async () => {
+    const fake = freshDb();
+    const store = supabaseTemplateStore(fake.asDb());
+    await applyTemplateWithStore(store, WS, "ecommerce");
+    const venta = fake.rows("case_types").find((c) => c.name === "Venta")!;
+    const rule = fake.rows("case_rules").find((r) => r.case_type_id === venta.id)!;
+    fake.tables.case_rules = fake.rows("case_rules").filter((r) => r.id !== rule.id);
+    const before = JSON.stringify(fake.tables);
+    const preview = await previewTemplateWithStore(store, WS, "ecommerce");
+    expect(preview.added.rules).toBe(1);
+    expect(preview.details.some((d) => d.startsWith("Venta") && d.includes("1 regla"))).toBe(true);
+    expect(JSON.stringify(fake.tables)).toBe(before);
+    // Sin nada que volver a crear, la vista previa queda vacía.
+    await applyTemplateWithStore(store, WS, "ecommerce");
+    expect((await previewTemplateWithStore(store, WS, "ecommerce")).added).toEqual(ZERO);
   });
 });

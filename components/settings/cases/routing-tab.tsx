@@ -60,6 +60,12 @@ export function RoutingTab({ type, data, run, busy }: TabProps) {
           {data.teams.length === 0 ? (
             <p className="text-xs text-muted-foreground">Aún no hay equipos activos. Créalos en Configuración → Equipos.</p>
           ) : (
+            <>
+              {type.fixedTeamId && !data.teams.some((t) => t.id === type.fixedTeamId) && (
+                <p className="mb-2 text-xs font-medium text-amber-600">
+                  El equipo elegido está archivado: estas gestiones van al equipo del contacto o al de por defecto. Elige otro equipo.
+                </p>
+              )}
             <select id="fixed-team" value={teamId} onChange={(e) => setTeamId(e.target.value)} disabled={busy} className={`${inputClass} w-full max-w-sm`}>
               <option value="">Elige un equipo</option>
               {data.teams.map((t) => (
@@ -68,6 +74,7 @@ export function RoutingTab({ type, data, run, busy }: TabProps) {
                 </option>
               ))}
             </select>
+            </>
           )}
         </div>
       )}

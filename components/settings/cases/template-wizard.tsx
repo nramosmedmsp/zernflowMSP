@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { Info, Loader2 } from "lucide-react";
-import { applyBusinessTemplate } from "@/lib/actions/cases";
+import { applyBusinessTemplate, previewBusinessTemplate } from "@/lib/actions/cases";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { STAGE_KIND_LABELS } from "./config-rules";
 import type { TemplateSummary } from "./template-summary";
@@ -160,6 +161,25 @@ export function AddTemplateDialog({ open, onClose, templates }: { open: boolean;
   const { apply, busy, notice, clearNotice } = useApplyTemplate();
   const [selected, setSelected] = useState<string | null>(null);
   const template = templates.find((t) => t.key === selected) ?? null;
+  const [review, setReview] = useState<{ template: TemplateSummary; details: string[] } | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+
+  /** R2-16: antes de agregar, se dice qué se va a crear (incluido lo que se haya borrado a propósito). */
+  async function startApply(t: TemplateSummary) {
+    setReviewing(true);
+    try {
+      const res = await previewBusinessTemplate(t.key);
+      if ("error" in res) return apply(t);
+      const a = res.result.added;
+      const total = a.contactTypes + a.caseTypes + a.stages + a.categories + a.reasons + a.rules;
+      if (total === 0) return apply(t);
+      setReview({ template: t, details: res.result.details });
+    } catch {
+      await apply(t);
+    } finally {
+      setReviewing(false);
+    }
+  }
 
   function close() {
     clearNotice();
@@ -192,14 +212,30 @@ export function AddTemplateDialog({ open, onClose, templates }: { open: boolean;
           <button
             type="button"
             className={primaryButtonClass}
-            disabled={busy || !template}
-            onClick={() => template && apply(template)}
+            disabled={busy || reviewing || !template}
+            onClick={() => template && startApply(template)}
           >
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {(busy || reviewing) && <Loader2 className="h-4 w-4 animate-spin" />}
             {template ? `Agregar lo que falte de ${template.name}` : "Elige una plantilla"}
           </button>
         </div>
       </div>
+      <ConfirmDialog
+        open={review !== null}
+        title={review ? `Agregar de ${review.template.name}` : ""}
+        message={
+          review
+            ? `Se va a agregar lo siguiente. Si borraste antes alguna regla o etapa de esta plantilla a propósito, volverá a crearse. ${review.details.join(" · ")}`
+            : ""
+        }
+        confirmLabel="Agregar"
+        onCancel={() => setReview(null)}
+        onConfirm={async () => {
+          const t = review?.template;
+          setReview(null);
+          if (t) await apply(t);
+        }}
+      />
     </Modal>
   );
 }

@@ -84,7 +84,7 @@ export function CategoriesTab({ type, run, busy }: TabProps) {
     if (p.list === "reason-kind") {
       await run(() => updateItem({ list: "reason", id: p.item.id, kind: p.to, confirmedKindChange: true }), `El motivo «${p.item.name}» cambió de clase.`);
     } else if (p.mode === "archive") {
-      await run(() => archiveItem({ list: p.list, id: p.item.id }), `Se archivó «${p.item.name}».`);
+      await run(() => archiveItem({ list: p.list, id: p.item.id }), (r) => `Se archivó «${p.item.name}».${r.warning ? ` ${r.warning}` : ""}`);
     } else {
       await run(() => removeItem({ list: p.list, id: p.item.id }), (r) => r.message);
     }

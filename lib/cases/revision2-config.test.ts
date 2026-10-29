@@ -171,3 +171,50 @@ describe("ajustes del espacio sin pisarse", () => {
     expect(await mergeWorkspaceSettings(client, WS, {}, { a: 1 })).toBe("boom");
   });
 });
+
+describe("R2-4: reglas que apuntan a algo archivado", () => {
+  it("loadRules descarta el cambio de tipo de contacto a un tipo archivado y deja que aplique la válida", async () => {
+    const { loadRules } = await import("./effects");
+    const { planRules } = await import("./rules");
+    fake = new FakeDb();
+    const [cliente, frecuente] = fake.seed("contact_types", [
+      { workspace_id: WS, name: "Cliente" },
+      { workspace_id: WS, name: "Frecuente", archived_at: "2026-10-01T00:00:00.000Z" },
+    ]);
+    const [type] = fake.seed("case_types", [{ workspace_id: WS, name: "Venta" }]);
+    fake.seed("case_rules", [
+      { case_type_id: type.id, position: 0, enabled: true, trigger: "on_won", action: "set_contact_type", params: { contact_type_id: cliente.id }, condition: {} },
+      { case_type_id: type.id, position: 1, enabled: true, trigger: "on_won", action: "set_contact_type", params: { contact_type_id: frecuente.id, from_nth_win: 2 }, condition: {} },
+    ]);
+    const rules = await loadRules(db(), type.id as string);
+    expect(rules).toHaveLength(1);
+    const plan = planRules({
+      rules,
+      ctx: { trigger: "on_won", stageId: null, categoryId: null, outcomeReasonId: null, contactTypeId: null },
+      wonCount: 3,
+      now: new Date("2026-10-20T15:00:00Z"),
+      keyDate: null,
+    });
+    expect(plan.contactTypeId).toBe(cliente.id);
+  });
+
+  it("la lista de reglas marca lo archivado", async () => {
+    const { archivedRuleTargets } = await import("@/components/settings/cases/config-rules");
+    const lookup = {
+      stages: [],
+      categories: [],
+      reasons: [],
+      contactTypes: [{ id: "ct", name: "Frecuente", archived: true }],
+      caseTypes: [{ id: "t", name: "Recompra", archived: true }],
+    };
+    expect(
+      archivedRuleTargets({ trigger: "on_won", triggerStageId: null, condition: {}, action: "set_contact_type", params: { contact_type_id: "ct" } }, lookup),
+    ).toEqual(["el tipo de contacto «Frecuente»"]);
+    expect(
+      archivedRuleTargets({ trigger: "on_won", triggerStageId: null, condition: {}, action: "schedule_case", params: { case_type_id: "t" } }, lookup),
+    ).toEqual(["el tipo de gestión «Recompra»"]);
+    expect(
+      archivedRuleTargets({ trigger: "on_won", triggerStageId: null, condition: {}, action: "ask_key_date", params: {} }, lookup),
+    ).toEqual([]);
+  });
+});

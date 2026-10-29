@@ -114,7 +114,7 @@ export function StagesTab({ type, run, busy, notify }: TabProps) {
     if (mode === "archive") {
       await run(
         () => archiveItem({ list: "stage", id: stage.id, moveToStageId }),
-        (r) => (r.moved > 0 ? `La etapa «${stage.name}» se archivó y ${r.moved} ${r.moved === 1 ? "gestión se movió" : "gestiones se movieron"}.` : `La etapa «${stage.name}» se archivó.`),
+        (r) => `${r.moved > 0 ? `La etapa «${stage.name}» se archivó y ${r.moved} ${r.moved === 1 ? "gestión se movió" : "gestiones se movieron"}.` : `La etapa «${stage.name}» se archivó.`}${r.warning ? ` ${r.warning}` : ""}`,
       );
     } else {
       await run(

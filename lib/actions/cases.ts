@@ -36,6 +36,8 @@ import type { ClosePreview } from "@/lib/cases/close";
 import {
   BUSINESS_TEMPLATES,
   applyBusinessTemplate as applyTemplate,
+  previewTemplateWithStore,
+  supabaseTemplateStore,
   isBusinessTemplateKey,
   type TemplateApplyResult,
 } from "@/lib/business-templates";
@@ -1167,6 +1169,23 @@ export async function applyBusinessTemplate(
   } catch (err) {
     console.error("[cases] applyBusinessTemplate", err);
     return { error: `No se pudo aplicar la plantilla ${BUSINESS_TEMPLATES[key].name}. Inténtalo de nuevo.` };
+  }
+}
+
+/** R2-16: lo que agregaría una plantilla, sin escribir nada (solo Dueño o Administrador). */
+export async function previewBusinessTemplate(
+  key: string,
+): Promise<CaseActionResult<{ result: TemplateApplyResult }>> {
+  if (!isBusinessTemplateKey(key)) return { error: "Plantilla de negocio desconocida." };
+  const s = await session();
+  if ("error" in s) return s;
+  if (!isAdminRole(s.actor.role)) return { error: ADMIN_ONLY_MESSAGE };
+  try {
+    const result = await previewTemplateWithStore(supabaseTemplateStore(s.db), s.workspaceId, key);
+    return { ok: true, result };
+  } catch (err) {
+    console.error("[cases] previewBusinessTemplate", err);
+    return { error: "No se pudo revisar la plantilla. Inténtalo de nuevo." };
   }
 }
 

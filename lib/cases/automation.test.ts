@@ -816,3 +816,17 @@ describe("scheduleCasesForKeyDate", () => {
     expect(fake.rows("cases")).toHaveLength(0);
   });
 });
+
+describe("R2-12: sin avisos de madrugada si todos están ausentes", () => {
+  beforeEach(async () => {
+    await setup();
+    setSettings({ business_hours: WEEKDAYS });
+  });
+
+  it("fuera de horario y sin nadie disponible no avisa «sin asignar»", async () => {
+    for (const m of fake.rows("workspace_members")) m.availability = "away";
+    const result = (await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at: SUNDAY_10AM }))!;
+    expect(result.assignment).toMatchObject({ status: "unassigned", reason: "off_hours" });
+    expect(notifications("case_unassigned")).toHaveLength(0);
+  });
+});

@@ -392,3 +392,25 @@ describe("R2-15: gana la regla más específica", () => {
     expect(planRules({ rules, ctx: won(null), wonCount: 1, now: NOW, keyDate: null }).contactTypeId).toBe(EX_SOCIO);
   });
 });
+
+describe("R2-6: categoría obligatoria sin categorías activas", () => {
+  const stages = [
+    { id: "s-open", name: "Abierta", kind: "open" as const, position: 0, archived_at: null },
+    { id: "s-res", name: "Resuelta", kind: "resolved" as const, position: 1, archived_at: null },
+  ];
+  const input = (categories: { id: string; archived_at: string | null }[]) => ({
+    caseType: { require_category: true, require_outcome_reason: false },
+    stages,
+    reasons: [],
+    categories,
+    currentCategoryId: null,
+    request: { kind: "resolved" as const },
+  });
+  it("sin categorías activas no bloquea el cierre", () => {
+    expect(validateClose(input([]))).toMatchObject({ ok: true });
+    expect(validateClose(input([{ id: "c", archived_at: "2026-01-01T00:00:00Z" }]))).toMatchObject({ ok: true });
+  });
+  it("con una categoría activa sigue siendo obligatoria", () => {
+    expect(validateClose(input([{ id: "c", archived_at: null }]))).toEqual({ ok: false, error: "Elige una categoría antes de cerrar." });
+  });
+});

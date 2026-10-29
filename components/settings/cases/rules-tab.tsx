@@ -12,6 +12,7 @@ import {
   RULE_ACTIONS,
   RULE_TRIGGERS,
   TRIGGER_LABELS,
+  archivedRuleTargets,
   describeRule,
   moveId,
   type CaseConfigData,
@@ -306,6 +307,7 @@ export function RulesTab({ type, data, run, busy }: TabProps) {
       <ul className="space-y-2">
         {rules.map((r, i) => {
           const d = describeRule(r, lookup);
+          const archivedTargets = archivedRuleTargets(r, lookup);
           return (
             <li key={r.id} className={cn("flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2", !r.enabled && "opacity-60")}>
               <div className="flex flex-col">
@@ -320,6 +322,11 @@ export function RulesTab({ type, data, run, busy }: TabProps) {
                 <p className="font-medium">{d.when}</p>
                 {d.condition && <p className="text-xs text-muted-foreground">{d.condition}</p>}
                 <p className="text-muted-foreground">{d.what}</p>
+                {archivedTargets.length > 0 && (
+                  <p className="text-xs font-medium text-amber-600">
+                    Usa {archivedTargets.join(" y ")} (archivado): no se aplica hasta que lo reactives o cambies la regla.
+                  </p>
+                )}
               </div>
               <Switch
                 checked={r.enabled}

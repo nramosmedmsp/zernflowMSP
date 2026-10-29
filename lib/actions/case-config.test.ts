@@ -619,6 +619,7 @@ describe("quitar una etapa", () => {
     seedCase("Venta", "Pagado", { status: "won", closed_at: "2026-10-18T16:00:00.000Z" });
     const used = stageId("Venta", "Pagado");
     const unused = stageId("Venta", "No compró");
+    fake.seed("case_stages", [{ case_type_id: typeId("Venta"), name: "Otra de cierre", kind: "resolved", position: 9 }]);
 
     const archived = await removeItem({ list: "stage", id: used });
     expect(archived).toMatchObject({ ok: true, outcome: "archive", moved: 0, message: expect.stringContaining("historial") });
@@ -748,6 +749,7 @@ describe("tipos de gestión: destino, tiempos y quitar", () => {
 
   it("general: nombre, color, ícono, proactiva, interruptores y tipos de contacto sugeridos", async () => {
     const id = typeId("Consulta");
+    fake.seed("case_categories", [{ case_type_id: id, name: "Consulta general", position: 0 }]);
     const prospecto = contactTypeId("Prospecto");
     expect(
       await updateCaseType({
@@ -849,6 +851,77 @@ describe("R2-10 / R2-3: plazo de la solución, archivar y plantilla automática"
     const row = fake.rows("case_types").find((t) => t.id === id)!;
     expect(row.is_proactive).toBe(false);
     expect(row.auto_template).toBeNull();
+  });
+});
+
+describe("R2-4 / R2-5 / R2-7: avisos al archivar y etapas de cierre", () => {
+  const flowWith = (id: string, name = "Bienvenida") =>
+    fake.seed("flows", [{ workspace_id: WS, name, status: "published", nodes: [{ id: "n1", type: "change_stage", data: { stageId: id } }], edges: [] }]);
+
+  it("R2-4: archivar un tipo de contacto que usa una regla lo avisa", async () => {
+    const res = await archiveContactType(contactTypeId("Cliente"));
+    expect(res).toMatchObject({ ok: true, warning: expect.stringContaining("regla") });
+    // Uno sin reglas no avisa.
+    const created = await createContactType({ name: "VIP" });
+    if (!("ok" in created)) throw new Error();
+    expect(await archiveContactType(created.id)).toEqual({ ok: true });
+  });
+
+  it("R2-4: archivar una etapa usada por una regla lo avisa", async () => {
+    const venta = typeId("Venta");
+    const extra = fake.seed("case_stages", [{ case_type_id: venta, name: "Intermedia", kind: "open", position: 9 }])[0];
+    fake.seed("case_rules", [{ case_type_id: venta, position: 9, enabled: true, trigger: "on_stage", trigger_stage_id: extra.id, action: "ask_key_date", params: { label: "x" }, condition: {} }]);
+    const res = await archiveItem({ list: "stage", id: extra.id as string });
+    expect(res).toMatchObject({ ok: true, warning: expect.stringContaining("regla") });
+  });
+
+  it("R2-5: los flujos que usan una etapa o un tipo cuentan como uso", async () => {
+    const stage = stageId("Consulta", "Abierta");
+    const extra = fake.seed("case_stages", [{ case_type_id: typeId("Consulta"), name: "Segunda", kind: "open", position: 5 }])[0];
+    flowWith(extra.id as string);
+    const archived = await archiveItem({ list: "stage", id: extra.id as string });
+    expect(archived).toMatchObject({ ok: true, warning: expect.stringContaining("«Bienvenida»") });
+    expect(stage).toBeTruthy();
+    // Borrar un tipo sin gestiones pero usado por un flujo lo archiva en vez de borrarlo.
+    flowWith(typeId("Consulta"), "Consultas");
+    const removed = await removeCaseType(typeId("Consulta"));
+    expect(removed).toMatchObject({ ok: true, outcome: "archive" });
+    expect(fake.rows("case_types").some((t) => t.name === "Consulta")).toBe(true);
+  });
+
+  it("R2-5: archivar un tipo usado por un flujo lo avisa", async () => {
+    flowWith(typeId("Postventa"), "Postventa bot");
+    const res = await archiveCaseType(typeId("Postventa"));
+    expect(res).toMatchObject({ ok: true, message: expect.stringContaining("«Postventa bot»") });
+  });
+
+  it("R2-7: no se quita la última etapa de cierre", async () => {
+    const stages = fake.rows("case_stages").filter((x) => x.case_type_id === typeId("Consulta"));
+    const closing = stages.filter((x) => x.kind !== "open");
+    for (const c of closing.slice(1)) await archiveItem({ list: "stage", id: c.id as string });
+    const last = closing[0];
+    const err = await archiveItem({ list: "stage", id: last.id as string });
+    expect(err).toEqual({ error: expect.stringContaining("al menos una etapa de cierre") });
+    expect(await removeItem({ list: "stage", id: last.id as string })).toMatchObject({ error: expect.stringContaining("etapa de cierre") });
+    expect(await updateItem({ list: "stage", id: last.id as string, kind: "open", confirmedKindChange: true })).toMatchObject({ error: expect.any(String) });
+  });
+
+  it("R2-7: un tipo protegido conserva al menos una etapa «Resuelta»", async () => {
+    const id = typeId("Postventa");
+    await updateCaseType({ id, protected: true });
+    const stages = fake.rows("case_stages").filter((x) => x.case_type_id === id && x.kind !== "open");
+    const resolved = stages.filter((x) => x.kind === "resolved");
+    for (const r of resolved.slice(1)) await archiveItem({ list: "stage", id: r.id as string });
+    const res = await archiveItem({ list: "stage", id: resolved[0].id as string });
+    expect(res).toMatchObject({ error: expect.stringContaining("Resuelta") });
+  });
+
+  it("R2-6: no se puede exigir categoría si el tipo no tiene categorías activas", async () => {
+    const id = typeId("Consulta");
+    fake.tables.case_categories = fake.rows("case_categories").filter((c) => c.case_type_id !== id);
+    expect(await updateCaseType({ id, requireCategory: true })).toMatchObject({ error: expect.stringContaining("categoría activa") });
+    fake.seed("case_categories", [{ case_type_id: id, name: "Una", position: 0 }]);
+    expect(await updateCaseType({ id, requireCategory: true })).toEqual({ ok: true });
   });
 });
 

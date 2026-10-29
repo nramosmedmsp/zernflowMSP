@@ -213,6 +213,8 @@ export const MAX_NTH_WIN = 1_000;
 
 export const NAME_ERROR = `Escribe un nombre de hasta ${MAX_NAME_LENGTH} caracteres.`;
 export const LAST_OPEN_STAGE_ERROR = "Debe quedar al menos una etapa abierta activa en cada tipo de gestión.";
+export const LAST_CLOSE_STAGE_ERROR = "Debe quedar al menos una etapa de cierre activa (ganada, perdida o resuelta) en cada tipo de gestión.";
+export const LAST_RESOLVED_STAGE_ERROR = "Un tipo protegido necesita al menos una etapa «Resuelta» activa: sin ella no se puede cerrar con solución.";
 export const STAGE_KIND_CHANGE_NOTICE =
   "Cambiar la clase de una etapa cambia cómo se cuentan las métricas desde este momento. El historial anterior no se recalcula.";
 
@@ -315,6 +317,29 @@ type StageLite = { id: string; caseTypeId: string; kind: StageKind; archived: bo
 
 function otherActiveOpen(stages: readonly StageLite[], stageId: string): boolean {
   return stages.some((s) => s.id !== stageId && !s.archived && s.kind === "open");
+}
+
+/**
+ * R2-7: quitar una etapa de cierre (o convertirla en abierta) no puede dejar al
+ * tipo sin forma de cerrarse: queda al menos una de cierre activa y, si el tipo
+ * está protegido, al menos una «Resuelta». null si no hay problema.
+ */
+export function closeStageProblem(input: {
+  stages: readonly StageLite[];
+  stageId: string;
+  /** Clase que tendrá la etapa; null = se archiva o borra. */
+  newKind: StageKind | null;
+  protectedType?: boolean;
+}): string | null {
+  const stage = input.stages.find((s) => s.id === input.stageId);
+  if (!stage || stage.archived || stage.kind === "open") return null;
+  if (input.newKind === stage.kind) return null;
+  const others = input.stages.filter((s) => s.id !== stage.id && !s.archived);
+  if (!others.some((s) => s.kind !== "open")) return LAST_CLOSE_STAGE_ERROR;
+  if (input.protectedType && stage.kind === "resolved" && !others.some((s) => s.kind === "resolved")) {
+    return LAST_RESOLVED_STAGE_ERROR;
+  }
+  return null;
 }
 
 export type StageRemovalPlan = { ok: true; move: boolean } | { error: string };
@@ -562,12 +587,33 @@ export function validateRuleInput(input: RuleInput, ctx: RuleContext): { ok: tru
   return { ok: true, rule: { trigger: input.trigger, triggerStageId, condition, action: input.action, params } };
 }
 
+type LookupItem = { id: string; name: string; archived?: boolean };
+
 export interface RuleLookup {
-  stages: readonly { id: string; name: string }[];
-  categories: readonly { id: string; name: string }[];
-  reasons: readonly { id: string; name: string }[];
-  contactTypes: readonly { id: string; name: string }[];
-  caseTypes: readonly { id: string; name: string }[];
+  stages: readonly LookupItem[];
+  categories: readonly LookupItem[];
+  reasons: readonly LookupItem[];
+  contactTypes: readonly LookupItem[];
+  caseTypes: readonly LookupItem[];
+}
+
+/** R2-4: nombres de lo archivado que una regla usa (con eso la regla no se aplica). */
+export function archivedRuleTargets(
+  rule: Pick<RuleConfig, "trigger" | "triggerStageId" | "condition" | "action" | "params">,
+  lookup: RuleLookup,
+): string[] {
+  const out: string[] = [];
+  const check = (list: readonly LookupItem[], id: unknown, what: string) => {
+    const item = typeof id === "string" ? list.find((x) => x.id === id) : undefined;
+    if (item?.archived) out.push(`${what} «${item.name}»`);
+  };
+  if (rule.trigger === "on_stage") check(lookup.stages, rule.triggerStageId, "la etapa");
+  check(lookup.categories, rule.condition.category_id, "la categoría");
+  check(lookup.reasons, rule.condition.outcome_reason_id, "el motivo");
+  check(lookup.contactTypes, rule.condition.contact_type_id, "el tipo de contacto");
+  if (rule.action === "set_contact_type") check(lookup.contactTypes, rule.params.contact_type_id, "el tipo de contacto");
+  if (rule.action === "schedule_case") check(lookup.caseTypes, rule.params.case_type_id, "el tipo de gestión");
+  return out;
 }
 
 const MISSING = "(eliminado)";

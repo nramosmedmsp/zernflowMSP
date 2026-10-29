@@ -220,9 +220,10 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
   const link = caseLink(row.contact_id, row.id);
 
   // Fuera de horario no se reparte (ni se avisa): el cron lo hace al abrir.
-  // El modo manual y "sin elegibles" siguen su curso: no dependen de la hora.
+  // El modo manual sigue su curso (no depende de la hora). R2-12: con todos "Ausentes" tampoco se
+  // avisa "sin asignar" de madrugada: el cron reparte (y avisa si hace falta) al abrir.
   if (
-    (decision.kind === "owner" || decision.kind === "pick") &&
+    (decision.kind === "owner" || decision.kind === "pick" || decision.kind === "none") &&
     !isOpenAt(ctx.hours, decision.teamId, opts.at ?? new Date())
   ) {
     return { status: "unassigned", reason: "off_hours", teamId: decision.teamId };

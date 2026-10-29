@@ -183,7 +183,8 @@ export function validateClose(input: CloseValidationInput): CloseValidation {
     if (category.archived_at !== null && categoryId !== input.currentCategoryId) {
       return { ok: false, error: "Esa categoría está archivada." };
     }
-  } else if (input.caseType.require_category) {
+  } else if (input.caseType.require_category && input.categories.some((c) => c.archived_at === null)) {
+    // R2-6: sin categorías activas no hay qué elegir, así que no se exige (no bloquea los cierres).
     return { ok: false, error: "Elige una categoría antes de cerrar." };
   }
 
