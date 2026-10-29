@@ -31,6 +31,7 @@ import {
   closeCase,
   getContactCases,
   markNotificationsRead,
+  listContactActiveCases,
   openManualCase,
   postponeCase,
   setConversationBotPaused,
@@ -185,13 +186,57 @@ describe("acciones de gestiones: permisos", () => {
   });
 
   it("abrir gestión manual: para mí sí; para otro solo supervisor o administrador", async () => {
+    const typeId = (name: string) => fake.rows("case_types").find((t) => t.name === name)!.id as string;
     as(ANA);
-    expect(await openManualCase({ contactId })).toMatchObject({ ok: true, status: "open" });
-    expect(await openManualCase({ contactId, assignee: BETO })).toEqual({
+    // El contacto ya tiene una gestión abierta (sin clasificar): otra en paralelo pide confirmar.
+    expect(await openManualCase({ contactId, confirmParallel: true })).toMatchObject({ ok: true, status: "open" });
+    expect(await openManualCase({ contactId, assignee: BETO, confirmParallel: true })).toEqual({
       error: "Solo puedes asignar a personas de tu equipo.",
     });
     as(SUP);
-    expect(await openManualCase({ contactId, assignee: BETO })).toMatchObject({ ok: true });
+    expect(await openManualCase({ contactId, assignee: BETO, caseTypeId: typeId("Postventa"), confirmParallel: true })).toMatchObject({ ok: true });
+  });
+
+  it("nueva gestión: bloquea el mismo tipo y pide confirmar uno distinto (M-32)", async () => {
+    as(ANA);
+    const typeId = (name: string) => fake.rows("case_types").find((t) => t.name === name)!.id as string;
+    // María ya tiene una Venta abierta: otra Venta se rechaza siempre, aun confirmando.
+    const before = fake.rows("cases").length;
+    const sameType = {
+      error: "Este contacto ya tiene una gestión abierta de ese tipo. Ve a esa gestión en vez de abrir otra igual.",
+    };
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Venta") })).toEqual(sameType);
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Venta"), confirmParallel: true })).toEqual(sameType);
+    // De otro tipo: sin confirmar, error y no se crea nada.
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Postventa") })).toEqual({
+      error: "Este contacto ya tiene otra gestión abierta. Confirma que quieres abrir una en paralelo.",
+    });
+    expect(fake.rows("cases")).toHaveLength(before);
+    // Confirmada: se abre.
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Postventa"), confirmParallel: true })).toMatchObject({ ok: true });
+    expect(fake.rows("cases")).toHaveLength(before + 1);
+    // La lista para el diálogo trae las abiertas con el nombre del tipo.
+    const listed = await listContactActiveCases(contactId);
+    expect("cases" in listed && listed.cases.map((c) => c.caseTypeName).sort()).toEqual(["Postventa", "Venta"]);
+  });
+
+  it("un contacto sin gestiones abiertas no pide confirmación", async () => {
+    as(OWNER);
+    fake.rows("cases").forEach((c) => (c.status = "won"));
+    expect(await openManualCase({ contactId })).toMatchObject({ ok: true, status: "open" });
+  });
+
+  it("nueva gestión programada para una fecha que ya pasó: error, no se abre en silencio (M-23)", async () => {
+    as(OWNER);
+    fake.rows("cases").forEach((c) => (c.status = "won"));
+    const before = fake.rows("cases").length;
+    const result = await openManualCase({
+      contactId,
+      caseTypeId: fake.rows("case_types").find((t) => t.name === "Venta")!.id as string,
+      scheduledFor: "2020-01-01",
+    });
+    expect(result).toMatchObject({ error: expect.stringContaining("ya pasó") });
+    expect(fake.rows("cases")).toHaveLength(before);
   });
 
   it("pausar o reanudar el bot: solo quien puede editar la gestión; valida la conversación y queda en la actividad", async () => {
@@ -252,21 +297,21 @@ describe("postponeCase", () => {
   it("guarda el próximo contacto y conserva la nota", async () => {
     fake.rows("cases")[0].next_action_note = "Llamar por el pedido";
     as(ANA);
-    const result = await postponeCase(caseId, "2026-10-28T14:00:00.000Z");
-    expect(result).toMatchObject({ ok: true, nextActionAt: "2026-10-28T14:00:00.000Z", assignedToMe: false });
-    expect(fake.rows("cases")[0]).toMatchObject({ next_action_at: "2026-10-28T14:00:00.000Z", next_action_note: "Llamar por el pedido" });
+    const result = await postponeCase(caseId, "2099-10-28T14:00:00.000Z");
+    expect(result).toMatchObject({ ok: true, nextActionAt: "2099-10-28T14:00:00.000Z", assignedToMe: false });
+    expect(fake.rows("cases")[0]).toMatchObject({ next_action_at: "2099-10-28T14:00:00.000Z", next_action_note: "Llamar por el pedido" });
   });
 
   it("si la gestión no tiene responsable y la persona puede tomarla, se la asigna", async () => {
     fake.rows("cases")[0].assignee_id = null;
     as(SUP);
-    expect(await postponeCase(caseId, "2026-10-28T14:00:00.000Z")).toMatchObject({ ok: true, assignedToMe: true });
+    expect(await postponeCase(caseId, "2099-10-28T14:00:00.000Z")).toMatchObject({ ok: true, assignedToMe: true });
     expect(fake.rows("cases")[0].assignee_id).toBe(SUP);
   });
 
   it("quien no puede editar la gestión no la pospone", async () => {
     as(BETO);
-    expect(await postponeCase(caseId, "2026-10-28T14:00:00.000Z")).toEqual({ error: CASE_NOT_FOUND });
+    expect(await postponeCase(caseId, "2099-10-28T14:00:00.000Z")).toEqual({ error: CASE_NOT_FOUND });
     as(ANA);
     expect(await postponeCase(caseId, "no es fecha")).toMatchObject({ error: expect.any(String) });
   });

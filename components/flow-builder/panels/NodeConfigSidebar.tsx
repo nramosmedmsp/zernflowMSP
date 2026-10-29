@@ -11,6 +11,7 @@ import { ConditionPanel } from "./ConditionPanel";
 import { DelayPanel } from "./DelayPanel";
 import { ActionPanel } from "./ActionPanel";
 import { AiResponsePanel } from "./AiResponsePanel";
+import { availableVariablesFor } from "@/lib/flow-engine/validate";
 
 interface NodeConfigSidebarProps {
   node: Node;
@@ -19,59 +20,8 @@ interface NodeConfigSidebarProps {
   onChange: (nodeId: string, data: Record<string, unknown>) => void;
   onClose: () => void;
   onDelete: (nodeId: string) => void;
-}
-
-// BFS backwards over edges; the visited set makes cycles terminate.
-function getUpstreamNodeIds(nodeId: string, edges: Edge[]): Set<string> {
-  const upstream = new Set<string>();
-  const queue = [nodeId];
-  for (let i = 0; i < queue.length; i++) {
-    const current = queue[i];
-    for (const edge of edges) {
-      if (edge.target !== current || upstream.has(edge.source)) continue;
-      upstream.add(edge.source);
-      queue.push(edge.source);
-    }
-  }
-  return upstream;
-}
-
-function getFlowVariables({
-  node,
-  nodes,
-  edges,
-}: {
-  node: Node;
-  nodes: Node[];
-  edges: Edge[];
-}): string[] {
-  // Mensaje del cliente y datos del contacto que el bot carga solo (lib/flow-engine/contact-variables.ts).
-  const variables = ["message", "nombre", "fecha_clave", "empresa"];
-
-  const triggerNode = nodes.find((n) => n.type === "trigger");
-  const triggerType = (triggerNode?.data as Record<string, unknown> | undefined)
-    ?.triggerType as string | undefined;
-  if (triggerType === "comment_keyword") {
-    variables.push("comment_id", "comment_text", "commenter_name", "post_id");
-  }
-
-  // Producer-derived variables are only offered when the producing node runs before this one.
-  const upstreamIds = getUpstreamNodeIds(node.id, edges);
-
-  if (nodes.some((n) => n.type === "aiResponse" && upstreamIds.has(n.id))) {
-    variables.push("ai_response");
-  }
-
-  for (const n of nodes) {
-    if (n.type !== "httpRequest" || !upstreamIds.has(n.id)) continue;
-    const responseVariable = (n.data as Record<string, unknown>)
-      .responseVariable as string | undefined;
-    if (responseVariable && !variables.includes(responseVariable)) {
-      variables.push(responseVariable);
-    }
-  }
-
-  return variables;
+  /** Flujo que se edita (el selector de "Ir a flujo" no lo ofrece como destino). */
+  currentFlowId?: string;
 }
 
 const nodeTypeConfig: Record<string, { label: string; icon: typeof Cog; color: string; borderColor: string }> = {
@@ -113,7 +63,7 @@ const nodeTypeConfig: Record<string, { label: string; icon: typeof Cog; color: s
   },
 };
 
-export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDelete }: NodeConfigSidebarProps) {
+export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDelete, currentFlowId }: NodeConfigSidebarProps) {
   const nodeType = node.type || "action";
   const config = nodeTypeConfig[nodeType] || nodeTypeConfig.action;
   const Icon = config.icon;
@@ -153,7 +103,7 @@ export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDel
           <SendMessagePanel
             data={data}
             onChange={handleChange}
-            availableVariables={getFlowVariables({ node, nodes, edges })}
+            availableVariables={availableVariablesFor(node.id, nodes, edges)}
           />
         );
       case "condition":
@@ -163,7 +113,7 @@ export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDel
       case "aiResponse":
         return <AiResponsePanel data={data} onChange={handleChange} />;
       case "action":
-        return <ActionPanel data={data} onChange={handleChange} />;
+        return <ActionPanel data={data} onChange={handleChange} currentFlowId={currentFlowId} />;
       default:
         return (
           <p className="text-sm text-muted-foreground">

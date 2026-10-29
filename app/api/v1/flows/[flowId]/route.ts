@@ -43,18 +43,23 @@ export async function PUT(
   if (body.edges !== undefined) update.edges = body.edges;
   if (body.viewport !== undefined) update.viewport = body.viewport;
 
-  const { data: flow, error } = await supabase
+  update.updated_at = new Date().toISOString();
+
+  // Sin .single(): si no cambia ninguna fila (el flujo ya no existe o la base
+  // no dejó el cambio) se responde 404, nunca un éxito falso.
+  const { data: rows, error } = await supabase
     .from("flows")
     .update(update)
     .eq("id", flowId)
     .eq("workspace_id", workspaceId)
-    .select("id, name, status, updated_at")
-    .single();
+    .select("id, name, status, updated_at");
 
   if (error)
     return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!rows || rows.length === 0)
+    return NextResponse.json({ error: "No se encontró el flujo o no tienes permiso para guardarlo." }, { status: 404 });
 
-  return NextResponse.json(flow);
+  return NextResponse.json(rows[0]);
 }
 
 export async function DELETE(

@@ -173,6 +173,12 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
       this.filters.push((r) => this.db.rows(rel).find((x) => x.id === r[fk])?.[field] === v);
       return this;
     }
+    // "payload->>clave": campo de texto dentro de una columna jsonb.
+    if (col.includes("->>")) {
+      const [base, key] = col.split("->>");
+      this.filters.push((r) => String((r[base] as Row | null | undefined)?.[key] ?? "") === String(v));
+      return this;
+    }
     this.filters.push((r) => r[col] === v);
     return this;
   }

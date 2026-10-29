@@ -6,7 +6,10 @@
 import { getWorkspace } from "@/lib/workspace";
 import { revalidatePath } from "next/cache";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
+import { validateSequenceSteps } from "@/lib/broadcasts/sequence-step";
 import type { SequenceStep } from "@/lib/types/database";
+
+const GENERIC_ERROR = "No se pudo completar la operación. Inténtalo de nuevo.";
 
 export async function createSequence(name: string) {
   const { workspace, supabase, role } = await getWorkspace();
@@ -21,7 +24,10 @@ export async function createSequence(name: string) {
     .select()
     .single();
 
-  if (error) return { error: error.message };
+  if (error) {
+    console.error("[sequences] create", error.message);
+    return { error: GENERIC_ERROR };
+  }
 
   revalidatePath("/dashboard/sequences");
   return { ok: true, sequence: data };
@@ -42,12 +48,20 @@ export async function updateSequence(
   // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: existing } = await supabase
     .from("sequences")
-    .select("id")
+    .select("id, status, steps")
     .eq("id", sequenceId)
     .eq("workspace_id", workspace.id)
     .single();
 
   if (!existing) return { error: "No se encontró la secuencia" };
+
+  // Una secuencia activa no puede tener pasos vacíos: fallaría con cada cliente sin enviar nada.
+  const finalStatus = updates.status ?? existing.status;
+  const finalSteps = updates.steps ?? ((existing.steps as unknown as SequenceStep[]) || []);
+  if (finalStatus === "active") {
+    const problem = validateSequenceSteps(finalSteps);
+    if (problem) return { error: problem };
+  }
 
   const { data, error } = await supabase
     .from("sequences")
@@ -60,7 +74,10 @@ export async function updateSequence(
     .select()
     .single();
 
-  if (error) return { error: error.message };
+  if (error) {
+    console.error("[sequences] update", error.message);
+    return { error: GENERIC_ERROR };
+  }
 
   revalidatePath("/dashboard/sequences");
   revalidatePath(`/dashboard/sequences/${sequenceId}`);
@@ -77,7 +94,10 @@ export async function deleteSequence(sequenceId: string) {
     .eq("id", sequenceId)
     .eq("workspace_id", workspace.id);
 
-  if (error) return { error: error.message };
+  if (error) {
+    console.error("[sequences] delete", error.message);
+    return { error: GENERIC_ERROR };
+  }
 
   revalidatePath("/dashboard/sequences");
   return { ok: true };
@@ -104,10 +124,11 @@ export async function enrollContact(
 
   // El contacto y el canal tienen que ser de este espacio de trabajo.
   const [{ data: contact }, { data: channel }] = await Promise.all([
-    supabase.from("contacts").select("id").eq("id", contactId).eq("workspace_id", workspace.id).maybeSingle(),
+    supabase.from("contacts").select("id, is_subscribed").eq("id", contactId).eq("workspace_id", workspace.id).maybeSingle(),
     supabase.from("channels").select("id").eq("id", channelId).eq("workspace_id", workspace.id).maybeSingle(),
   ]);
   if (!contact) return { error: "No se encontró el contacto" };
+  if (contact.is_subscribed === false) return { error: "El contacto canceló su suscripción y no puede recibir la secuencia" };
   if (!channel) return { error: "No se encontró el canal" };
 
   const steps = (sequence.steps as unknown as SequenceStep[]) || [];
@@ -140,7 +161,8 @@ export async function enrollContact(
     if (error.code === "23505") {
       return { error: "El contacto ya está inscrito en esta secuencia" };
     }
-    return { error: error.message };
+    console.error("[sequences] enroll", error.message);
+    return { error: GENERIC_ERROR };
   }
 
   revalidatePath(`/dashboard/sequences/${sequenceId}`);
@@ -170,7 +192,10 @@ export async function cancelEnrollment(enrollmentId: string) {
     .update({ status: "cancelled" })
     .eq("id", enrollmentId);
 
-  if (error) return { error: error.message };
+  if (error) {
+    console.error("[sequences] cancel enrollment", error.message);
+    return { error: GENERIC_ERROR };
+  }
 
   revalidatePath(`/dashboard/sequences/${enrollment.sequence_id}`);
   return { ok: true };

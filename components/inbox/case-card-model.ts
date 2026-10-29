@@ -231,7 +231,14 @@ const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "set", "
 
 function limaParts(at: Date) {
   const d = new Date(at.getTime() + LIMA_OFFSET_MS);
-  return { hour: d.getUTCHours(), minute: d.getUTCMinutes(), weekday: d.getUTCDay(), day: d.getUTCDate(), month: d.getUTCMonth() };
+  return {
+    hour: d.getUTCHours(),
+    minute: d.getUTCMinutes(),
+    weekday: d.getUTCDay(),
+    day: d.getUTCDate(),
+    month: d.getUTCMonth(),
+    year: d.getUTCFullYear(),
+  };
 }
 
 function clock(at: Date): string {
@@ -244,7 +251,7 @@ function daysBetween(from: string, to: string): number {
   return Math.round((ms(to) - ms(from)) / 86_400_000);
 }
 
-/** "hoy 15:00", "mañana 9:00", "ayer 10:00", "lun 9:00" o "28 oct 9:00". */
+/** "hoy 15:00", "mañana 9:00", "ayer 10:00", "lun 9:00", "28 oct 9:00" o "1 ene 2020 10:00" (con año si no es el actual). */
 export function relativeDayTime(at: Date, now: Date): string {
   const diff = daysBetween(limaDateOf(now), limaDateOf(at));
   const p = limaParts(at);
@@ -253,7 +260,8 @@ export function relativeDayTime(at: Date, now: Date): string {
   if (diff === 1) return `mañana ${time}`;
   if (diff === -1) return `ayer ${time}`;
   if (diff > 1 && diff < 7) return `${WEEKDAYS[p.weekday]} ${time}`;
-  return `${p.day} ${MONTHS[p.month]} ${time}`;
+  const year = p.year !== limaParts(now).year ? ` ${p.year}` : "";
+  return `${p.day} ${MONTHS[p.month]}${year} ${time}`;
 }
 
 export type NextContactTone = "none" | "ok" | "overdue";
@@ -287,19 +295,27 @@ export interface NextContactOption {
   when: string;
 }
 
-/** Opciones rápidas: hoy en 3 h, mañana 9:00 y el lunes 9:00 (si no es mañana). */
+/** «Hoy en 3 h» solo se ofrece si cae el mismo día y en horario razonable (7:00 a 21:59, hora de Lima). */
+const SOON_FIRST_HOUR = 7;
+const SOON_LAST_HOUR = 21;
+
+/** Opciones rápidas: hoy en 3 h (si cae hoy y de día), mañana 9:00 y el lunes 9:00 (si no es mañana). */
 export function nextContactOptions(now: Date): NextContactOption[] {
   const today = limaDateOf(now);
   const options: NextContactOption[] = [];
 
   const soon = new Date(now.getTime() + 3 * 60 * 60 * 1000);
-  options.push({
-    key: "three-hours",
-    label: "Hoy en 3 h",
-    detail: clock(soon),
-    at: soon.toISOString(),
-    when: `hoy a las ${clock(soon)}`,
-  });
+  const soonHour = limaParts(soon).hour;
+  // Después de las 21:00 sumar 3 horas cae de madrugada del día siguiente: no se ofrece.
+  if (limaDateOf(soon) === today && soonHour >= SOON_FIRST_HOUR && soonHour <= SOON_LAST_HOUR) {
+    options.push({
+      key: "three-hours",
+      label: "Hoy en 3 h",
+      detail: clock(soon),
+      at: soon.toISOString(),
+      when: `hoy a las ${clock(soon)}`,
+    });
+  }
 
   const morning = (date: string) => {
     const at = limaDateTimeIso(date, 9);

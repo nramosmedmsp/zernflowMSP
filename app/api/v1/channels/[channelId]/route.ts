@@ -67,3 +67,37 @@ export async function DELETE(
 
   return NextResponse.json({ ok: true });
 }
+
+/**
+ * PATCH /api/v1/channels/[channelId]  { is_active: boolean }
+ *
+ * Enciende o apaga un canal. Responde 404 si no cambió ninguna fila (el canal
+ * no existe en este espacio o la base no dejó el cambio): así la pantalla no
+ * muestra un éxito falso. Solo Dueño o Administrador.
+ */
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ channelId: string }> }
+) {
+  const { channelId } = await params;
+  const guard = await requireApiAdmin();
+  if (!guard.ok) return guard.response;
+  const { supabase, workspaceId } = guard.ctx;
+
+  const body = (await request.json().catch(() => null)) as { is_active?: unknown } | null;
+  if (typeof body?.is_active !== "boolean")
+    return NextResponse.json({ error: "Indica si el canal debe estar activo o no." }, { status: 400 });
+
+  const { data, error } = await supabase
+    .from("channels")
+    .update({ is_active: body.is_active })
+    .eq("id", channelId)
+    .eq("workspace_id", workspaceId)
+    .select("id, is_active");
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!data || data.length === 0)
+    return NextResponse.json({ error: "No se encontró el canal o no tienes permiso para cambiarlo." }, { status: 404 });
+
+  return NextResponse.json(data[0]);
+}

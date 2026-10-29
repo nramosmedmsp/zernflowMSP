@@ -4,6 +4,9 @@ import { useState, useEffect } from "react";
 import { X, RotateCcw, Loader2, History } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { formatDateTime } from "@/lib/format";
+import { useToast } from "@/components/ui/toast";
+import { apiErrorMessage } from "@/lib/api-errors";
+import { restoreConfirmMessage } from "../labels";
 
 interface Version {
   id: string;
@@ -16,6 +19,8 @@ interface Version {
 interface VersionHistoryPanelProps {
   flowId: string;
   currentVersion: number;
+  /** Estado del flujo: decide qué avisa el diálogo de restaurar. */
+  flowStatus: string;
   onClose: () => void;
   onRestore: () => void;
 }
@@ -23,9 +28,11 @@ interface VersionHistoryPanelProps {
 export function VersionHistoryPanel({
   flowId,
   currentVersion,
+  flowStatus,
   onClose,
   onRestore,
 }: VersionHistoryPanelProps) {
+  const toast = useToast();
   const [versions, setVersions] = useState<Version[]>([]);
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -44,7 +51,7 @@ export function VersionHistoryPanel({
       }
     }
     load();
-  }, [flowId]);
+  }, [flowId, currentVersion]);
 
   async function handleRestore(versionId: string) {
     setRestoring(versionId);
@@ -54,8 +61,17 @@ export function VersionHistoryPanel({
         { method: "POST" }
       );
       if (res.ok) {
+        toast.success(
+          flowStatus === "published"
+            ? "Versión restaurada. El flujo sigue publicado con esa versión."
+            : "Versión restaurada en el borrador.",
+        );
         onRestore();
+      } else {
+        toast.error(await apiErrorMessage(res, "restaurar versiones"));
       }
+    } catch {
+      toast.error("No se pudo restaurar la versión. Revisa tu conexión.");
     } finally {
       setRestoring(null);
     }
@@ -139,7 +155,7 @@ export function VersionHistoryPanel({
       <ConfirmDialog
         open={!!confirmRestore}
         title="Restaurar versión"
-        message="El borrador actual se reemplazará por los nodos y conexiones de esta versión."
+        message={restoreConfirmMessage(flowStatus)}
         confirmLabel="Restaurar"
         cancelLabel="Cancelar"
         onConfirm={() => {

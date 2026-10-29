@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, Loader2 } from "lucide-react";
+import { describeSkippedEffects } from "@/lib/cases/close-messages";
 import { closeCase, previewCloseCase, type CaseTypeOption, type CaseView } from "@/lib/actions/cases";
 import type { ClosePreview } from "@/lib/cases/close";
 import { isDateString, limaDateOf } from "@/lib/cases/dates";
@@ -37,7 +38,8 @@ export function CloseCaseDialog({
   /** Etapa final preseleccionada (la elegida en el menú "Cerrar"). */
   initialStageId?: string | null;
   onCancel: () => void;
-  onClosed: (message: string) => void;
+  /** `problem`: la gestión se cerró pero algún efecto de las reglas no se aplicó (el aviso es de error). */
+  onClosed: (message: string, problem?: boolean) => void;
 }) {
   const finalStages = useMemo(
     () => (caseType?.stages ?? []).filter((s) => s.kind !== "open" && !s.archived),
@@ -154,10 +156,13 @@ export function CloseCaseDialog({
           `${s.rescheduled ? "Se movió" : "Se programó"} ${name} para el ${formatDate(s.scheduledFor)}.`,
         );
       }
-      if (result.effects.skipped.some((s) => s.reason === "missing_key_date")) {
-        parts.push("No se programó una gestión porque falta la fecha clave.");
-      }
-      onClosed(parts.join(" "));
+      const names = new Map<string, string | null>([
+        ...lastSchedules.map((x) => [x.ruleId, x.caseTypeName] as const),
+        ...(preview?.blocked ?? []).map((x) => [x.ruleId, x.caseTypeName] as const),
+      ]);
+      const problems = describeSkippedEffects(result.effects.skipped, names);
+      parts.push(...problems);
+      onClosed(parts.join(" "), problems.length > 0);
     } catch {
       setError("No se pudo cerrar la gestión. Inténtalo de nuevo.");
     } finally {
@@ -331,6 +336,12 @@ export function CloseCaseDialog({
           </label>
         </div>
       )}
+
+      {(preview?.blocked ?? []).map((b) => (
+        <p key={b.ruleId} className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+          No se programará {b.caseTypeName ?? "la gestión siguiente"}: ese tipo de gestión está archivado. Prográmala a mano.
+        </p>
+      ))}
 
       <ErrorText>{error ?? previewError}</ErrorText>
     </Modal>

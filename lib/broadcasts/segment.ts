@@ -125,3 +125,117 @@ export function parseCustomFieldValue(value: string): { slug: string; value: str
   const [slug, ...rest] = value.split(sep);
   return { slug: slug ?? "", value: rest.join(sep) };
 }
+
+// ── Revisión y descripción en palabras de un filtro ────────────────────────
+
+function ruleIsComplete(rule: SegmentRule): boolean {
+  const value = (rule.value ?? "").trim();
+  switch (rule.field) {
+    case "is_subscribed":
+      return true;
+    case "key_date": {
+      if (rule.operator === "between") {
+        const { from, to } = parseDateRange(value);
+        return !!(from || to);
+      }
+      return DATE_RE.test(value);
+    }
+    case "last_interaction":
+      return !Number.isNaN(new Date(value).getTime());
+    case "custom_field": {
+      const { slug, value: fieldValue } = parseCustomFieldValue(value);
+      return !!slug.trim() && !!fieldValue.trim();
+    }
+    default:
+      return value.length > 0;
+  }
+}
+
+/**
+ * Primer problema de un filtro de segmento guardable, en español, o null.
+ * Un filtro con una regla sin completar (p. ej. "Tiene etiqueta" sin elegir
+ * la etiqueta) no coincide con nadie: no se guarda. `null` o sin grupos = sin filtro.
+ */
+export function incompleteFilterProblem(filter: SegmentFilter | null | undefined): string | null {
+  if (!filter || !Array.isArray(filter.groups) || filter.groups.length === 0) return null;
+  for (const group of filter.groups) {
+    if (!Array.isArray(group.rules) || group.rules.length === 0) {
+      return "El filtro tiene un grupo sin reglas. Agrega una regla o quita el grupo.";
+    }
+    for (const rule of group.rules) {
+      if (!ruleIsComplete(rule)) {
+        return "El filtro tiene reglas sin completar. Elige el valor de cada regla o quita las que no uses.";
+      }
+    }
+  }
+  return null;
+}
+
+/** Nombres para mostrar un filtro en palabras: cada función devuelve el nombre de un id (o undefined). */
+export interface SegmentNames {
+  tag?: (idOrName: string) => string | undefined;
+  contactType?: (id: string) => string | undefined;
+  team?: (id: string) => string | undefined;
+  owner?: (id: string) => string | undefined;
+  platform?: (value: string) => string | undefined;
+}
+
+function shortDate(iso: string): string {
+  return DATE_RE.test(iso) ? iso.split("-").reverse().join("/") : iso;
+}
+
+/** Una regla en palabras: «Tiene la etiqueta "VIP"». */
+export function describeSegmentRule(rule: SegmentRule, names: SegmentNames = {}): string {
+  const value = (rule.value ?? "").trim();
+  const not = rule.operator === "not_equals";
+  const pick = (fn: ((v: string) => string | undefined) | undefined) =>
+    value === SEGMENT_NONE_VALUE ? "ninguno" : `“${fn?.(value) ?? value}”`;
+  switch (rule.field) {
+    case "has_tag":
+      return `Tiene la etiqueta ${pick(names.tag)}`;
+    case "missing_tag":
+      return `No tiene la etiqueta ${pick(names.tag)}`;
+    case "is_subscribed":
+      return value === "false" ? "No está suscrito" : "Está suscrito";
+    case "platform":
+      return `La plataforma ${not ? "no es" : "es"} ${pick(names.platform)}`;
+    case "contact_type":
+      return `El tipo de contacto ${not ? "no es" : "es"} ${pick(names.contactType)}`;
+    case "team":
+      return `El equipo ${not ? "no es" : "es"} ${pick(names.team)}`;
+    case "owner":
+      return `El responsable ${not ? "no es" : "es"} ${pick(names.owner)}`;
+    case "last_interaction":
+      return `Última interacción ${rule.operator === "before" ? "antes del" : "después del"} ${shortDate(value.slice(0, 10))}`;
+    case "key_date": {
+      if (rule.operator === "between") {
+        const { from, to } = parseDateRange(value);
+        return `Fecha clave entre ${from ? shortDate(from) : "el inicio"} y ${to ? shortDate(to) : "hoy en adelante"}`;
+      }
+      return `Fecha clave ${rule.operator === "before" ? "hasta el" : "desde el"} ${shortDate(value)}`;
+    }
+    case "custom_field": {
+      const { slug, value: fieldValue } = parseCustomFieldValue(value);
+      const verbs: Record<string, string> = {
+        equals: "es igual a",
+        not_equals: "no es igual a",
+        contains: "contiene",
+        gt: "es mayor que",
+        lt: "es menor que",
+      };
+      return `El campo “${slug}” ${verbs[rule.operator] ?? "es"} “${fieldValue}”`;
+    }
+    default:
+      return `${rule.field} ${rule.operator} ${value}`.trim();
+  }
+}
+
+/** El filtro entero en frases, una por grupo: «Cumple TODAS: …». */
+export function describeSegmentFilter(filter: SegmentFilter, names: SegmentNames = {}): string[] {
+  const lines = filter.groups.map((g) => {
+    const rules = g.rules.map((r) => describeSegmentRule(r, names));
+    if (rules.length === 1) return rules[0];
+    return `${g.combinator === "or" ? "Cumple alguna" : "Cumple todas"}: ${rules.join("; ")}`;
+  });
+  return lines;
+}

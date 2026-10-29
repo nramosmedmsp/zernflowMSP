@@ -1,23 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
-import { BUILDER_TRIGGER_TYPES, buildDesiredTriggers } from "@/lib/flow-triggers";
+import { publishFlowVersion, reviewFlowForPublish } from "@/lib/flow-publish";
+import { hasErrors } from "@/lib/flow-engine/validate";
 
+/**
+ * POST /api/v1/flows/[flowId]/publish  { confirm?: boolean }
+ *
+ * Antes de publicar revisa el flujo guardado:
+ * - con errores (sin disparador, mensajes vacíos, nodos incompletos): 422 y la
+ *   lista; no se publica;
+ * - solo con avisos (nodos sueltos, variables desconocidas, palabras clave que
+ *   ya usa otro flujo publicado): 409 con la lista, hasta que se repita la
+ *   llamada con `confirm: true`.
+ */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ flowId: string }> }
 ) {
   const { flowId } = await params;
   const guard = await requireApiAdmin();
   if (!guard.ok) return guard.response;
-  const { supabase, user } = guard.ctx;
-  const membership = { workspace_id: guard.ctx.workspaceId };
+  const { supabase, user, workspaceId } = guard.ctx;
 
-  // Get current flow
+  const body = (await request.json().catch(() => null)) as { confirm?: unknown } | null;
+  const confirmed = body?.confirm === true;
+
   const { data: flow, error } = await supabase
     .from("flows")
     .select("*")
     .eq("id", flowId)
-    .eq("workspace_id", membership.workspace_id)
+    .eq("workspace_id", workspaceId)
     .single();
 
   if (error || !flow)
@@ -26,63 +38,23 @@ export async function POST(
       { status: 404 }
     );
 
-  // Update flow status to published and increment version
-  const newVersion = flow.version + 1;
-  await supabase
-    .from("flows")
-    .update({
-      status: "published",
-      published_at: new Date().toISOString(),
-      version: newVersion,
-    })
-    .eq("id", flowId);
-
-  // Save version snapshot
-  await supabase.from("flow_versions").insert({
-    flow_id: flowId,
-    version: newVersion,
-    nodes: flow.nodes,
-    edges: flow.edges,
-    viewport: flow.viewport,
-    name: flow.name,
-    published_by: user.id,
-  });
-
-  // Sync trigger rows from the flow's trigger nodes into the `triggers` table.
-  // The runtime matcher (lib/flow-engine/trigger-matcher.ts) reads triggers.config,
-  // but the builder only ever saved keywords into flows.nodes — so triggers configured
-  // in the UI never fired in production. Reconcile them here on publish. This includes
-  // `comment_keyword`: builder-created rows are workspace-wide (channel_id null), while
-  // Growth-tab rows are channel-scoped (channel_id set) and must survive republish —
-  // hence the null-channel guard on the delete below. A comment_keyword node with
-  // "also match in DMs" emits a second row typed `keyword` (see below), so both rows
-  // are reconciled together on every republish.
-  const flowNodes = Array.isArray(flow.nodes) ? (flow.nodes as Array<Record<string, unknown>>) : [];
-  const desiredTriggers = buildDesiredTriggers(flowNodes, flowId);
-
-  // Reconcile: clear the builder-managed trigger rows for this flow, then insert the
-  // fresh set derived from the current node graph (delete-and-reinsert keeps the table
-  // in sync with what was published and avoids duplicates on republish). Only
-  // null-channel rows are builder-managed; channel-scoped rows belong to the Growth tab.
-  await supabase
-    .from("triggers")
-    .delete()
-    .eq("flow_id", flowId)
-    .is("channel_id", null)
-    .in("type", [...BUILDER_TRIGGER_TYPES]);
-
-  if (desiredTriggers.length > 0) {
-    const { error: insertError } = await supabase.from("triggers").insert(desiredTriggers);
-    if (insertError) {
-      console.error("[publish] Failed to sync triggers from flow nodes:", insertError);
-    }
+  const issues = await reviewFlowForPublish(supabase, flow);
+  if (hasErrors(issues)) {
+    return NextResponse.json(
+      { error: "El flujo tiene problemas que impiden publicarlo.", issues },
+      { status: 422 }
+    );
+  }
+  if (issues.length > 0 && !confirmed) {
+    return NextResponse.json(
+      { error: "Revisa los avisos antes de publicar.", needsConfirmation: true, issues },
+      { status: 409 }
+    );
   }
 
-  // Activate any remaining triggers for this flow (e.g. comment_keyword managed elsewhere).
-  await supabase
-    .from("triggers")
-    .update({ is_active: true })
-    .eq("flow_id", flowId);
+  const published = await publishFlowVersion(supabase, flow, user.id);
+  if ("error" in published)
+    return NextResponse.json({ error: published.error }, { status: 500 });
 
-  return NextResponse.json({ ...flow, version: newVersion });
+  return NextResponse.json({ ...flow, status: "published", version: published.version });
 }

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Plus, Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { startRouteProgress } from "@/components/ui/route-progress";
+import { apiErrorMessage } from "@/lib/api-errors";
 
 export function CreateFlowButton() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export function CreateFlowButton() {
 
       if (!res.ok) {
         console.error("Failed to create flow");
-        toast.error("No se pudo crear el flujo. Inténtalo de nuevo.");
+        toast.error(await apiErrorMessage(res, "crear flujos"));
         return;
       }
 

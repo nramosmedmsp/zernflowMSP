@@ -34,7 +34,16 @@ export {
   type InboundResult,
 } from "./inbound";
 export { caseLink, type Db, type EngineResult, type NotificationType } from "./io";
-export { openCase, type OpenCaseInput } from "./open";
+export {
+  PARALLEL_CONFIRM_MESSAGE,
+  PAST_SCHEDULE_MESSAGE,
+  SAME_TYPE_OPEN_MESSAGE,
+  listActiveCases,
+  openCase,
+  parallelOpeningError,
+  type OpenCaseInput,
+  type OpenCaseSummary,
+} from "./open";
 export type { RuleEffects } from "./effects";
 // Fase 2
 export {

@@ -17,6 +17,7 @@ import {
 import { zernioErrorMessage, zernioFailed, zernioThrown } from "../zernio-error";
 
 const MAX_PARAMS = 20;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * POST /api/v1/templates/send
@@ -50,6 +51,12 @@ export async function POST(request: NextRequest) {
   const templateName = typeof payload.templateName === "string" ? payload.templateName.trim() : "";
   const language = typeof payload.language === "string" ? payload.language.trim() : "";
   const rawParams = payload.params ?? [];
+  // Id del envío en el navegador (igual en todos los reintentos): clave de una
+  // sola vez para Zernio y para no guardar dos veces la misma plantilla.
+  const clientMessageId = payload.clientMessageId;
+  if (clientMessageId !== undefined && (typeof clientMessageId !== "string" || !UUID_RE.test(clientMessageId))) {
+    return NextResponse.json({ error: "El identificador del envío no es válido" }, { status: 400 });
+  }
 
   if (!conversationId || !templateName || !language) {
     return NextResponse.json(
@@ -154,9 +161,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "El contacto no tiene un número de WhatsApp" }, { status: 400 });
   }
 
+  // Reintento de un envío que ya salió: se devuelve el mismo mensaje sin volver a enviarlo.
+  if (typeof clientMessageId === "string") {
+    const { data: already } = await service
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .eq("client_message_id", clientMessageId)
+      .limit(1)
+      .maybeSingle();
+    if (already) return NextResponse.json(already, { status: 200 });
+  }
+
   try {
     const zernio = createZernioClient(lateApiKey);
     const res = await zernio.messages.createInboxConversation({
+      ...(typeof clientMessageId === "string" ? { headers: { "Idempotency-Key": clientMessageId } } : {}),
       body: {
         accountId: channel.late_account_id,
         participantId: phone,
@@ -165,6 +185,15 @@ export async function POST(request: NextRequest) {
         ...(params.length > 0 ? { templateParams: params } : {}),
       },
     });
+
+    // 409: Zernio todavía procesa un envío con la misma clave (doble clic o
+    // reintento muy rápido). No es un rechazo: la plantilla puede estar saliendo.
+    if (res.response?.status === 409) {
+      return NextResponse.json(
+        { error: "Esta plantilla ya se está enviando. Revisa el chat antes de reintentar.", code: "in_progress" },
+        { status: 409 },
+      );
+    }
 
     if (zernioFailed(res)) {
       console.error("[templates/send] Zernio error:", res.error);
@@ -201,7 +230,14 @@ export async function POST(request: NextRequest) {
       .eq("id", conversationId);
 
     // Quién la envió y su estado de entrega (lib/outbound-log.ts).
-    await recordOutboundSend(service, { conversationId, platformMessageId: messageId, text, userId: user.id, at: sentAt });
+    await recordOutboundSend(service, {
+      conversationId,
+      platformMessageId: messageId,
+      text,
+      userId: user.id,
+      clientMessageId: typeof clientMessageId === "string" ? clientMessageId : null,
+      at: sentAt,
+    });
 
     // Respuesta humana (docs/FASE-1-TECNICO.md 3.2): igual que messages/route.ts.
     // Si falla, la plantilla ya salió: solo se registra el error.

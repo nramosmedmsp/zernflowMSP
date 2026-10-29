@@ -312,6 +312,12 @@ async function failJobAndSettleSession({
   }
 }
 
+// Motivos que se ven en el detalle de la difusión (los técnicos van solo al registro).
+const BROADCAST_INTERRUPTED_MESSAGE =
+  "El envío se interrumpió y no se sabe si el mensaje llegó. Revisa el chat del contacto antes de volver a enviarlo.";
+const BROADCAST_GAVE_UP_MESSAGE =
+  "No se pudo enviar el mensaje después de varios intentos. Revisa el chat del contacto antes de volver a enviarlo.";
+
 // A send_broadcast job out of retries would otherwise leave its recipient
 // stuck in 'pending'/'sending' forever (no other job touches the row, and
 // settleBroadcastIfDone counts both as unfinished, so the broadcast would
@@ -331,10 +337,12 @@ async function settleBroadcastRecipientAsFailed({
     recipientId?: string;
   } | null;
   if (!payload?.broadcastId || !payload?.recipientId) return;
+  // El detalle técnico queda en el registro; en pantalla, un motivo en español.
+  console.error(`Broadcast recipient ${payload.recipientId} gave up: ${errorMessage}`);
 
   const { data: settled, error } = await supabase
     .from("broadcast_recipients")
-    .update({ status: "failed", error_message: errorMessage })
+    .update({ status: "failed", error_message: BROADCAST_GAVE_UP_MESSAGE })
     .eq("id", payload.recipientId)
     .in("status", ["pending", "sending"])
     .select();
@@ -553,7 +561,7 @@ async function processJob(
           .from("broadcast_recipients")
           .update({
             status: "failed",
-            error_message: "Interrupted mid-send; delivery outcome unknown",
+            error_message: BROADCAST_INTERRUPTED_MESSAGE,
           })
           .eq("id", payload.recipientId)
           .eq("status", "sending")
@@ -612,7 +620,8 @@ async function processJob(
           messageContent: broadcast.message_content,
         });
       } catch (err) {
-        delivery = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        console.error(`Broadcast recipient ${payload.recipientId} delivery threw:`, err);
+        delivery = { ok: false, error: "No se pudo enviar el mensaje por un error inesperado. Inténtalo de nuevo más tarde." };
       }
 
       if (delivery.ok) {
