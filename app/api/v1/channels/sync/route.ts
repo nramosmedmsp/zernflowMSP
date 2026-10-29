@@ -37,6 +37,15 @@ export async function POST() {
 
   const zernio = createZernioClient(lateApiKey);
 
+  // El secreto del webhook debe existir antes de que haya canales: el webhook
+  // rechaza todo mensaje de un espacio sin secreto (B-5). Es best-effort aquí;
+  // si falla, el registro del webhook de más abajo lo reintenta.
+  try {
+    await getOrCreateWorkspaceWebhookSecret(await createServiceClient(), workspace.id);
+  } catch (err) {
+    console.error("[channels/sync] no se pudo preparar el secreto del webhook:", err);
+  }
+
   try {
     const res = await zernio.accounts.listAccounts();
     const lateAccounts = res.data?.accounts ?? [];
@@ -149,8 +158,10 @@ export async function POST() {
         .eq("workspace_id", workspace.id)
         .eq("is_active", true);
 
+      // Cliente de servicio: desde 00031 los usuarios no crean contactos,
+      // conversaciones ni eventos por la base (el rol de admin ya se validó).
       const { imported } = await backfillInboxConversations({
-        supabase,
+        supabase: await createServiceClient(),
         zernio,
         workspaceId: workspace.id,
         channels: activeChannels ?? [],

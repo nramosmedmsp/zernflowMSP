@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webhook";
+import { pickChannelBySignature, type ChannelPick } from "@/lib/zernio-webhook";
 import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
@@ -99,6 +99,35 @@ const DELIVERY_EVENTS = new Set<string>(["message.delivered", "message.read", "m
 
 // ── Webhook handler ─────────────────────────────────────────────────────────
 
+type ChannelRow = Database["public"]["Tables"]["channels"]["Row"];
+
+/**
+ * Busca los canales activos de la cuenta de Zernio y elige el que corresponde
+ * a la firma (lib/zernio-webhook.ts). Sin secreto o sin firma válida no se
+ * procesa nada. Devuelve la respuesta de error lista, o el canal.
+ */
+async function resolveChannel(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  accountId: string,
+  body: string,
+  signature: string | null,
+): Promise<ChannelPick<ChannelRow>> {
+  const { data } = await supabase
+    .from("channels")
+    .select("*")
+    .eq("late_account_id", accountId)
+    .eq("is_active", true);
+  return pickChannelBySignature(supabase, (data ?? []) as ChannelRow[], body, signature);
+}
+
+function rejectResponse(reason: "no_secret" | "bad_signature") {
+  if (reason === "no_secret") {
+    console.error("[webhook] el espacio no tiene secreto de webhook configurado; se rechaza el evento");
+    return NextResponse.json({ error: "Webhook secret not configured" }, { status: 401 });
+  }
+  return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+}
+
 export async function POST(request: NextRequest) {
   try {
     return await handleWebhook(request);
@@ -171,17 +200,13 @@ async function handleWebhook(request: NextRequest) {
 
   const supabase = await createServiceClient();
 
-  // Look up channel by late_account_id
-  const { data: channel } = await supabase
-    .from("channels")
-    .select("*")
-    .eq("late_account_id", account.id)
-    .eq("is_active", true)
-    .single();
-
-  if (!channel) {
-    return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+  // Elige el canal por cuenta de Zernio y firma (rechaza si falta secreto o firma).
+  const picked = await resolveChannel(supabase, account.id, body, signature);
+  if (!picked.ok) {
+    if (picked.reason === "no_channel") return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+    return rejectResponse(picked.reason);
   }
+  const channel = picked.channel;
 
   // Prevent loops: if the sender is another connected account in this
   // workspace, skip. This happens when both sides of a DM conversation
@@ -198,13 +223,6 @@ async function handleWebhook(request: NextRequest) {
     if (senderChannel) {
       return NextResponse.json({ ok: true, skipped: true, reason: "sender_is_own_account" });
     }
-  }
-
-  // Verify HMAC-SHA256 signature against the workspace-level secret
-  // (falls back to the legacy per-channel secret during transition).
-  const secret = await resolveWebhookSecret(supabase, channel);
-  if (secret && !verifyWebhookSignature(secret, body, signature)) {
-    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
   if (!(await claimWebhookEvent(supabase, eventId))) {
@@ -342,17 +360,12 @@ async function handleDeliveryWebhook(
   eventId: string | null | undefined,
 ) {
   const supabase = await createServiceClient();
-  const { data: channel } = await supabase
-    .from("channels")
-    .select("*")
-    .eq("late_account_id", payload.account?.id ?? "")
-    .eq("is_active", true)
-    .maybeSingle();
-  if (!channel) return NextResponse.json({ ok: true, skipped: true, reason: "channel_not_found" });
-
-  const secret = await resolveWebhookSecret(supabase, channel);
-  if (secret && !verifyWebhookSignature(secret, rawBody, signature)) {
-    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  const picked = await resolveChannel(supabase, payload.account?.id ?? "", rawBody, signature);
+  if (!picked.ok) {
+    if (picked.reason === "no_channel") {
+      return NextResponse.json({ ok: true, skipped: true, reason: "channel_not_found" });
+    }
+    return rejectResponse(picked.reason);
   }
   if (!(await claimWebhookEvent(supabase, eventId))) {
     return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
@@ -388,16 +401,12 @@ async function handleCommentWebhook(
 ) {
   const supabase = await createServiceClient();
 
-  const { data: channel } = await supabase
-    .from("channels")
-    .select("*")
-    .eq("late_account_id", payload.account.id)
-    .eq("is_active", true)
-    .single();
-
-  if (!channel) {
-    return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+  const picked = await resolveChannel(supabase, payload.account.id, rawBody, signature);
+  if (!picked.ok) {
+    if (picked.reason === "no_channel") return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+    return rejectResponse(picked.reason);
   }
+  const channel = picked.channel;
 
   // Prevent loops: our own comments (e.g. the configured public reply) also
   // arrive as comment.received and must never re-trigger a flow.
@@ -406,11 +415,6 @@ async function handleCommentWebhook(
     payload.comment.author.username === channel.username
   ) {
     return NextResponse.json({ ok: true, skipped: true, reason: "own_comment" });
-  }
-
-  const secret = await resolveWebhookSecret(supabase, channel);
-  if (secret && !verifyWebhookSignature(secret, rawBody, signature)) {
-    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
   if (!(await claimWebhookEvent(supabase, eventId))) {

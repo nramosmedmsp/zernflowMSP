@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   ensureWebhookRegistered,
   generateWebhookSecret,
+  pickChannelBySignature,
   getOrCreateWorkspaceWebhookSecret,
   resolveWebhookSecret,
   verifyWebhookSignature,
@@ -336,5 +337,74 @@ describe("resolveWebhookSecret (AC4)", () => {
       webhook_secret: null,
     });
     expect(secret).toBeNull();
+  });
+});
+
+/** Cliente falso: un secreto por espacio (workspace_secrets.webhook_secret). */
+function fakeSecretsByWorkspace(secrets: Record<string, string | null>) {
+  let workspaceId = "";
+  const client = {
+    from() {
+      return {
+        select() {
+          return this;
+        },
+        eq(_col: string, value: string) {
+          workspaceId = value;
+          return this;
+        },
+        maybeSingle() {
+          return Promise.resolve({
+            data: { late_api_key: null, ai_api_key: null, webhook_secret: secrets[workspaceId] ?? null },
+            error: null,
+          });
+        },
+      };
+    },
+  } as unknown as SupabaseClient;
+  return client;
+}
+
+function sign(secret: string, body: string) {
+  return createHmac("sha256", secret).update(body).digest("hex");
+}
+
+describe("pickChannelBySignature (A-4 y B-5)", () => {
+  const body = JSON.stringify({ event: "message.received" });
+  const store = { id: "c-store", workspace_id: "ws-store", webhook_secret: null };
+  const intruder = { id: "c-intruder", workspace_id: "ws-other", webhook_secret: null };
+  const client = fakeSecretsByWorkspace({ "ws-store": "secret-store", "ws-other": "secret-other" });
+
+  it("elige el canal cuyo secreto coincide con la firma aunque haya otro con la misma cuenta", async () => {
+    const pickedStore = await pickChannelBySignature(client, [intruder, store], body, sign("secret-store", body));
+    expect(pickedStore).toEqual({ ok: true, channel: store });
+    const pickedOther = await pickChannelBySignature(client, [store, intruder], body, sign("secret-other", body));
+    expect(pickedOther).toEqual({ ok: true, channel: intruder });
+  });
+
+  it("rechaza una firma que no coincide con ningun canal", async () => {
+    const res = await pickChannelBySignature(client, [store, intruder], body, sign("otra", body));
+    expect(res).toEqual({ ok: false, reason: "bad_signature" });
+  });
+
+  it("rechaza un mensaje sin firma", async () => {
+    expect(await pickChannelBySignature(client, [store], body, null)).toEqual({ ok: false, reason: "bad_signature" });
+  });
+
+  it("rechaza si el espacio no tiene secreto (nunca acepta sin verificar)", async () => {
+    const noSecrets = fakeSecretsByWorkspace({});
+    const res = await pickChannelBySignature(noSecrets, [store], body, sign("lo-que-sea", body));
+    expect(res).toEqual({ ok: false, reason: "no_secret" });
+    expect(await pickChannelBySignature(noSecrets, [store], body, null)).toEqual({ ok: false, reason: "no_secret" });
+  });
+
+  it("usa el secreto heredado del canal si el espacio no tiene", async () => {
+    const legacy = { id: "c-legacy", workspace_id: "ws-legacy", webhook_secret: "legacy" };
+    const res = await pickChannelBySignature(fakeSecretsByWorkspace({}), [legacy], body, sign("legacy", body));
+    expect(res).toEqual({ ok: true, channel: legacy });
+  });
+
+  it("sin canales devuelve no_channel", async () => {
+    expect(await pickChannelBySignature(client, [], body, sign("x", body))).toEqual({ ok: false, reason: "no_channel" });
   });
 });

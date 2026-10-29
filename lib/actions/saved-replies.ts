@@ -10,11 +10,15 @@
 //   - personal: solo el autor.
 // Aquí se replican esas reglas solo para dar mensajes claros en español y
 // marcar `canEdit` en la interfaz. Devuelven { ok: true, ... } o { error }.
+//
+// Excepción (migración 00031): las columnas attachment_* solo las escribe el
+// servidor con el cliente de servicio, después de validar la ruta; un trigger
+// rechaza que un usuario las cree o cambie por la base.
 
 import { getWorkspace } from "@/lib/workspace";
 import { isAdminRole } from "@/lib/permissions";
 import { createServiceClient } from "@/lib/supabase/server";
-import { parseMediaPath, replyMediaPath, safeFileName, validateReplyAttachment } from "@/lib/chat-media";
+import { isReplyFilePath, parseMediaPath, replyMediaPath, safeFileName, validateReplyAttachment } from "@/lib/chat-media";
 import { createUploadUrl, objectInfo, removeObjects } from "@/lib/media-store";
 import {
   hasShortcutConflict,
@@ -212,9 +216,38 @@ async function resolveAttachment(
   };
 }
 
-async function removeReplyFile(path: string | null) {
+/**
+ * Borra del almacenamiento el archivo de una respuesta guardada. Solo si la
+ * ruta tiene la forma {este espacio}/replies/{uuid}.{ext} y ninguna otra
+ * respuesta lo usa: nunca borra archivos de chats ni de otro espacio, aunque
+ * la fila traiga una ruta ajena.
+ */
+async function removeReplyFile(path: string | null, workspaceId: string) {
   if (!path) return;
-  await removeObjects(await createServiceClient(), [path]);
+  if (!isReplyFilePath(path, workspaceId)) {
+    console.error("[saved-replies] ruta de adjunto fuera de la carpeta de respuestas, no se borra");
+    return;
+  }
+  const service = await createServiceClient();
+  const { data: used } = await service.from("saved_replies").select("id").eq("attachment_url", path).limit(1);
+  if (used && used.length > 0) return;
+  await removeObjects(service, [path]);
+}
+
+/**
+ * Registra el archivo de la respuesta. Desde la migración 00031 las columnas
+ * attachment_* solo se escriben con el cliente de servicio (un trigger lo
+ * exige); aquí la ruta ya pasó por resolveAttachment.
+ */
+async function writeAttachment(id: string, workspaceId: string, columns: AttachmentColumns) {
+  const service = await createServiceClient();
+  return service
+    .from("saved_replies")
+    .update(columns)
+    .eq("id", id)
+    .eq("workspace_id", workspaceId)
+    .select(REPLY_COLUMNS)
+    .single();
 }
 
 /**
@@ -364,7 +397,6 @@ export async function createSavedReply(
         title,
         shortcut,
         body,
-        ...file.value,
         created_by: ctx.user.id,
       })
       .select(REPLY_COLUMNS)
@@ -373,7 +405,18 @@ export async function createSavedReply(
       console.error("[saved-replies] create", error?.message);
       return { error: error?.code === "42501" ? NOT_ALLOWED[scope] : GENERIC_ERROR };
     }
-    return { ok: true, reply: toView(data as ReplyRow, access, ctx.user.id) };
+    let created = data as ReplyRow;
+    if (file.value.attachment_url) {
+      // El archivo lo registra el servidor (trigger de 00031).
+      const withFile = await writeAttachment(created.id, ctx.workspace.id, file.value);
+      if (withFile.error || !withFile.data) {
+        console.error("[saved-replies] create attachment", withFile.error?.message);
+        await (await createServiceClient()).from("saved_replies").delete().eq("id", created.id);
+        return { error: GENERIC_ERROR };
+      }
+      created = withFile.data as ReplyRow;
+    }
+    return { ok: true, reply: toView(created, access, ctx.user.id) };
   } catch (err) {
     console.error("[saved-replies] create", err);
     return { error: GENERIC_ERROR };
@@ -418,7 +461,7 @@ export async function updateSavedReply(
 
     const { data, error } = await ctx.supabase
       .from("saved_replies")
-      .update({ title, shortcut, body, case_type_id: caseTypeId, ...(fileColumns ?? {}) })
+      .update({ title, shortcut, body, case_type_id: caseTypeId })
       .eq("id", id)
       .eq("workspace_id", ctx.workspace.id)
       .select(REPLY_COLUMNS);
@@ -427,11 +470,21 @@ export async function updateSavedReply(
       const denied = error ? error.code === "42501" : true;
       return { error: denied ? NOT_ALLOWED[row.scope] : GENERIC_ERROR };
     }
-    // El archivo anterior ya no lo usa nadie.
-    if (fileColumns && row.attachment_url && row.attachment_url !== fileColumns.attachment_url) {
-      await removeReplyFile(row.attachment_url);
+    let updated = data[0] as ReplyRow;
+    if (fileColumns) {
+      // El archivo lo registra el servidor (trigger de 00031).
+      const withFile = await writeAttachment(id, ctx.workspace.id, fileColumns);
+      if (withFile.error || !withFile.data) {
+        console.error("[saved-replies] update attachment", withFile.error?.message);
+        return { error: GENERIC_ERROR };
+      }
+      updated = withFile.data as ReplyRow;
+      // El archivo anterior ya no lo usa nadie.
+      if (row.attachment_url && row.attachment_url !== fileColumns.attachment_url) {
+        await removeReplyFile(row.attachment_url, ctx.workspace.id);
+      }
     }
-    return { ok: true, reply: toView(data[0] as ReplyRow, access, ctx.user.id) };
+    return { ok: true, reply: toView(updated, access, ctx.user.id) };
   } catch (err) {
     console.error("[saved-replies] update", err);
     return { error: GENERIC_ERROR };
@@ -463,7 +516,7 @@ export async function deleteSavedReply(id: string): Promise<SavedReplyResult> {
       console.error("[saved-replies] delete", error?.message);
       return { error: "No se pudo borrar la respuesta. Inténtalo de nuevo." };
     }
-    await removeReplyFile(row.attachment_url);
+    await removeReplyFile(row.attachment_url, ctx.workspace.id);
     return { ok: true };
   } catch (err) {
     console.error("[saved-replies] delete", err);

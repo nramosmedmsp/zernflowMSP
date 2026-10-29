@@ -45,3 +45,6 @@ supabase/.temp
 
 # código descargable (lo genera scripts/build-source-zip.mjs)
 /.source-zip/
+
+# lo genera next dev (Next 16.4)
+/AGENTS.md
