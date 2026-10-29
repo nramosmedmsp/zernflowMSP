@@ -79,6 +79,58 @@ export function newMessageIds(previous: ReadonlyMap<string, number>, conversatio
     .map((c) => c.id);
 }
 
+/** Cuánto se espera a que llegue la gestión de un chat nuevo antes de descartar su aviso (M-14). */
+export const ALERT_RETRY_MS = 15_000;
+
+/**
+ * Decide qué chats avisan (M-14). El contador de no leídos sube ANTES de que
+ * exista o se reabra la gestión del chat, así que un chat nuevo o que vuelve
+ * puede estar "fuera de alcance" en ese instante. Esos chats quedan pendientes
+ * unos segundos y se vuelven a evaluar cuando llega su gestión.
+ *
+ * `pending` es el estado anterior (id del chat → hasta cuándo se espera) y se
+ * devuelve el nuevo junto con los chats que deben avisar ahora.
+ */
+export function evaluateAlerts(input: {
+  before: ReadonlyMap<string, number>;
+  conversations: readonly (AlertConversation & { id: string })[];
+  pending: ReadonlyMap<string, number>;
+  casesByContact: ReadonlyMap<string, readonly AlertCase[]>;
+  userId: string;
+  scope: AlertScope;
+  /** Chat abierto en pantalla (no avisa si la pestaña se ve). */
+  openId: string | null;
+  visible: boolean;
+  now: number;
+}): { alertIds: string[]; pending: Map<string, number> } {
+  const { before, conversations, casesByContact, userId, scope, openId, visible, now } = input;
+  const byId = new Map(conversations.map((c) => [c.id, c]));
+  const nextPending = new Map<string, number>();
+  const alertIds: string[] = [];
+  const looking = (id: string) => visible && id === openId;
+  const inScope = (c: AlertConversation) => inAlertScope(casesByContact.get(c.contact_id), userId, scope);
+
+  const fresh = new Set(newMessageIds(before, conversations));
+  for (const id of fresh) {
+    const conv = byId.get(id)!;
+    if (looking(id)) continue;
+    if (inScope(conv)) alertIds.push(id);
+    else nextPending.set(id, now + ALERT_RETRY_MS);
+  }
+
+  for (const [id, expiresAt] of input.pending) {
+    if (fresh.has(id) || expiresAt <= now) continue;
+    const conv = byId.get(id);
+    if (!conv || (conv.unread_count ?? 0) === 0) continue;
+    if (!inScope(conv)) {
+      nextPending.set(id, expiresAt);
+      continue;
+    }
+    if (!looking(id)) alertIds.push(id);
+  }
+  return { alertIds, pending: nextPending };
+}
+
 /** Chats con no leídos dentro del alcance (el número de la pestaña). */
 export function unreadChatsInScope(
   conversations: readonly AlertConversation[],

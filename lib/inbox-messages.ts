@@ -118,6 +118,30 @@ export function fromLocalMessage(row: MessageRow): InboxMessage {
   return { ...row, error: row.status === "failed" ? (row.error_text ?? null) : null, story: null };
 }
 
+/**
+ * Envíos del bot que Zernio rechazó (M-10): no existen en la lista de Zernio,
+ * solo en `messages`, y sin esto el asesor nunca vería que el cliente no recibió
+ * el mensaje. Con páginas anteriores pendientes, solo entran los posteriores al
+ * mensaje más antiguo ya cargado (los demás salen al pedir esas páginas).
+ */
+export function failedBotMessages(
+  rows: readonly MessageRow[],
+  loaded: readonly InboxMessage[],
+  hasOlder: boolean,
+): InboxMessage[] {
+  const oldest = loaded.length ? Math.min(...loaded.map((m) => new Date(m.created_at).getTime() || Infinity)) : -Infinity;
+  return rows
+    .filter(
+      (r) =>
+        r.direction === "outbound" &&
+        r.status === "failed" &&
+        !r.platform_message_id &&
+        !!r.sent_by_flow_id &&
+        (!hasOlder || new Date(r.created_at).getTime() >= oldest),
+    )
+    .map(fromLocalMessage);
+}
+
 function byTime(a: InboxMessage, b: InboxMessage): number {
   const ta = new Date(a.created_at).getTime() || 0;
   const tb = new Date(b.created_at).getTime() || 0;

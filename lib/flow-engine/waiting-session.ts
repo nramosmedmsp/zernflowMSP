@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/types/database";
+import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
 
 type Db = SupabaseClient<Database>;
 export type FlowSessionRow = Database["public"]["Tables"]["flow_sessions"]["Row"];
@@ -68,4 +69,64 @@ export async function claimWaitingSession(db: Db, sessionId: string): Promise<bo
     .eq("status", "active")
     .select("id");
   return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Deja una sola espera por contacto y canal: las demás sesiones que esperan la
+ * respuesta del cliente se cancelan (M-6). Sin esto, dos flujos que preguntan
+ * a la vez se reparten las respuestas y el bot contesta fuera de contexto.
+ */
+export async function cancelOtherWaitingSessions(
+  db: Db,
+  params: { sessionId: string; contactId: string; channelId: string },
+): Promise<void> {
+  const { error } = await db
+    .from("flow_sessions")
+    .update({ status: "cancelled", waiting_for_input: false })
+    .eq("contact_id", params.contactId)
+    .eq("channel_id", params.channelId)
+    .eq("status", "active")
+    .eq("waiting_for_input", true)
+    .neq("id", params.sessionId);
+  if (error) console.error("[flows] no se pudieron cancelar las otras esperas:", error.message);
+}
+
+/**
+ * Cancela las sesiones activas del contacto (las que esperan su respuesta y las
+ * que esperan un tiempo) en los canales indicados. Se usa al pausar el bot
+ * porque un asesor tomó el chat (M-11, B-16): lo que el bot preguntó antes ya
+ * no tiene contexto y no debe retomarse ni seguir enviando.
+ */
+export async function cancelActiveSessions(
+  db: Db,
+  params: { contactId: string; channelIds: readonly string[] },
+): Promise<void> {
+  if (params.channelIds.length === 0) return;
+  const { error } = await db
+    .from("flow_sessions")
+    .update({ status: "cancelled", waiting_for_input: false })
+    .eq("contact_id", params.contactId)
+    .in("channel_id", [...params.channelIds])
+    .eq("status", "active");
+  if (error) console.error("[flows] no se pudieron cancelar las sesiones del bot:", error.message);
+}
+
+/**
+ * B-16: al terminar una espera de tiempo, si un asesor tomó el chat (bot en
+ * pausa) la sesión se cancela y no envía nada. Los flujos de eventos de gestión
+ * se exceptúan: se configuraron para correr aunque el bot esté en pausa.
+ */
+export async function shouldCancelResumeForPausedBot(
+  db: Db,
+  params: { variables: unknown; conversationId: string | null | undefined },
+): Promise<boolean> {
+  if (!params.conversationId) return false;
+  const vars = (params.variables ?? {}) as Record<string, unknown>;
+  if (vars[CASE_EVENT_VARIABLE]) return false;
+  const { data } = await db
+    .from("conversations")
+    .select("is_automation_paused")
+    .eq("id", params.conversationId)
+    .maybeSingle();
+  return data?.is_automation_paused === true;
 }

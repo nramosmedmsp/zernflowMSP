@@ -38,22 +38,9 @@ export async function loadDeliveryContext(
     db.from("channels").select("late_account_id, platform, is_active").eq("id", ids.channelId).eq("workspace_id", ids.workspaceId).maybeSingle(),
     db.from("contacts").select("display_name, phone, key_date").eq("id", ids.contactId).eq("workspace_id", ids.workspaceId).maybeSingle(),
     db.from("contact_channels").select("platform_sender_id").eq("contact_id", ids.contactId).eq("channel_id", ids.channelId).limit(1).maybeSingle(),
-    db.from("conversations").select("id, late_conversation_id").eq("contact_id", ids.contactId).eq("channel_id", ids.channelId).limit(1).maybeSingle(),
+    db.from("conversations").select("id, late_conversation_id, last_inbound_at").eq("contact_id", ids.contactId).eq("channel_id", ids.channelId).limit(1).maybeSingle(),
     db.from("workspaces").select("name").eq("id", ids.workspaceId).maybeSingle(),
   ]);
-
-  let lastInboundAt: string | null = null;
-  if (conversation.data) {
-    const { data: last } = await db
-      .from("messages")
-      .select("created_at")
-      .eq("conversation_id", conversation.data.id)
-      .eq("direction", "inbound")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    lastInboundAt = last?.created_at ?? null;
-  }
 
   return {
     ...ids,
@@ -61,7 +48,8 @@ export async function loadDeliveryContext(
     conversation: conversation.data ?? null,
     contact: contact.data ?? null,
     senderId: link.data?.platform_sender_id ?? null,
-    lastInboundAt,
+    // Sellado por el webhook con cada mensaje del cliente (00032).
+    lastInboundAt: conversation.data?.last_inbound_at ?? null,
     workspaceName: workspace.data?.name ?? null,
   };
 }

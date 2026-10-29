@@ -14,6 +14,9 @@ type Trigger = Database["public"]["Tables"]["triggers"]["Row"];
 export interface MatchableMessageTrigger {
   type: string;
   config: unknown;
+  /** Mayor prioridad corre primero. */
+  priority?: number | null;
+  id?: string;
 }
 
 type KeywordMatchType = "exact" | "contains" | "startsWith";
@@ -57,6 +60,26 @@ export function findKeywordMatch(
   return null;
 }
 
+const MATCH_RANK: Record<KeywordMatchType, number> = { exact: 0, startsWith: 1, contains: 2 };
+
+/**
+ * Desempate entre palabras clave que coinciden con el mismo mensaje: mayor
+ * prioridad del disparador, luego la coincidencia más precisa (exacta, empieza
+ * con, contiene) y luego la palabra más larga (la más específica). Si aún
+ * empatan, queda el orden de la lista (matchTrigger la pide ordenada por
+ * prioridad y antigüedad, así que tampoco es azar).
+ */
+function compareKeywordMatches(
+  a: { trigger: MatchableMessageTrigger; found: { keyword: string; matchType: KeywordMatchType } },
+  b: { trigger: MatchableMessageTrigger; found: { keyword: string; matchType: KeywordMatchType } },
+): number {
+  return (
+    (b.trigger.priority ?? 0) - (a.trigger.priority ?? 0) ||
+    MATCH_RANK[a.found.matchType] - MATCH_RANK[b.found.matchType] ||
+    b.found.keyword.length - a.found.keyword.length
+  );
+}
+
 /**
  * Elige el disparador de un mensaje entrante entre los candidatos (activos, de
  * flujos publicados y ya ordenados por prioridad, de mayor a menor). Sin E/S:
@@ -88,11 +111,17 @@ export function selectTrigger<T extends MatchableMessageTrigger>(
     if (match) return { trigger: match, reason: { via: "quick_reply", payload: message.quickReplyPayload } };
   }
 
-  // 3. Check keyword triggers
+  // 3. Check keyword triggers. Si varios coinciden, el desempate es fijo (B-17).
   if (message.text) {
+    const matches: Array<{ trigger: T; found: { keyword: string; matchType: KeywordMatchType } }> = [];
     for (const trigger of triggers.filter((t) => t.type === "keyword")) {
       const found = findKeywordMatch(trigger.config, message.text);
-      if (found) return { trigger, reason: { via: "keyword", ...found } };
+      if (found) matches.push({ trigger, found });
+    }
+    if (matches.length > 0) {
+      matches.sort(compareKeywordMatches);
+      const best = matches[0];
+      return { trigger: best.trigger, reason: { via: "keyword", ...best.found } };
     }
   }
 
@@ -135,7 +164,10 @@ export async function matchTrigger(
     .eq("is_active", true)
     .eq("flows.status", "published")
     .eq("flows.workspace_id", workspaceId)
-    .order("priority", { ascending: false });
+    .order("priority", { ascending: false })
+    // Orden estable entre disparadores empatados (B-17): el más antiguo primero.
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
 
   if (!triggers || triggers.length === 0) return null;
 

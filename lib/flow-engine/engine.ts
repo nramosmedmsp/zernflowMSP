@@ -24,7 +24,6 @@ import { createZernioClient } from "@/lib/zernio-client";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { stampBotOutbound } from "@/lib/cases/inbound";
 import { demoTemplateText, isDemoChannel } from "@/lib/demo";
-import { messagePreview } from "@/lib/message-preview";
 import { CASE_ACTION_TYPES, type CaseActionType } from "./types";
 import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
 import { isCaseConditionField } from "./case-conditions";
@@ -33,11 +32,23 @@ import { chooseABPath, delayDurationMs, selectNextEdge } from "./graph";
 import { interpolateVariables } from "./interpolate";
 import { MENU_VARIABLE, recordMenu } from "./menu-reply";
 import { nodeKind, persistsSessionVariables } from "./node-kind";
-import { findWaitingSession, smartDelayTimeoutMs } from "./waiting-session";
+import { cancelActiveSessions, cancelOtherWaitingSessions, findWaitingSession, smartDelayTimeoutMs } from "./waiting-session";
 import { computeFlowWindowOpen, decideSendMode, messageHasContent, parseNodeTemplate, SKIP_REASON_LABELS } from "./send-mode";
 import { executeCaseAction, findTargetCase, loadCaseSnapshot } from "./nodes/case-actions";
 import { addSystemNote } from "@/lib/cases/changes";
 import { sendFlowTemplate } from "./nodes/send-template";
+import { checkHttpTarget, HTTP_NODE_TIMEOUT_MS, readTextCapped } from "./http-guard";
+import { seedContactVariables } from "./contact-variables";
+import { blockIfUnsubscribed, haltFlowAfterSendFailure, touchConversationAfterBotSend } from "./bot-send";
+import { zernioErrorMessage, zernioFailed, zernioThrown } from "@/lib/zernio-error";
+
+/** Motivo en español de un envío fallido del bot (rechazo de Zernio o error de red). */
+function sendFailureReason(error: unknown): string {
+  const rejected = zernioThrown(error);
+  if (rejected) return zernioErrorMessage(rejected, "Zernio rechazó el mensaje");
+  const message = error instanceof Error ? error.message : "";
+  return message || "No se pudo enviar el mensaje";
+}
 
 export async function executeFlow(
   supabase: SupabaseClient<Database>,
@@ -55,6 +66,8 @@ export async function executeFlow(
     context.variables.message ??= context.incomingMessage.text;
   }
 
+  await seedContactVariables(supabase, context);
+
   // Check for active session waiting for input. Los flujos disparados por un
   // evento de gestión (startFresh) no reanudan la sesión que espera al cliente.
   const activeSession = context.startFresh
@@ -70,6 +83,7 @@ export async function executeFlow(
     .from("flows")
     .select("*")
     .eq("id", context.flowId)
+    .eq("workspace_id", context.workspaceId)
     .eq("status", "published")
     .single();
 
@@ -205,6 +219,7 @@ export async function resumeSession(
   }
 
   context.variables = (session.variables as Record<string, string>) || {};
+  await seedContactVariables(supabase, context);
 
   // The resume is driven by a fresh reply; make {{message}} reflect it. Un clic
   // en un botón sin texto guarda su carga (payload) como respuesta.
@@ -356,7 +371,7 @@ async function executeNode(
   }
   switch (kind) {
     case "sendMessage":
-      return executeSendMessage(supabase, node.data as SendMessageNodeData, context);
+      return executeSendMessage(supabase, node.data as SendMessageNodeData, context, sessionId);
     case "condition":
       return executeCondition(supabase, node.data as ConditionNodeData, context);
     case "delay":
@@ -367,7 +382,7 @@ async function executeNode(
     case "setCustomField":
       return executeSetField(supabase, node.data as SetFieldNodeData, context);
     case "httpRequest":
-      return executeHttpRequest(node.data as HttpRequestNodeData, context);
+      return executeHttpRequest(supabase, node.data as HttpRequestNodeData, context);
     case "goToFlow":
       return executeGoToFlow(supabase, node.data as GoToFlowNodeData, context, sessionId);
     case "humanTakeover":
@@ -394,6 +409,9 @@ async function executeNode(
           current_node_id: node.id,
         })
         .eq("id", sessionId);
+      // Una sola espera por contacto y canal (M-6): la respuesta del cliente
+      // debe retomar la última pregunta, no una vieja que quedó colgada.
+      await cancelOtherWaitingSessions(supabase, { sessionId, contactId: context.contactId, channelId: context.channelId });
       return "pause";
     case "enrollSequence":
       return executeEnrollSequence(supabase, node.data as EnrollSequenceNodeData, context);
@@ -408,13 +426,14 @@ async function sendFirstMessageAsPrivateReply(
   data: SendMessageNodeData,
   context: FlowExecutionContext,
   lateAccountId: string
-) {
+): Promise<boolean> {
   const first = data.messages[0];
-  if (!first) return;
+  if (!first) return true;
 
   const text = interpolateVariables(
     adaptMessage(first, context.platform ?? "instagram").text,
-    context.variables || {}
+    context.variables || {},
+    { blankUnknown: true },
   );
 
   try {
@@ -434,6 +453,7 @@ async function sendFirstMessageAsPrivateReply(
       status: "sent",
     });
 
+    await touchConversationAfterBotSend(supabase, context.conversationId, text);
     await stampFlowOutbound(supabase, context);
 
     await supabase.from("analytics_events").insert({
@@ -450,8 +470,10 @@ async function sendFirstMessageAsPrivateReply(
       text,
       sent_by_flow_id: context.flowId,
       status: "failed",
+      error_text: error instanceof Error ? error.message : null,
     });
-    return;
+    await touchConversationAfterBotSend(supabase, context.conversationId, null);
+    return false;
   }
 
   if (data.messages.length > 1) {
@@ -459,6 +481,7 @@ async function sendFirstMessageAsPrivateReply(
       "Comment flow Send Message node had multiple messages; only the first was sent (one private reply per comment)."
     );
   }
+  return true;
 }
 
 /**
@@ -503,7 +526,7 @@ async function sendTemplateFromNode(
   context: FlowExecutionContext,
   template: NonNullable<ReturnType<typeof parseNodeTemplate>>,
   lateAccountId: string
-) {
+): Promise<{ ok: true } | { ok: false; error: string }> {
   let text = `Plantilla: ${template.template_name}`;
   const result = await sendFlowTemplate(supabase, context, template, lateAccountId);
   // Canal de prueba (lib/demo.ts): se guarda el texto de la plantilla con sus variables.
@@ -516,7 +539,9 @@ async function sendTemplateFromNode(
       text,
       sent_by_flow_id: context.flowId,
       status: "failed",
+      error_text: result.error,
     });
+    await touchConversationAfterBotSend(supabase, context.conversationId, null);
     await supabase.from("analytics_events").insert({
       workspace_id: context.workspaceId,
       flow_id: context.flowId,
@@ -524,7 +549,7 @@ async function sendTemplateFromNode(
       event_type: "message_failed",
       metadata: { error: result.error, template: template.template_name },
     });
-    return;
+    return { ok: false, error: result.error };
   }
 
   await supabase.from("messages").insert({
@@ -535,10 +560,7 @@ async function sendTemplateFromNode(
     platform_message_id: result.messageId,
     status: "sent",
   });
-  await supabase
-    .from("conversations")
-    .update({ last_message_at: new Date().toISOString(), last_message_preview: messagePreview(text) })
-    .eq("id", context.conversationId);
+  await touchConversationAfterBotSend(supabase, context.conversationId, text);
   await stampFlowOutbound(supabase, context);
   await supabase.from("analytics_events").insert({
     workspace_id: context.workspaceId,
@@ -547,17 +569,21 @@ async function sendTemplateFromNode(
     event_type: "message_sent",
     metadata: { template: template.template_name },
   });
+  return { ok: true };
 }
 
 async function executeSendMessage(
   supabase: SupabaseClient<Database>,
   data: SendMessageNodeData,
-  context: FlowExecutionContext
+  context: FlowExecutionContext,
+  sessionId: string
 ) {
   // El menú (botones o respuestas rápidas) del último mensaje queda en la
   // sesión: la respuesta numérica o con el texto de una opción retoma la espera
   // como esa opción (menu-reply.ts). Si no se envía texto, no hay menú.
   context.variables ??= {};
+  const unsubscribed = await blockIfUnsubscribed(supabase, context, sessionId);
+  if (unsubscribed) return unsubscribed;
   recordMenu(context.variables, data.messages);
 
   // Resolve late_account_id from channel if not in context
@@ -569,7 +595,7 @@ async function executeSendMessage(
       .eq("id", context.channelId)
       .single();
 
-    if (!channel) return;
+    if (!channel) return haltFlowAfterSendFailure(supabase, context, sessionId, "no se encontró el canal");
     lateAccountId = channel.late_account_id;
     if (!context.platform) {
       context.platform = channel.platform as FlowExecutionContext["platform"];
@@ -584,7 +610,9 @@ async function executeSendMessage(
   let zernio: ReturnType<typeof createZernioClient> | null = null;
   if (!demo) {
     const lateApiKey = await getLateApiKey(context.workspaceId, supabase);
-    if (!lateApiKey) return;
+    if (!lateApiKey) {
+      return haltFlowAfterSendFailure(supabase, context, sessionId, "la clave de API de Zernio no está configurada");
+    }
     zernio = createZernioClient(lateApiKey);
   }
 
@@ -603,11 +631,12 @@ async function executeSendMessage(
       // the private-reply endpoint instead of silently dropping the whole node
       // (users build comment flows with plain Send Message nodes, not Private Reply).
       if (zernio && context.variables?.comment_id && context.variables?.post_id && lateAccountId) {
-        await sendFirstMessageAsPrivateReply(supabase, zernio, data, context, lateAccountId);
+        const sentOk = await sendFirstMessageAsPrivateReply(supabase, zernio, data, context, lateAccountId);
+        if (!sentOk) return haltFlowAfterSendFailure(supabase, context, sessionId, "Instagram no aceptó la respuesta privada");
         return;
       }
       console.error("No late_conversation_id found for conversation:", context.conversationId);
-      return;
+      return haltFlowAfterSendFailure(supabase, context, sessionId, "la conversación no tiene un ID de Zernio");
     }
     lateConversationId = conversation.late_conversation_id;
   }
@@ -636,14 +665,15 @@ async function executeSendMessage(
     }
     if (decision.mode === "template" && template) {
       delete context.variables[MENU_VARIABLE];
-      await sendTemplateFromNode(supabase, context, template, lateAccountId);
+      const sentTemplate = await sendTemplateFromNode(supabase, context, template, lateAccountId);
+      if (!sentTemplate.ok) return haltFlowAfterSendFailure(supabase, context, sessionId, sentTemplate.error);
       return;
     }
   }
 
   for (const msg of data.messages) {
     const adapted = adaptMessage(msg, context.platform!);
-    const text = interpolateVariables(adapted.text, context.variables || {});
+    const text = interpolateVariables(adapted.text, context.variables || {}, { blankUnknown: true });
 
     try {
       // Media (image/video/audio) is platform-agnostic, so read it from the raw
@@ -688,6 +718,8 @@ async function executeSendMessage(
             body: body as Parameters<typeof zernio.messages.sendInboxMessage>[0]["body"],
           })
         : null;
+      // El SDK suele lanzar el error, pero una respuesta con error no es un envío.
+      if (response && zernioFailed(response)) throw new Error(zernioErrorMessage(response, "Zernio rechazó el mensaje"));
 
       // Store outbound message
       await supabase.from("messages").insert({
@@ -700,12 +732,9 @@ async function executeSendMessage(
         platform_message_id: response?.data?.data?.messageId || (demo ? `demo-${crypto.randomUUID()}` : null),
         status: "sent",
       });
-      if (demo) {
-        await supabase
-          .from("conversations")
-          .update({ last_message_at: new Date().toISOString(), last_message_preview: messagePreview(text) })
-          .eq("id", context.conversationId);
-      }
+      // Última actividad en todos los canales (no solo los de prueba): así el
+      // chat abierto y la lista se refrescan con lo que contestó el bot.
+      await touchConversationAfterBotSend(supabase, context.conversationId, text);
 
       // Gestiones: el bot solo sella la salida (no cuenta como respuesta humana).
       await stampFlowOutbound(supabase, context);
@@ -718,13 +747,16 @@ async function executeSendMessage(
       });
     } catch (error) {
       console.error("Failed to send message:", error);
+      const reason = sendFailureReason(error);
       await supabase.from("messages").insert({
         conversation_id: context.conversationId,
         direction: "outbound",
         text,
         sent_by_flow_id: context.flowId,
         status: "failed",
+        error_text: reason,
       });
+      await touchConversationAfterBotSend(supabase, context.conversationId, null);
 
       await supabase.from("analytics_events").insert({
         workspace_id: context.workspaceId,
@@ -733,6 +765,10 @@ async function executeSendMessage(
         event_type: "message_failed",
         metadata: { error: error instanceof Error ? error.message : "Unknown error" },
       });
+      // M-10: sin el mensaje el cliente no puede responder lo que se le pidió:
+      // el flujo se detiene y queda una nota en la gestión.
+      delete context.variables[MENU_VARIABLE];
+      return haltFlowAfterSendFailure(supabase, context, sessionId, reason);
     }
 
     // Small delay between messages
@@ -884,25 +920,46 @@ async function executeSetField(
 }
 
 async function executeHttpRequest(
+  supabase: SupabaseClient<Database>,
   data: HttpRequestNodeData,
   context: FlowExecutionContext
 ) {
-  try {
-    const url = interpolateVariables(data.url, context.variables || {});
-    const body = data.body
-      ? interpolateVariables(data.body, context.variables || {})
-      : undefined;
+  const variables = context.variables || {};
+  const failed = async (reason: string) => {
+    console.error(`[flows] solicitud HTTP fallida (flujo ${context.flowId}): ${reason}`);
+    await supabase.from("analytics_events").insert({
+      workspace_id: context.workspaceId,
+      flow_id: context.flowId,
+      contact_id: context.contactId,
+      event_type: "http_request_failed",
+      metadata: { reason },
+    });
+  };
 
-    const response = await fetch(url, {
+  try {
+    // El texto del cliente va codificado: no puede cambiar la dirección ni romper el JSON.
+    const target = await checkHttpTarget(interpolateVariables(data.url, variables, { encode: "url" }));
+    if (!target.ok) return failed(target.error);
+    const body = data.body ? interpolateVariables(data.body, variables, { encode: "json" }) : undefined;
+
+    const response = await fetch(target.url, {
       method: data.method,
       headers: {
         "Content-Type": "application/json",
         ...data.headers,
       },
       body: data.method !== "GET" ? body : undefined,
+      signal: AbortSignal.timeout(HTTP_NODE_TIMEOUT_MS),
+      // Una redirección podría llevar a una dirección interna: no se sigue.
+      redirect: "manual",
     });
 
-    const responseData = await response.text();
+    // Un 404 o un 500 no es una respuesta válida: no se guarda como si lo fuera.
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return failed(`respuesta ${response.status}`);
+    }
+    const responseData = await readTextCapped(response);
 
     // Store response in variable if configured
     if (data.responseVariable && context.variables) {
@@ -913,23 +970,50 @@ async function executeHttpRequest(
       }
     }
   } catch (error) {
-    console.error("HTTP request failed:", error);
+    await failed(error instanceof Error ? error.message : "error desconocido");
   }
 }
+
+/** Cuántos flujos pueden saltar uno a otro sin una espera de por medio. */
+export const MAX_GOTO_CHAIN = 5;
 
 async function executeGoToFlow(
   supabase: SupabaseClient<Database>,
   data: GoToFlowNodeData,
   context: FlowExecutionContext,
-  _sessionId: string
+  sessionId: string
 ) {
-  // Execute the target flow
+  // Cadena de flujos de esta ejecución (no se guarda en la sesión: una espera
+  // de por medio la reinicia, así "volver al menú" tras una respuesta sí vale).
+  const chain = context.goToChain?.length ? context.goToChain : [context.flowId];
+  if (!data.flowId) {
+    console.error(`[flows] «Ir a flujo» sin flujo de destino (flujo ${context.flowId})`);
+    await completeSession(supabase, sessionId);
+    return "pause";
+  }
+  if (chain.includes(data.flowId) || chain.length >= MAX_GOTO_CHAIN) {
+    console.warn(`[flows] «Ir a flujo» detenido por bucle: ${[...chain, data.flowId].join(" > ")}`);
+    await supabase.from("analytics_events").insert({
+      workspace_id: context.workspaceId,
+      flow_id: context.flowId,
+      contact_id: context.contactId,
+      event_type: "flow_loop_blocked",
+      metadata: { target: data.flowId, chain },
+    });
+    await supabase.from("flow_sessions").update({ status: "cancelled" }).eq("id", sessionId);
+    return "pause";
+  }
+
+  // El flujo de origen termina aquí: sin esto su sesión quedaba activa para siempre.
+  await completeSession(supabase, sessionId);
+  // Flujo nuevo (no retoma otra espera) y solo si es de este espacio (executeFlow filtra por espacio).
+  // «Volver después» no existe: el contacto sigue en el flujo de destino.
   await executeFlow(supabase, {
     ...context,
     flowId: data.flowId,
+    startFresh: true,
+    goToChain: [...chain, data.flowId],
   });
-  // If returnAfter is true, the current flow will continue after the target flow completes
-  // For now, we just stop the current traversal
   return "pause";
 }
 
@@ -977,6 +1061,8 @@ async function executeHumanTakeover(
       status: "completed",
     })
     .eq("id", sessionId);
+  // Las demás esperas del bot en este canal ya no tienen sentido (M-11).
+  await cancelActiveSessions(supabase, { contactId: context.contactId, channelIds: [context.channelId] });
 
   return "pause";
 }
@@ -1032,7 +1118,7 @@ async function executeCommentReply(
     return;
   }
 
-  const text = interpolateVariables(data.text, context.variables || {});
+  const text = interpolateVariables(data.text, context.variables || {}, { blankUnknown: true });
 
   try {
     await zernio.comments.replyToInboxPost({
@@ -1080,7 +1166,7 @@ async function executePrivateReply(
     return;
   }
 
-  const text = interpolateVariables(data.text, context.variables || {});
+  const text = interpolateVariables(data.text, context.variables || {}, { blankUnknown: true });
 
   try {
     await zernio.comments.sendPrivateReplyToComment({
@@ -1160,6 +1246,7 @@ async function executeEnrollSequence(
     .from("sequences")
     .select("id, steps, status")
     .eq("id", data.sequenceId)
+    .eq("workspace_id", context.workspaceId)
     .single();
 
   if (!sequence || sequence.status !== "active") {

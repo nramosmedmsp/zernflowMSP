@@ -109,6 +109,7 @@ function conv(id: string, contactId: string, lastMessageAt: string | null = null
     last_message_preview: null,
     unread_count: 0,
     is_automation_paused: false,
+    last_inbound_at: null,
     complaint_flagged_at: null,
     complaint_excerpt: null,
     complaint_alerted_at: null,

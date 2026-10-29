@@ -37,6 +37,9 @@ function makeFakeSupabase(seed: {
           filters[col] = val;
           return builder;
         },
+        maybeSingle() {
+          return builder.single();
+        },
         single() {
           if (table === "contact_channels") {
             const contactId =

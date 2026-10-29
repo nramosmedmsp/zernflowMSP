@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
+import { shouldCancelResumeForPausedBot } from "@/lib/flow-engine/waiting-session";
 import type { Json } from "@/lib/types/database";
 import { runCaseTasks } from "@/lib/cases";
 
@@ -459,6 +460,13 @@ async function processJob(
         throw new SessionCancelError(
           `session ${payload.sessionId} moved past delay node ${payload.nodeId} to ${session.current_node_id} but is not waiting and has no scheduled job; a resume invocation died mid-traversal`
         );
+      }
+
+      // B-16: si un asesor tomó el chat mientras tanto, el bot no sigue enviando.
+      if (await shouldCancelResumeForPausedBot(supabase, { variables: session.variables, conversationId: payload.conversationId })) {
+        await supabase.from("flow_sessions").update({ status: "cancelled", waiting_for_input: false }).eq("id", session.id);
+        console.warn(`[flows] la espera de la sesión ${session.id} se cancela: un asesor tomó el chat`);
+        return;
       }
 
       // Resume from the node after the delay; resumeSession restores

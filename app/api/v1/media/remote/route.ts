@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { inboundFetchPlan, needsProxy } from "@/lib/chat-media";
-import { signedUrl, storeInboundMedia } from "@/lib/media-store";
+import { canRetryMedia, signedUrl, storeInboundMedia } from "@/lib/media-store";
 
 // Solo estos archivos llevan la clave de Zernio: nunca otra ruta de su API.
 const ZERNIO_MEDIA_PATH = /^\/api\/v1\/whatsapp\/media\/[A-Za-z0-9._-]+$/;
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
     (
       await service
         .from("message_media")
-        .select("storage_path, file_name, status")
+        .select("storage_path, file_name, status, fetch_attempts")
         .eq("conversation_id", conversation.id)
         .eq("platform_message_id", messageId)
         .eq("attachment_index", index)
@@ -59,7 +59,10 @@ export async function GET(request: NextRequest) {
     ).data;
 
   let row = await existing();
-  if (!row) {
+  // M-13: un archivo que falló una vez (lentitud, Zernio aún no lo tenía) se
+  // vuelve a intentar al abrirlo, hasta MAX_MEDIA_ATTEMPTS veces.
+  const retry = !!row && canRetryMedia(row);
+  if (!row || retry) {
     const apiKey = plan.withApiKey ? await getLateApiKey(conversation.workspace_id) : null;
     await storeInboundMedia(service, {
       workspaceId: conversation.workspace_id,
@@ -68,6 +71,7 @@ export async function GET(request: NextRequest) {
       attachments: [{ url }],
       apiKey,
       firstIndex: index,
+      retryAttempt: retry ? (row?.fetch_attempts ?? 1) + 1 : undefined,
     });
     row = await existing();
   }

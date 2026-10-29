@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { pickChannelBySignature, type ChannelPick } from "@/lib/zernio-webhook";
-import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
 import { inboundPreview } from "@/lib/message-preview";
 import { runInboundPipeline } from "@/lib/inbound-pipeline";
-import { recordInboundConversation } from "@/lib/inbound-conversation";
+import { prepareInboundMessage, type PreparedInbound } from "@/lib/inbound-conversation";
 import { storeInboundMedia, type InboundAttachmentInput } from "@/lib/media-store";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { applyDeliveryEvent, type DeliveryEvent } from "@/lib/outbound-log";
@@ -161,6 +160,16 @@ async function claimWebhookEvent(
   return true;
 }
 
+/** Libera el id del evento para que el reintento de Zernio no se tome por duplicado. */
+async function releaseWebhookEvent(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  eventId: string | null | undefined,
+): Promise<void> {
+  if (!eventId) return;
+  const { error } = await supabase.from("webhook_events").delete().eq("event_id", eventId);
+  if (error) console.error("webhook_events release failed:", error);
+}
+
 async function handleWebhook(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("x-late-signature");
@@ -229,12 +238,38 @@ async function handleWebhook(request: NextRequest) {
     return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
   }
 
-  // Ack immediately and process after the response: Zernio aborts deliveries
-  // at 5s and retries, so contact upserts + flow execution (Zernio sends, AI
-  // nodes) must never run before the 200 goes out.
+  // M-16: el contacto, su chat y el no leído se guardan ANTES de responder. Si
+  // fallan, se responde con error y se libera el id del evento: Zernio reintenta
+  // y el mensaje no se pierde. Es poco trabajo (unas consultas): cabe en los 5 s
+  // de Zernio. Lo demás (gestiones, bot, archivos) corre después de responder.
+  let prepared: PreparedInbound;
+  try {
+    prepared = await prepareInboundMessage(supabase, {
+      channel,
+      senderId: msg.sender.id,
+      senderName: msg.sender.name || msg.sender.username || msg.sender.id,
+      senderPicture: msg.sender.picture || null,
+      senderUsername: msg.sender.username || null,
+      lateConversationId: payload.conversation.id,
+      preview: inboundPreview(msg),
+      at: new Date().toISOString(),
+    });
+  } catch (err) {
+    prepared = { ok: false, error: err instanceof Error ? err.message : "error desconocido" };
+  }
+  if (!prepared.ok) {
+    console.error("Webhook: no se pudo registrar el mensaje entrante:", prepared.error);
+    await releaseWebhookEvent(supabase, eventId);
+    return NextResponse.json({ error: "Could not store the message" }, { status: 500 });
+  }
+  const stored = prepared;
+
+  // Ack and process after the response: Zernio aborts deliveries at 5s and
+  // retries, so flow execution (Zernio sends, AI nodes) must never run before
+  // the 200 goes out.
   after(async () => {
     try {
-      await processMessageEvent(supabase, payload, channel);
+      await processMessageEvent(supabase, payload, channel, stored);
     } catch (err) {
       console.error("Webhook message processing error:", err);
     }
@@ -247,49 +282,10 @@ async function processMessageEvent(
   supabase: Awaited<ReturnType<typeof createServiceClient>>,
   payload: WebhookPayload,
   channel: Database["public"]["Tables"]["channels"]["Row"],
+  stored: Extract<PreparedInbound, { ok: true }>,
 ) {
   const { message: msg, conversation: conv, account, metadata } = payload;
-
-  // ── Upsert contact ───────────────────────────────────────────────────────
-
-  const senderId = msg.sender.id;
-  const senderName = msg.sender.name || msg.sender.username || senderId;
-
-  const contact = await upsertContactForSender({
-    supabase,
-    channel,
-    senderId,
-    senderName,
-    senderPicture: msg.sender.picture || null,
-    senderUsername: msg.sender.username || null,
-    interactionAt: new Date().toISOString(),
-  });
-
-  if (!contact) {
-    console.error("Failed to create contact for webhook message");
-    return;
-  }
-
-  const contactId = contact.contactId;
-
-  // ── Upsert conversation ──────────────────────────────────────────────────
-
-  const preview = inboundPreview(msg);
-
-  const conversation = await recordInboundConversation(supabase, {
-    workspaceId: channel.workspace_id,
-    channelId: channel.id,
-    contactId,
-    platform: channel.platform,
-    lateConversationId: conv.id,
-    preview,
-    at: new Date().toISOString(),
-  });
-
-  if (!conversation) {
-    console.error("Failed to upsert conversation for webhook message");
-    return;
-  }
+  const { contactId, conversation } = stored;
 
   // Messages are stored by Zernio (source of truth) — no local insert needed.
   // Sus archivos sí se copian: WhatsApp los borra a los pocos días.
@@ -301,7 +297,7 @@ async function processMessageEvent(
     channel,
     contactId,
     conversation,
-    isFirstMessage: !contact.existed,
+    isFirstMessage: !stored.existed,
     message: {
       text: msg.text,
       postbackPayload: metadata?.postbackPayload,

@@ -157,6 +157,8 @@ export async function simulateInboundMessage(
     // Igual que el webhook: vista previa, no leídos y última actividad.
     await service.rpc("increment_unread", { conv_id: conversation.id, preview: inboundPreview({ text: body, attachments }) });
     await service.from("contacts").update({ last_interaction_at: at }).eq("id", conversation.contact_id);
+    // Base de la ventana de 24 h (igual que el webhook).
+    await service.from("conversations").update({ last_inbound_at: at }).eq("id", conversation.id);
 
     await runInboundPipeline(service, {
       channel,

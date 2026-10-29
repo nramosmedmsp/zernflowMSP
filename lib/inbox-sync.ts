@@ -62,20 +62,25 @@ export async function upsertContactForSender({
   interactionAt: string;
   stampExisting?: boolean;
 }): Promise<{ contactId: string; existed: boolean } | null> {
-  const { data: existingContactChannel } = await supabase
-    .from("contact_channels")
-    .select("contact_id")
-    .eq("channel_id", channel.id)
-    .eq("platform_sender_id", senderId)
-    .single();
-
-  if (existingContactChannel) {
-    if (stampExisting) {
+  const findLink = async () =>
+    (
       await supabase
-        .from("contacts")
-        .update({ last_interaction_at: interactionAt })
-        .eq("id", existingContactChannel.contact_id);
+        .from("contact_channels")
+        .select("contact_id")
+        .eq("channel_id", channel.id)
+        .eq("platform_sender_id", senderId)
+        .maybeSingle()
+    ).data;
+
+  const stamp = async (contactId: string) => {
+    if (stampExisting) {
+      await supabase.from("contacts").update({ last_interaction_at: interactionAt }).eq("id", contactId);
     }
+  };
+
+  const existingContactChannel = await findLink();
+  if (existingContactChannel) {
+    await stamp(existingContactChannel.contact_id);
     return { contactId: existingContactChannel.contact_id, existed: true };
   }
 
@@ -92,12 +97,26 @@ export async function upsertContactForSender({
 
   if (!newContact) return null;
 
-  await supabase.from("contact_channels").insert({
+  const { error: linkError } = await supabase.from("contact_channels").insert({
     contact_id: newContact.id,
     channel_id: channel.id,
     platform_sender_id: senderId,
     platform_username: senderUsername ?? null,
   });
+
+  if (linkError) {
+    // M-8: otro mensaje del mismo número llegó casi a la vez y registró primero
+    // (la base impide repetir canal + remitente). El contacto recién creado
+    // queda huérfano: se borra y se usa el del mensaje que ganó.
+    await supabase.from("contacts").delete().eq("id", newContact.id);
+    const winner = linkError.code === "23505" ? await findLink() : null;
+    if (!winner) {
+      console.error("[inbox-sync] no se pudo vincular el contacto al canal:", linkError.message);
+      return null;
+    }
+    await stamp(winner.contact_id);
+    return { contactId: winner.contact_id, existed: true };
+  }
 
   await supabase.from("analytics_events").insert({
     workspace_id: channel.workspace_id,
