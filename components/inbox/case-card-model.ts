@@ -2,6 +2,7 @@
 // de etapas, opciones de cierre por tipo y texto/opciones del próximo contacto.
 // Todo en hora de Lima (UTC-5, sin horario de verano).
 
+import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { addDays, limaDateOf, limaDateTimeIso } from "@/lib/cases/dates";
 import { formatSpan, solutionState, typeLockMessage, type SolutionCaseInput } from "@/lib/cases/protection";
 import type { OutcomeKind, StageKind } from "@/lib/types/database";
@@ -137,6 +138,23 @@ export function closeRequestLine(p: {
   return ["Pedido de cierre «" + (p.stageName ?? "Sin solución") + "» por " + p.requesterName, p.reasonName, p.note]
     .filter((x): x is string => !!x)
     .join(" · ");
+}
+
+/**
+ * Cabecera de una gestión cerrada. Usa el nombre de la etapa final ("Cerrada:
+ * Sin solución") y no las palabras de venta ("perdida") que no valen para Postventa.
+ */
+export function closedHeadline(status: string, stageName: string | null): string {
+  if (stageName) return `Cerrada: ${stageName}`;
+  const label = OUTCOME_LABELS[status as keyof typeof OUTCOME_LABELS];
+  return `Cerrada como ${label?.toLowerCase() ?? status}`;
+}
+
+/** Aviso al asesor cuando un supervisor rechazó cerrar su gestión. */
+export function rejectionLine(comment: string | null): string {
+  return comment
+    ? `Un supervisor rechazó cerrar esta gestión: «${comment}». Sigue abierta.`
+    : "Un supervisor rechazó cerrar esta gestión sin solución. Sigue abierta: hay que darle una solución.";
 }
 
 // -------------------------------------------- Plazo de la solución (reclamos)

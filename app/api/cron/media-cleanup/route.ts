@@ -1,3 +1,4 @@
+import { isCronAuthorized } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { MEDIA_RETENTION_DAYS, retentionCutoff } from "@/lib/chat-media";
@@ -16,10 +17,7 @@ const MAX_BATCHES = 10;
  * respuestas guardadas no vencen.
  */
 export async function GET(request: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const providedSecret =
-    request.nextUrl.searchParams.get("key") || request.headers.get("authorization")?.replace("Bearer ", "");
-  if (!cronSecret || providedSecret !== cronSecret) {
+  if (!isCronAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

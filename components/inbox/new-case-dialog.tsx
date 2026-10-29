@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { openManualCase, type ContactCasesView } from "@/lib/actions/cases";
 import { addDays, limaDateOf } from "@/lib/cases/dates";
+import { allowsSameTypeParallel } from "@/lib/cases/parallel";
 import { ParallelCaseWarning, hasSameTypeOpen, type ParallelCase } from "@/components/cases/parallel-case-warning";
 import type { InboxMember } from "./inbox-model";
 import { ErrorText, Field, Modal, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
@@ -46,7 +47,9 @@ export function NewCaseDialog({
     caseTypeName: c.caseTypeId ? (typeNames.get(c.caseTypeId) ?? "Gestión") : "Sin clasificar",
     status: c.status === "scheduled" ? "scheduled" : "open",
   }));
-  const blocked = hasSameTypeOpen(existing, caseTypeId || null);
+  const selectedType = data.caseTypes.find((t) => t.id === caseTypeId);
+  const sameTypeAllowed = !!selectedType && allowsSameTypeParallel(selectedType);
+  const blocked = hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed);
 
   async function handleCreate() {
     if (scheduledFor && scheduledFor < tomorrow) {
@@ -109,6 +112,7 @@ export function NewCaseDialog({
         caseTypeId={caseTypeId || null}
         confirmed={confirmParallel}
         onConfirmedChange={setConfirmParallel}
+        sameTypeAllowed={sameTypeAllowed}
       />
 
       <Field label="Tipo de gestión">

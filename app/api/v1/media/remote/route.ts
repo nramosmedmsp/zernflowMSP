@@ -7,6 +7,10 @@ import { canRetryMedia, signedUrl, storeInboundMedia } from "@/lib/media-store";
 // Solo estos archivos llevan la clave de Zernio: nunca otra ruta de su API.
 const ZERNIO_MEDIA_PATH = /^\/api\/v1\/whatsapp\/media\/[A-Za-z0-9._-]+$/;
 const TELEGRAM_FILE_PATH = /^\/file\//;
+// Tope de copias nuevas por chat: los mensajes se leen de Zernio y no se pueden
+// comprobar uno a uno, así que se acota cuánto almacenamiento puede llenar un chat.
+const REMOTE_COPY_WINDOW_MINUTES = 10;
+const REMOTE_COPY_MAX_PER_WINDOW = 30;
 
 /**
  * GET /api/v1/media/remote?c={chat}&m={mensaje}&i={índice}&u={enlace}[&download=1]
@@ -63,6 +67,20 @@ export async function GET(request: NextRequest) {
   // vuelve a intentar al abrirlo, hasta MAX_MEDIA_ATTEMPTS veces.
   const retry = !!row && canRetryMedia(row);
   if (!row || retry) {
+    if (!row) {
+      const since = new Date(Date.now() - REMOTE_COPY_WINDOW_MINUTES * 60_000).toISOString();
+      const { count } = await service
+        .from("message_media")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", conversation.id)
+        .gte("created_at", since);
+      if ((count ?? 0) >= REMOTE_COPY_MAX_PER_WINDOW) {
+        return NextResponse.json(
+          { error: "Se pidieron demasiados archivos de este chat en poco tiempo. Espera unos minutos e inténtalo de nuevo." },
+          { status: 429 },
+        );
+      }
+    }
     const apiKey = plan.withApiKey ? await getLateApiKey(conversation.workspace_id) : null;
     await storeInboundMedia(service, {
       workspaceId: conversation.workspace_id,

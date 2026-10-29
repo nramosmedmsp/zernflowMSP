@@ -9,12 +9,12 @@ import { isAdminRole } from "@/lib/permissions";
 
 /** Pantalla de trabajo de quien no administra: la Bandeja. */
 export const NON_ADMIN_HOME = "/dashboard/inbox";
-/** Pantalla de entrada de Dueño y Administradores. */
-export const ADMIN_HOME = "/dashboard/flows";
+/** Pantalla de entrada de todos los roles: la Bandeja. */
+export const HOME_PATH = "/dashboard/inbox";
 
-/** Pantalla a la que entra cada rol al abrir la app o iniciar sesión. */
-export function homePathFor(role: string | null | undefined): string {
-  return isAdminRole(role) ? ADMIN_HOME : NON_ADMIN_HOME;
+/** Pantalla a la que entra cada rol al abrir la app o iniciar sesión: la Bandeja para todos. */
+export function homePathFor(_role?: string | null): string {
+  return HOME_PATH;
 }
 
 /** Úsalo en el `layout.tsx` de cada sección de administración. */

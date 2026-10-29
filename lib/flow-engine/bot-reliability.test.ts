@@ -130,14 +130,14 @@ describe("M-31: variables del contacto", () => {
   it("una variable desconocida no llega con llaves: queda vacía", async () => {
     seedFlow("f1", [send("m", "Tu código es {{no_existe}}.")]);
     await executeFlow(fake.asDb(), ctx());
-    expect(sentTexts()).toEqual(["Tu código es ."]);
+    expect(sentTexts()).toEqual(["Tu código es."]);
   });
 
   it("si el nombre no parece de persona, {{nombre}} queda vacío", async () => {
     fake.rows("contacts")[0].display_name = "+51 999 111 222";
     seedFlow("f1", [send("m", "Hola {{nombre}}!")]);
     await executeFlow(fake.asDb(), ctx());
-    expect(sentTexts()).toEqual(["Hola !"]);
+    expect(sentTexts()).toEqual(["Hola!"]);
   });
 });
 
@@ -221,7 +221,7 @@ describe("M-2: nodo Solicitud HTTP", () => {
     httpFlow({ url: "https://8.8.8.8/x", responseVariable: "resp" });
     await executeFlow(fake.asDb(), ctx());
     expect(fake.rows("analytics_events").find((e) => e.event_type === "http_request_failed")).toMatchObject({ metadata: { reason: "respuesta 500" } });
-    expect(sentTexts()).toEqual(["Respuesta: "]);
+    expect(sentTexts()).toEqual(["Respuesta:"]);
   });
 
   it("no llama a direcciones internas ni http", async () => {

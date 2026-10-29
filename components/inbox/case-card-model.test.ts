@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { SolutionCaseInput } from "@/lib/cases/protection";
 import {
   closeMenuItems,
+  closedHeadline,
+  rejectionLine,
   closeOptions,
   closeRequestLine,
   closeSelection,
@@ -305,5 +307,17 @@ describe("próximo contacto: año y horario (M-20, M-21)", () => {
   it("de madrugada tampoco ofrece una hora de madrugada", () => {
     // 01:00 en Lima -> 04:00.
     expect(nextContactOptions(new Date("2026-10-28T06:00:00Z")).map((o) => o.key)).not.toContain("three-hours");
+  });
+});
+
+describe("cabecera de cerrada y rechazo de cierre (B-28, B-29)", () => {
+  it("usa el nombre de la etapa final en vez de «perdida»", () => {
+    expect(closedHeadline("lost", "Sin solución")).toBe("Cerrada: Sin solución");
+    expect(closedHeadline("lost", null)).toBe("Cerrada como perdida");
+  });
+
+  it("el asesor ve el comentario del supervisor", () => {
+    expect(rejectionLine("Llama al cliente antes")).toContain("«Llama al cliente antes»");
+    expect(rejectionLine(null)).toContain("rechazó cerrar");
   });
 });

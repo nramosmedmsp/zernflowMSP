@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -10,6 +10,7 @@ import type { Platform } from "@/lib/types/database";
 import {
   EMPTY_FILTERS,
   DEFAULT_SCOPE,
+  initialScope,
   DEFAULT_STATE,
   INBOX_STATES,
   STATE_LABELS,
@@ -80,6 +81,10 @@ export function ConversationList({
 
   // El último alcance y estado se leen después de montar (no hay localStorage en el servidor).
   const storageKey = viewStorageKey(workspaceId, meta.userId);
+  // Sin vista guardada, un supervisor sin chats propios no debería empezar en un Míos vacío.
+  const [viewRead, setViewRead] = useState(false);
+  const hadSavedView = useRef(false);
+  const autoScopeDone = useRef(false);
   useEffect(() => {
     const id = setTimeout(() => {
       let raw: string | null = null;
@@ -88,6 +93,8 @@ export function ConversationList({
       } catch {
         // Sin almacenamiento: se queda en Míos / Todo.
       }
+      hadSavedView.current = !!raw;
+      setViewRead(true);
       if (!raw) return;
       const saved = parseStoredView(raw, availableScopes(meta));
       setScope(saved.scope);
@@ -121,6 +128,17 @@ export function ConversationList({
     return { waitingByScope: waiting, countByState: byState, rows: byState.get(state) ?? [] };
   }, [conversations, casesByContact, filters, meta, nowDate, scope, state]);
 
+  useEffect(() => {
+    if (!viewRead || autoScopeDone.current) return;
+    autoScopeDone.current = true;
+    if (hadSavedView.current || scope !== DEFAULT_SCOPE) return;
+    const next = initialScope(meta, countByState.get("all")?.length ?? 0);
+    if (next !== scope) {
+      setScope(next);
+      setFilters((prev) => filtersForScope(prev, next));
+    }
+  }, [viewRead, scope, meta, countByState]);
+
   const demoChannelIds = useMemo(() => new Set(meta.demoChannelIds ?? []), [meta.demoChannelIds]);
   const typeById = useMemo(() => new Map(meta.caseTypes.map((t) => [t.id, t])), [meta.caseTypes]);
   const platforms = useMemo(
@@ -131,6 +149,13 @@ export function ConversationList({
     ? meta.caseTypes.filter((t) => t.id === filters.caseTypeId)
     : meta.caseTypes.filter((t) => !t.archived);
   const filterCount = activeFilterCount(filters);
+  // Un asesor solo ve los tipos de gestión que tiene en su lista.
+  const canSeeOthers = meta.isAdmin || meta.supervisedTeamIds.length > 0;
+  const usedTypeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const list of casesByContact.values()) for (const c of list) if (c.case_type_id) ids.add(c.case_type_id);
+    return ids;
+  }, [casesByContact]);
 
   function setFilter<K extends keyof InboxFilters>(key: K, value: InboxFilters[K]) {
     setFilters((prev) => ({ ...prev, [key]: value, ...(key === "caseTypeId" ? { stageId: "" } : {}) }));
@@ -257,7 +282,7 @@ export function ConversationList({
             <option value="">Todos los tipos</option>
             <option value="none">Sin clasificar</option>
             {meta.caseTypes
-              .filter((t) => !t.archived)
+              .filter((t) => !t.archived && (canSeeOthers || usedTypeIds.has(t.id)))
               .map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
@@ -295,20 +320,23 @@ export function ConversationList({
             <option value="scheduled">Programadas</option>
             {scope === "all" && <option value="none">Sin gestión</option>}
           </select>
-          <select
-            value={filters.assigneeId}
-            onChange={(e) => setFilter("assigneeId", e.target.value)}
-            className={selectClass}
-            aria-label="Responsable"
-          >
-            <option value="">Todos los responsables</option>
-            <option value="none">Sin asignar</option>
-            {meta.members.map((m) => (
-              <option key={m.userId} value={m.userId}>
-                {m.userId === meta.userId ? `${m.name} (yo)` : m.name}
-              </option>
-            ))}
-          </select>
+          {/* En «Míos» todo es del mismo responsable; un asesor no ve las gestiones de otros. */}
+          {scope !== "mine" && (
+            <select
+              value={filters.assigneeId}
+              onChange={(e) => setFilter("assigneeId", e.target.value)}
+              className={selectClass}
+              aria-label="Responsable"
+            >
+              <option value="">Todos los responsables</option>
+              <option value="none">Sin asignar</option>
+              {(canSeeOthers ? meta.members : meta.members.filter((m) => m.userId === meta.userId)).map((m) => (
+                <option key={m.userId} value={m.userId}>
+                  {m.userId === meta.userId ? `${m.name} (yo)` : m.name}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             value={filters.platform}
             onChange={(e) => setFilter("platform", e.target.value as InboxFilters["platform"])}

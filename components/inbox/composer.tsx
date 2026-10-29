@@ -385,7 +385,7 @@ export function Composer({
     if (!noteCase || savingNote || !text) return;
     setSavingNote(true);
     try {
-      const mentions = mentionedIds(text, picked);
+      const mentions = mentionedIds(text, picked, members.filter((m) => m.userId !== me.userId));
       const result = await addCaseNote(noteCase.id, text, mentions, conversation.id);
       if ("error" in result) {
         setError(result.error);

@@ -21,6 +21,12 @@ export const ALERT_SCOPE_LABELS: Record<AlertScope, string> = {
   all: "Todos los chats que veo",
 };
 
+/** Opciones de «Avisarme de» que tienen sentido para esta persona (un asesor sin cola visible solo ve sus chats). */
+export function alertScopesFor(who: { isAdmin: boolean; supervisedTeamIds: readonly string[]; agentSeesQueue: boolean }): AlertScope[] {
+  if (who.isAdmin || who.supervisedTeamIds.length > 0) return ["mine", "mine_and_queue", "all"];
+  return who.agentSeesQueue ? ["mine", "mine_and_queue"] : ["mine"];
+}
+
 const SCOPES = new Set<AlertScope>(["mine", "mine_and_queue", "all"]);
 
 export function alertSettingsKey(userId: string): string {

@@ -103,8 +103,33 @@ describe("closeGate", () => {
 
 describe("pedido de cierre guardado", () => {
   it("ida y vuelta", () => {
-    const request = { stageId: "s", reasonId: "r", note: "n", categoryId: null, requestedBy: "u", requestedAt: "2026-10-28T10:00:00Z" };
+    const request = {
+      stageId: "s",
+      reasonId: "r",
+      note: "n",
+      categoryId: null,
+      keyDate: null,
+      scheduleAt: null,
+      skipSchedule: false,
+      requestedBy: "u",
+      requestedAt: "2026-10-28T10:00:00Z",
+    };
     expect(parseCloseRequest(closeRequestToJson(request))).toEqual(request);
+  });
+  it("guarda la fecha clave y la programación elegidas (B-13)", () => {
+    const request = {
+      stageId: "s",
+      reasonId: null,
+      note: null,
+      categoryId: null,
+      keyDate: "2027-01-15",
+      scheduleAt: "2027-02-01",
+      skipSchedule: false,
+      requestedBy: "u",
+      requestedAt: "2026-10-28T10:00:00Z",
+    };
+    expect(parseCloseRequest(closeRequestToJson(request))).toEqual(request);
+    expect(parseCloseRequest(closeRequestToJson({ ...request, scheduleAt: null, skipSchedule: true }))?.skipSchedule).toBe(true);
   });
   it("lo inválido es null", () => {
     expect(parseCloseRequest(null)).toBeNull();

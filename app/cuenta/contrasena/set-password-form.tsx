@@ -37,9 +37,15 @@ export function SetPasswordForm({ email }: { email: string }) {
     }
 
     setSaving(true);
-    const { error: updateError } = await createClient().auth.updateUser({ password });
-    if (updateError) {
-      setError(translatePasswordUpdateError(updateError.message));
+    try {
+      const { error: updateError } = await createClient().auth.updateUser({ password });
+      if (updateError) {
+        setError(translatePasswordUpdateError(updateError.message));
+        setSaving(false);
+        return;
+      }
+    } catch {
+      setError("No se pudo guardar la contraseña. Revisa tu conexión e inténtalo de nuevo.");
       setSaving(false);
       return;
     }
@@ -66,7 +72,7 @@ export function SetPasswordForm({ email }: { email: string }) {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4">
           <div>
             <label htmlFor="password" className="mb-1.5 block text-sm font-medium">
               Contraseña nueva

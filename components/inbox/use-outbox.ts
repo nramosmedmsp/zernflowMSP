@@ -74,7 +74,7 @@ export function useOutbox({ onDelivered }: { onDelivered?: (conversationId: stri
   }, [onDelivered]);
 
   const deliver = useCallback(
-    async (item: OutboxItem) => {
+    async (item: OutboxItem): Promise<boolean> => {
       let status: number | null = null;
       try {
         let attachment: { path: string; name: string } | undefined;
@@ -99,12 +99,14 @@ export function useOutbox({ onDelivered }: { onDelivered?: (conversationId: stri
         if (!res.ok) throw new Error(json.error || `No se pudo enviar (${res.status})`);
         dispatch({ type: "sent", clientId: item.clientId, confirmedId: json.id ?? null });
         delivered.current?.(item.conversationId);
+        return true;
       } catch (err) {
         const { ambiguous } = classifySendFailure(status);
         const reason =
           status === null ? "Sin conexión. Revisa tu internet." : err instanceof Error ? err.message : "No se pudo enviar el mensaje";
         dispatch({ type: "failed", clientId: item.clientId, error: reason, ambiguous });
         toast.error(item.contactName ? `No se envió tu mensaje a ${item.contactName}. ${reason}` : `No se envió tu mensaje. ${reason}`);
+        return false;
       }
     },
     [toast],
@@ -132,7 +134,20 @@ export function useOutbox({ onDelivered }: { onDelivered?: (conversationId: stri
       }));
       for (const item of items) dispatch({ type: "queued", item });
       void (async () => {
-        for (const item of items) await deliver(item);
+        for (const [i, item] of items.entries()) {
+          if (await deliver(item)) continue;
+          // Si una parte falla, las siguientes no salen (llegarían antes que ella):
+          // quedan para reintentar en orden.
+          for (const rest of items.slice(i + 1)) {
+            dispatch({
+              type: "failed",
+              clientId: rest.clientId,
+              error: "No se envió porque falló el mensaje anterior. Reintenta en orden.",
+              ambiguous: false,
+            });
+          }
+          break;
+        }
       })();
     },
     [deliver],

@@ -37,10 +37,16 @@ beforeEach(() => {
 });
 
 describe("difusión de texto con variables", () => {
-  it("deja fuera al contacto cuyo {nombre} queda vacío", async () => {
+  it("el contacto sin nombre real no se deja fuera: {nombre} queda vacío", async () => {
     const plan = await planBroadcast(fake.asDb(), WS, { kind: "text", text: "Hola {nombre}, 20% de descuento" }, null);
-    expect(plan.recipients.map((r) => r.contactId)).toEqual(["c1"]);
-    expect(plan.excluded.emptyVariable).toBe(1);
+    expect(plan.recipients.map((r) => r.contactId).sort()).toEqual(["c1", "c2"]);
+    expect(plan.excluded.emptyVariable).toBe(0);
+  });
+
+  it("una variable desconocida sigue dejando fuera a todos", async () => {
+    const plan = await planBroadcast(fake.asDb(), WS, { kind: "text", text: "Hola {nombre}, {precio}" }, null);
+    expect(plan.recipients).toHaveLength(0);
+    expect(plan.excluded.emptyVariable).toBe(2);
   });
 
   it("un texto sin variables llega a todos", async () => {
@@ -59,14 +65,14 @@ describe("difusión de texto con variables", () => {
     expect(state.sent).toEqual(["Hola Ana, 20% de descuento"]);
   });
 
-  it("al enviar a quien no tiene nombre, no sale nada", async () => {
+  it("al enviar a quien no tiene nombre, sale sin nombre y bien escrito", async () => {
     const res = await deliverBroadcast(fake.asDb(), {
       workspaceId: WS,
       contactId: "c2",
       channelId: "ch-1",
-      messageContent: { kind: "text", text: "Hola {nombre}" },
+      messageContent: { kind: "text", text: "Hola {nombre}, 20% de descuento" },
     });
-    expect(res).toMatchObject({ ok: false });
-    expect(state.sent).toEqual([]);
+    expect(res.ok).toBe(true);
+    expect(state.sent).toEqual(["Hola, 20% de descuento"]);
   });
 });

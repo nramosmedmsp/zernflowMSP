@@ -185,6 +185,10 @@ export interface CloseRequest {
   reasonId: string | null;
   note: string | null;
   categoryId: string | null;
+  /** Fecha clave y programación que eligió quien pidió el cierre (si una regla las pide). */
+  keyDate?: string | null;
+  scheduleAt?: string | null;
+  skipSchedule?: boolean;
   requestedBy: string;
   requestedAt: string;
 }
@@ -195,6 +199,9 @@ export function closeRequestToJson(r: CloseRequest): Json {
     reason_id: r.reasonId,
     note: r.note,
     category_id: r.categoryId,
+    ...(r.keyDate ? { key_date: r.keyDate } : {}),
+    ...(r.scheduleAt ? { schedule_at: r.scheduleAt } : {}),
+    ...(r.skipSchedule ? { skip_schedule: true } : {}),
     requested_by: r.requestedBy,
     requested_at: r.requestedAt,
   };
@@ -216,6 +223,9 @@ export function parseCloseRequest(value: unknown): CloseRequest | null {
     reasonId: text(v.reason_id),
     note: text(v.note),
     categoryId: text(v.category_id),
+    keyDate: text(v.key_date),
+    scheduleAt: text(v.schedule_at),
+    skipSchedule: v.skip_schedule === true,
     requestedBy,
     requestedAt,
   };

@@ -15,9 +15,17 @@ describe("renderContactText", () => {
       text: "Hola María, en Muscle Shop te esperamos hasta el 30/11/2026",
     });
   });
-  it("una variable vacía para ese contacto lo deja sin mensaje", () => {
-    const res = renderContactText("Hola {nombre}", { ...vars, displayName: "+51 987 654 321" });
-    expect(res.ok).toBe(false);
+  it("sin nombre real, {nombre} queda vacío y el texto se limpia (no se excluye)", () => {
+    const sinNombre = { ...vars, displayName: "+51 987 654 321" };
+    expect(renderContactText("Hola {nombre}, 20% de descuento", sinNombre)).toEqual({ ok: true, text: "Hola, 20% de descuento" });
+    expect(renderContactText("Hola {nombre}!", sinNombre)).toEqual({ ok: true, text: "Hola!" });
+    expect(renderContactText("Hola {nombre}", { ...vars, displayName: null })).toEqual({ ok: true, text: "Hola" });
+    expect(renderContactText("{nombre}, mira esto", { ...vars, displayName: "ana@correo.com" })).toEqual({ ok: true, text: "mira esto" });
+    // Solo el nombre es opcional: las demás variables vacías o desconocidas siguen excluyendo.
+    expect(renderContactText("Hola {nombre}, {precio}", sinNombre).ok).toBe(false);
+    expect(renderContactText("{nombre}", sinNombre)).toEqual({ ok: false, error: "El mensaje está vacío." });
+  });
+  it("otra variable vacía para ese contacto lo deja sin mensaje", () => {
     expect(renderContactText("Vence el {fecha_clave}", { ...vars, keyDate: null }).ok).toBe(false);
   });
   it("una llave que no es variable no sale tal cual", () => {

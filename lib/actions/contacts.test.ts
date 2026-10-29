@@ -23,6 +23,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   addContactTag,
+  createContact,
   removeContactTag,
   setContactOwner,
   setContactTeam,
@@ -219,5 +220,37 @@ describe("etiquetas", () => {
     as(BETO);
     expect(await addContactTag(contactId, TAG_VIP)).toEqual({ error: "No se encontró el contacto." });
     expect(fake.rows("contact_tags")).toHaveLength(0);
+  });
+});
+
+describe("crear contacto (B-38)", () => {
+  it("cualquier miembro registra un cliente nuevo y queda como su responsable", async () => {
+    as(BETO);
+    const res = await createContact({ name: "  Luis   Ramos ", phone: "987 654 321" });
+    expect(res).toMatchObject({ ok: true, existed: false, contact: { displayName: "Luis Ramos", phone: "987 654 321" } });
+    expect(fake.rows("contacts").find((c) => c.display_name === "Luis Ramos")).toMatchObject({
+      owner_id: BETO,
+      workspace_id: WS,
+    });
+  });
+
+  it("valida nombre y teléfono en español", async () => {
+    as(BETO);
+    expect(await createContact({ name: "L", phone: "987654321" })).toMatchObject({ error: expect.stringContaining("nombre") });
+    expect(await createContact({ name: "Luis", phone: "" })).toEqual({ error: "Escribe el teléfono del cliente." });
+    expect(await createContact({ name: "Luis", phone: "abc" })).toMatchObject({ error: expect.stringContaining("teléfono") });
+  });
+
+  it("un teléfono repetido devuelve el contacto si lo ve, y si no, no lo duplica", async () => {
+    as(ANA);
+    fake.rows("contacts")[0].phone = "+51900000008";
+    const before = fake.rows("contacts").length;
+    const seen = await createContact({ name: "María otra vez", phone: "+51 900 000 008" });
+    expect(seen).toMatchObject({ ok: true, existed: true, contact: { id: contactId } });
+    as(BETO);
+    expect(await createContact({ name: "María", phone: "+51900000008" })).toMatchObject({
+      error: expect.stringContaining("Ya existe"),
+    });
+    expect(fake.rows("contacts")).toHaveLength(before);
   });
 });

@@ -185,7 +185,7 @@ export function MailSettingsView({
           </section>
 
           {/* Formulario */}
-          <form onSubmit={handleSave} className="space-y-4">
+          <form onSubmit={handleSave} noValidate className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
               <div>
                 <label htmlFor="mail-host" className="mb-1.5 block text-sm font-medium">

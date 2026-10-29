@@ -186,12 +186,17 @@ export function normalizeEmail(raw: string | null | undefined): string | null {
   return email;
 }
 
+const MIN_FULL_NAME_LENGTH = 2;
+
 /** Nombre sin espacios sobrantes; error en español si falta o es muy largo. */
 export function normalizeFullName(
   raw: string | null | undefined,
 ): { name: string; error: null } | { name: null; error: string } {
   const name = typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
   if (!name) return { name: null, error: "Escribe el nombre de la persona." };
+  if (name.length < MIN_FULL_NAME_LENGTH) {
+    return { name: null, error: "El nombre es muy corto. Escribe al menos 2 letras." };
+  }
   if (name.length > MAX_FULL_NAME_LENGTH) {
     return {
       name: null,

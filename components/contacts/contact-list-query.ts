@@ -61,6 +61,11 @@ function idParam(value: string): string {
   return value === NO_VALUE_FILTER || UUID_RE.test(value) ? value : "";
 }
 
+/** Rango de fechas siempre con «desde» antes de «hasta» (un rango invertido no devolvería nada). */
+export function orderedRange(from: string, to: string): { keyFrom: string; keyTo: string } {
+  return from && to && from > to ? { keyFrom: to, keyTo: from } : { keyFrom: from, keyTo: to };
+}
+
 /** Valores no válidos se descartan (la URL la puede escribir cualquiera). */
 export function parseContactListParams(raw: RawParams): ContactListParams {
   const sortRaw = read(raw, "sort");
@@ -77,8 +82,7 @@ export function parseContactListParams(raw: RawParams): ContactListParams {
     ownerId: idParam(read(raw, "owner")),
     teamId: idParam(read(raw, "team")),
     tagId: UUID_RE.test(tag) ? tag : "",
-    keyFrom: isDateString(from) ? from : "",
-    keyTo: isDateString(to) ? to : "",
+    ...orderedRange(isDateString(from) ? from : "", isDateString(to) ? to : ""),
     sort,
     dir,
     page: Number.isFinite(page) && page >= 1 ? Math.min(page, 100_000) : 1,

@@ -109,12 +109,17 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);
-    const result = await deleteSequence(sequence.id);
-    if (result.error) {
-      setError(result.error);
+    try {
+      const result = await deleteSequence(sequence.id);
+      if (result.error) {
+        setError(result.error);
+        setDeleting(false);
+      } else {
+        router.push("/dashboard/sequences");
+      }
+    } catch {
+      setError("No se pudo eliminar la secuencia. Revisa tu conexión e inténtalo de nuevo.");
       setDeleting(false);
-    } else {
-      router.push("/dashboard/sequences");
     }
   }, [sequence.id, router]);
 

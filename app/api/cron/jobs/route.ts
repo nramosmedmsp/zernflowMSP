@@ -1,3 +1,4 @@
+import { isCronAuthorized } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
@@ -44,13 +45,7 @@ function wasSessionWrittenRecently(updatedAt: string): boolean {
  * GET /api/cron/jobs?key=CRON_SECRET
  */
 export async function GET(request: NextRequest) {
-  // Simple auth via query param or header
-  const cronSecret = process.env.CRON_SECRET;
-  const providedSecret =
-    request.nextUrl.searchParams.get("key") ||
-    request.headers.get("authorization")?.replace("Bearer ", "");
-
-  if (!cronSecret || providedSecret !== cronSecret) {
+  if (!isCronAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -5,11 +5,8 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/v1/admin/source-zip": ["./.source-zip/codigo-crm.zip"],
   },
-  images: {
-    remotePatterns: [
-      { protocol: "https", hostname: "**" },
-    ],
-  },
+  // Sin `images.remotePatterns`: la app no usa el optimizador de imágenes y así
+  // nadie lo puede usar como proxy de imágenes de otros sitios.
 };
 
 export default nextConfig;

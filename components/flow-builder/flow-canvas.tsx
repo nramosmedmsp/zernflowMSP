@@ -4,6 +4,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  ControlButton,
   MiniMap,
   addEdge,
   useNodesState,
@@ -20,8 +21,9 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical, Route } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize2, ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { flowFileName } from "@/lib/flow-file-name";
 import { formatTime } from "@/lib/format";
 import { flowStatusLabel } from "./labels";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -86,7 +88,7 @@ function getDefaultData(type: string, actionType?: string): Record<string, unkno
 function FlowCanvasInner({ flow }: FlowCanvasProps) {
   const router = useRouter();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, zoomIn, zoomOut } = useReactFlow();
 
   const initialNodes: Node[] = Array.isArray(flow.nodes)
     ? (flow.nodes as unknown as Node[])
@@ -398,7 +400,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-2 [&_a]:whitespace-nowrap [&_button]:whitespace-nowrap">
         <div className="flex items-center gap-3">
           <button
             onClick={handleBack}
@@ -512,7 +514,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;
-              a.download = `${flowName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.flow.json`;
+              a.download = flowFileName(flowName);
               a.click();
               URL.revokeObjectURL(url);
             }}
@@ -603,14 +605,28 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             onPaneClick={onPaneClick}
             nodeTypes={nodeTypes}
             fitView
+            fitViewOptions={{ maxZoom: 1 }}
             deleteKeyCode={["Backspace", "Delete"]}
             proOptions={{ hideAttribution: true }}
             className="bg-background"
           >
             <Background gap={16} size={1} className="!bg-background" />
             <Controls
+              showZoom={false}
+              showFitView={false}
+              aria-label="Controles del lienzo"
               className="!border-border !bg-card !shadow-sm [&>button]:!border-border [&>button]:!bg-card [&>button]:!text-foreground [&>button:hover]:!bg-accent"
-            />
+            >
+              <ControlButton onClick={() => void zoomIn()} title="Acercar" aria-label="Acercar">
+                <ZoomIn />
+              </ControlButton>
+              <ControlButton onClick={() => void zoomOut()} title="Alejar" aria-label="Alejar">
+                <ZoomOut />
+              </ControlButton>
+              <ControlButton onClick={() => void fitView({ maxZoom: 1 })} title="Ajustar a la pantalla" aria-label="Ajustar a la pantalla">
+                <Maximize2 />
+              </ControlButton>
+            </Controls>
             <MiniMap
               className="!border-border !bg-card"
               nodeColor={() => "var(--primary)"}

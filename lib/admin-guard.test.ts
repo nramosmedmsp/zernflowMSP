@@ -8,7 +8,7 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
-import { ADMIN_HOME, NON_ADMIN_HOME, homePathFor, requireAdminPage } from "./admin-guard";
+import { NON_ADMIN_HOME, homePathFor, requireAdminPage } from "./admin-guard";
 
 describe("requireAdminPage", () => {
   beforeEach(() => {
@@ -33,10 +33,9 @@ describe("requireAdminPage", () => {
 });
 
 describe("homePathFor", () => {
-  it("cada rol entra a su pantalla", () => {
-    expect(homePathFor("owner")).toBe(ADMIN_HOME);
-    expect(homePathFor("admin")).toBe(ADMIN_HOME);
-    expect(homePathFor("member")).toBe(NON_ADMIN_HOME);
-    expect(homePathFor(undefined)).toBe(NON_ADMIN_HOME);
+  it("todos los roles entran a la Bandeja", () => {
+    for (const role of ["owner", "admin", "supervisor", "member", undefined, null]) {
+      expect(homePathFor(role)).toBe("/dashboard/inbox");
+    }
   });
 });

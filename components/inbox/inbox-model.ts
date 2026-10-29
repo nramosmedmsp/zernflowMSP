@@ -95,7 +95,11 @@ export const EMPTY_FILTERS: InboxFilters = {
 
 /** "Sin gestión" solo existe en el alcance Todos: en los demás se quita. */
 export function filtersForScope(f: InboxFilters, scope: InboxScope): InboxFilters {
-  return f.status === "none" && scope !== "all" ? { ...f, status: "" } : f;
+  let next = f;
+  if (next.status === "none" && scope !== "all") next = { ...next, status: "" };
+  // En «Míos» no hay filtro de responsable: uno que quedó de otra vista dejaría la lista vacía.
+  if (next.assigneeId && scope === "mine") next = { ...next, assigneeId: "" };
+  return next;
 }
 
 export function activeFilterCount(f: InboxFilters): number {
@@ -351,6 +355,11 @@ function normalize(text: string): string {
     .toLowerCase();
 }
 
+/** Solo los dígitos de un teléfono: "+51 900 000 008" -> "51900000008". */
+function phoneDigits(text: string): string {
+  return text.replace(/\D/g, "");
+}
+
 export function matchesSearch(conversation: InboxConversation, search: string): boolean {
   const q = normalize(search.trim());
   if (!q) return true;
@@ -360,7 +369,21 @@ export function matchesSearch(conversation: InboxConversation, search: string): 
     conversation.contacts?.phone,
     conversation.last_message_preview,
   ];
-  return fields.some((f) => !!f && normalize(f).includes(q));
+  if (fields.some((f) => !!f && normalize(f).includes(q))) return true;
+  // Un teléfono se busca con o sin espacios, guiones o "+": "900 000 008" encuentra "900000008".
+  const phone = conversation.contacts?.phone;
+  const digits = phoneDigits(q);
+  return !!phone && /^[\d\s().+-]+$/.test(q) && digits.length >= 3 && phoneDigits(phone).includes(digits);
+}
+
+/**
+ * Alcance con el que arranca quien no tiene una vista guardada: Míos, salvo
+ * que supervise equipos y no tenga chats propios (entonces Míos está vacío y
+ * empieza en Equipo).
+ */
+export function initialScope(meta: InboxMeta, mineCount: number): InboxScope {
+  if (mineCount === 0 && meta.supervisedTeamIds.length > 0 && availableScopes(meta).includes("team")) return "team";
+  return DEFAULT_SCOPE;
 }
 
 /** Filas de la bandeja para el alcance, el estado y los filtros, ordenadas por espera. */
@@ -541,11 +564,40 @@ export function filterMembers(members: readonly InboxMember[], query: string, li
     .slice(0, limit);
 }
 
-/** Ids mencionados que siguen presentes en el texto como "@Nombre". */
-export function mentionedIds(text: string, picked: ReadonlyMap<string, string>): string[] {
+/**
+ * Ids mencionados que siguen presentes en el texto como "@Nombre". Con `members`
+ * también cuenta el nombre completo escrito a mano ("@Ana Admin", sin elegirlo
+ * de la lista, sin importar mayúsculas), para que la mención sí avise.
+ */
+export function mentionedIds(
+  text: string,
+  picked: ReadonlyMap<string, string>,
+  members: readonly { userId: string; name: string }[] = [],
+): string[] {
   const ids: string[] = [];
   for (const [userId, name] of picked) {
     if (text.includes(`@${name}`)) ids.push(userId);
+  }
+  // Los nombres más largos primero y se tachan al reconocerlos: "@Ana Pérez" no cuenta también como "@Ana".
+  let lower = text.toLowerCase();
+  const byLength = [...members].sort((x, y) => y.name.trim().length - x.name.trim().length);
+  for (const m of byLength) {
+    const name = m.name.trim().toLowerCase();
+    if (!name) continue;
+    const token = `@${name}`;
+    let from = 0;
+    for (;;) {
+      const at = lower.indexOf(token, from);
+      if (at < 0) break;
+      const next = lower.charAt(at + token.length);
+      // Que el nombre termine ahí ("@Ana" no cuenta dentro de "@Anabel").
+      if (!next || !/[\p{L}\p{N}_]/u.test(next)) {
+        if (!ids.includes(m.userId)) ids.push(m.userId);
+        lower = lower.slice(0, at) + " ".repeat(token.length) + lower.slice(at + token.length);
+        break;
+      }
+      from = at + 1;
+    }
   }
   return ids;
 }

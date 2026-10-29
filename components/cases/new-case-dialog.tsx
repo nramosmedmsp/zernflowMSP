@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { addDays, limaDateOf } from "@/lib/cases/dates";
 import { listContactActiveCases, openManualCase } from "@/lib/actions/cases";
 import { ParallelCaseWarning, hasSameTypeOpen, type ParallelCase } from "./parallel-case-warning";
-import { searchContacts, type ContactSearchResult } from "@/lib/actions/contacts";
+import { createContact, searchContacts, type ContactSearchResult } from "@/lib/actions/contacts";
 
 type AssignMode = "me" | "auto" | "person";
 
@@ -28,6 +28,68 @@ export function NewCaseDialog(props: Props) {
   return props.open ? <NewCaseForm {...props} /> : null;
 }
 
+/** «Crear contacto»: para un cliente nuevo (por ejemplo, una venta por teléfono). */
+function NewContactForm({ initialName, onCreated }: { initialName: string; onCreated: (contact: ContactSearchResult) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create() {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await createContact({ name, phone });
+      if ("error" in res) return setError(res.error);
+      onCreated(res.contact);
+    } catch {
+      setError("No se pudo crear el contacto. Revisa tu conexión e inténtalo de nuevo.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setName(/\d{4,}/.test(initialName) ? "" : initialName.trim());
+          setPhone(/\d{4,}/.test(initialName) ? initialName.trim() : "");
+          setOpen(true);
+        }}
+        className="mt-1 text-xs font-medium text-primary underline"
+      >
+        Crear contacto nuevo
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-border p-3">
+      <p className="text-xs font-medium">Contacto nuevo</p>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" maxLength={100} className={FIELD_CLASS} />
+      <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Teléfono (con código de país)" maxLength={30} className={FIELD_CLASS} />
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => setOpen(false)} className="text-xs text-muted-foreground underline">
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={create}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-xs font-medium text-primary-foreground disabled:opacity-60"
+        >
+          {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+          Crear contacto
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }: Props) {
   const [query, setQuery] = useState("");
   const [loaded, setLoaded] = useState<{ query: string; list: ContactSearchResult[] } | null>(null);
@@ -39,7 +101,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Gestiones abiertas del contacto elegido (M-32): se avisa antes de duplicar.
-  const [active, setActive] = useState<{ contactId: string; cases: ParallelCase[] } | null>(null);
+  const [active, setActive] = useState<{ contactId: string; cases: ParallelCase[]; parallelTypeIds: string[] } | null>(null);
   // Confirmación ligada al contacto: al cambiar de contacto deja de valer.
   const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
   const searchSeq = useRef(0);
@@ -57,9 +119,15 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
     if (contact) return;
     const seq = ++searchSeq.current;
     const timer = setTimeout(async () => {
-      const res = await searchContacts(query);
+      let list: ContactSearchResult[] = [];
+      try {
+        const res = await searchContacts(query);
+        list = "error" in res ? [] : res.contacts;
+      } catch {
+        // Sin conexión: se muestra la lista vacía en vez de dejar «Buscando…».
+      }
       if (seq !== searchSeq.current) return;
-      setLoaded({ query, list: "error" in res ? [] : res.contacts });
+      setLoaded({ query, list });
     }, 300);
     return () => clearTimeout(timer);
   }, [query, contact]);
@@ -67,8 +135,14 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
   useEffect(() => {
     if (!contact) return;
     let cancelled = false;
-    void listContactActiveCases(contact.id).then((res) => {
-      if (!cancelled) setActive({ contactId: contact.id, cases: "error" in res ? [] : res.cases });
+    void listContactActiveCases(contact.id)
+      .catch(() => ({ error: "No se pudo cargar." }) as const)
+      .then((res) => {
+      if (!cancelled) setActive({
+          contactId: contact.id,
+          cases: "error" in res ? [] : res.cases,
+          parallelTypeIds: "error" in res ? [] : res.parallelTypeIds,
+        });
     });
     return () => {
       cancelled = true;
@@ -77,6 +151,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
 
   const confirmParallel = !!contact && confirmedFor === contact.id;
   const existing = contact && active?.contactId === contact.id ? active.cases : [];
+  const sameTypeAllowed = !!caseTypeId && !!active?.parallelTypeIds.includes(caseTypeId);
   const loadingExisting = !!contact && active?.contactId !== contact.id;
 
   const results = loaded?.list ?? [];
@@ -91,24 +166,29 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
     if (scheduling && !caseTypeId) return setError("Elige el tipo de la gestión que vas a programar.");
     if (scheduling && date < tomorrow) return setError("La fecha programada debe ser a partir de mañana.");
     if (!scheduling && mode === "person" && !personId) return setError("Elige a quién asignarla.");
-    if (hasSameTypeOpen(existing, caseTypeId || null)) return setError("Este contacto ya tiene una gestión abierta de ese tipo.");
+    if (hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed)) return setError("Este contacto ya tiene una gestión abierta de ese tipo.");
     if (existing.length > 0 && !confirmParallel) return setError("Confirma que quieres abrir otra gestión en paralelo.");
     setSaving(true);
-    const res = await openManualCase({
-      contactId: contact.id,
-      caseTypeId: caseTypeId || null,
-      assignee: mode === "person" ? personId : mode,
-      scheduledFor: scheduling ? date : null,
-      confirmParallel,
-    });
-    setSaving(false);
-    if ("error" in res) return setError(res.error);
-    onCreated({
-      contactId: contact.id,
-      caseId: res.caseId,
-      status: res.status,
-      scheduledFor: scheduling ? date : null,
-    });
+    try {
+      const res = await openManualCase({
+        contactId: contact.id,
+        caseTypeId: caseTypeId || null,
+        assignee: mode === "person" ? personId : mode,
+        scheduledFor: scheduling ? date : null,
+        confirmParallel,
+      });
+      if ("error" in res) return setError(res.error);
+      onCreated({
+        contactId: contact.id,
+        caseId: res.caseId,
+        status: res.status,
+        scheduledFor: scheduling ? date : null,
+      });
+    } catch {
+      setError("No se pudo abrir la gestión. Revisa tu conexión e inténtalo de nuevo.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -181,6 +261,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
                     ))
                   )}
                 </ul>
+                <NewContactForm initialName={query} onCreated={setContact} />
               </>
             )}
           </div>
@@ -192,6 +273,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
               caseTypeId={caseTypeId || null}
               confirmed={confirmParallel}
               onConfirmedChange={(value) => setConfirmedFor(value && contact ? contact.id : null)}
+              sameTypeAllowed={sameTypeAllowed}
             />
           )}
 
@@ -292,7 +374,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
           </button>
           <button
             onClick={submit}
-            disabled={saving || loadingExisting || hasSameTypeOpen(existing, caseTypeId || null)}
+            disabled={saving || loadingExisting || hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed)}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ALERT_RETRY_MS,
+  alertScopesFor,
   DEFAULT_ALERT_SETTINGS,
   evaluateAlerts,
   inAlertScope,
@@ -165,5 +166,14 @@ describe("evaluateAlerts (M-14): el aviso espera a que llegue la gestión del ch
     expect(open.alertIds).toEqual([]);
     const all = evaluateAlerts({ ...base, scope: "all", before: new Map([["v1", 0]]), conversations: [conv("v1", "c1", 1)], pending: new Map(), casesByContact: noCases });
     expect(all.alertIds).toEqual(["v1"]);
+  });
+});
+
+describe("alertScopesFor (B-34)", () => {
+  it("cada rol ve solo las opciones que puede usar", () => {
+    expect(alertScopesFor({ isAdmin: false, supervisedTeamIds: [], agentSeesQueue: false })).toEqual(["mine"]);
+    expect(alertScopesFor({ isAdmin: false, supervisedTeamIds: [], agentSeesQueue: true })).toEqual(["mine", "mine_and_queue"]);
+    expect(alertScopesFor({ isAdmin: false, supervisedTeamIds: ["t"], agentSeesQueue: false })).toHaveLength(3);
+    expect(alertScopesFor({ isAdmin: true, supervisedTeamIds: [], agentSeesQueue: false })).toHaveLength(3);
   });
 });

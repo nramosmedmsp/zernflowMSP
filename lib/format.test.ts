@@ -6,6 +6,7 @@ import {
   formatPhoneDisplay,
   formatDateTime,
   formatNumber,
+  pluralize,
   formatRelative,
   formatTime,
 } from "./format";
@@ -217,5 +218,13 @@ describe("formatPhoneDisplay", () => {
     expect(formatPhoneDisplay("PE.12AbC9")).toBe("");
     expect(formatPhoneDisplay("123")).toBe("");
     expect(formatPhoneDisplay(null)).toBe("");
+  });
+});
+
+describe("pluralize", () => {
+  it("concuerda el sustantivo con la cantidad", () => {
+    expect(pluralize(1, "contacto", "contactos")).toBe("1 contacto");
+    expect(pluralize(0, "contacto", "contactos")).toBe("0 contactos");
+    expect(pluralize(1234, "mensaje", "mensajes")).toBe("1,234 mensajes");
   });
 });

@@ -100,8 +100,15 @@ describe("processSequenceSteps", () => {
     expect(state.sent).toHaveLength(1);
   });
 
-  it("una variable vacía no manda el mensaje con la llave y registra el motivo en español", async () => {
+  it("sin nombre real, el mensaje sale sin el nombre y bien escrito", async () => {
     seed({ displayName: "+51 987 654 321" });
+    await processSequenceSteps();
+    expect(state.sent).toEqual([{ text: "Hola, ¿cómo vas con tu rutina?" }]);
+    expect(fake.rows("activity").some((a) => a.type === "sequence_step_failed")).toBe(false);
+  });
+
+  it("otra variable vacía (la fecha clave) no manda el mensaje con la llave y registra el motivo en español", async () => {
+    seed({ steps: [{ type: "message", content: "Tu plan vence el {fecha_clave}" }] });
     await processSequenceSteps();
     expect(state.sent).toEqual([]);
     const failure = fake.rows("activity").find((a) => a.type === "sequence_step_failed");

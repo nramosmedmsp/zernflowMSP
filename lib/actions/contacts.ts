@@ -141,6 +141,81 @@ export async function searchContacts(
   };
 }
 
+// ── Crear contacto ─────────────────────────────────────────────────────────
+
+/**
+ * Registra a un cliente nuevo (por ejemplo, una venta por teléfono): nombre y
+ * teléfono. Cualquier miembro puede; queda como su responsable. Si el teléfono
+ * ya existe y la persona ve ese contacto, se devuelve ese en vez de duplicarlo.
+ */
+export async function createContact(input: {
+  name: string;
+  phone: string;
+}): Promise<ContactActionResult<{ contact: ContactSearchResult; existed: boolean }>> {
+  if (!input || typeof input.name !== "string" || typeof input.phone !== "string") return { error: INVALID };
+  const name = input.name.trim().replace(/\s+/g, " ");
+  if (name.length < 2) return { error: "Escribe el nombre del cliente (al menos 2 letras)." };
+  if (name.length > 100) return { error: "El nombre no puede tener más de 100 caracteres." };
+  const phone = normalizePhone(input.phone);
+  if (!phone.ok) return { error: phone.error };
+  if (!phone.value) return { error: "Escribe el teléfono del cliente." };
+
+  const s = await session();
+  if ("error" in s) return s;
+
+  const digits = phone.value.replace(/\D/g, "");
+  const { data: same } = await s.db
+    .from("contacts")
+    .select("id, display_name, phone, email, owner_id, team_id")
+    .eq("workspace_id", s.workspaceId)
+    .in("phone", [phone.value, digits, `+${digits}`])
+    .limit(1)
+    .maybeSingle();
+  if (same) {
+    const summaries = await loadContactCaseSummaries(s.db, same.id);
+    if (!actorSeesContact(s.actor, same, summaries)) {
+      return { error: "Ya existe un contacto con ese teléfono. Pídele a un administrador que te lo asigne." };
+    }
+    return {
+      ok: true,
+      existed: true,
+      contact: { id: same.id, displayName: same.display_name, phone: same.phone, email: same.email },
+    };
+  }
+
+  const { data: def } = await s.db
+    .from("contact_types")
+    .select("id")
+    .eq("workspace_id", s.workspaceId)
+    .eq("is_default", true)
+    .is("archived_at", null)
+    .limit(1)
+    .maybeSingle();
+  const team = s.actor.memberships.find((m) => s.actor.teams.some((t) => t.id === m.teamId))?.teamId ?? null;
+  const { data: created, error } = await s.db
+    .from("contacts")
+    .insert({
+      workspace_id: s.workspaceId,
+      display_name: name,
+      phone: phone.value,
+      owner_id: s.userId,
+      team_id: team,
+      contact_type_id: def?.id ?? null,
+      source: { manual: true },
+    })
+    .select("id, display_name, phone, email")
+    .single();
+  if (error || !created) {
+    console.error("[contacts] create", error?.message);
+    return { error: GENERIC_ERROR };
+  }
+  return {
+    ok: true,
+    existed: false,
+    contact: { id: created.id, displayName: created.display_name, phone: created.phone, email: created.email },
+  };
+}
+
 // ── Cambios de la ficha ────────────────────────────────────────────────────
 
 /** Tipo de contacto: cualquiera que vea el contacto. null lo quita. */

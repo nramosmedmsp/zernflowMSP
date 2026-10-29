@@ -11,10 +11,20 @@ import { cn } from "@/lib/utils";
 import { commitmentOptions } from "./case-card-model";
 import { inputClass, primaryButtonClass } from "./ui";
 
+// Borradores de la nota por gestión: si se cierra el formulario por un error o
+// con Esc, al volver a abrirlo lo escrito sigue ahí (solo en memoria).
+const noteDrafts = new Map<string, string>();
+
+/** Descarta el borrador de la gestión (ya se guardó la solución). */
+export function clearSolutionDraft(caseId: string): void {
+  noteDrafts.delete(caseId);
+}
+
 const chip =
   "rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-60";
 
 export function SolutionForm({
+  caseId,
   initialNote,
   initialCommitment,
   now,
@@ -22,6 +32,8 @@ export function SolutionForm({
   error,
   onSave,
 }: {
+  /** Para conservar lo escrito si el formulario se cierra sin guardar. */
+  caseId?: string;
   initialNote: string | null;
   /** Fecha compromiso ya registrada (ISO), si se está actualizando. */
   initialCommitment: string | null;
@@ -32,7 +44,14 @@ export function SolutionForm({
   onSave: (note: string, commitmentAt: string) => void;
 }) {
   const options = now === null ? [] : commitmentOptions(new Date(now));
-  const [note, setNote] = useState(initialNote ?? "");
+  const [note, setNoteState] = useState(() => (caseId ? noteDrafts.get(caseId) : undefined) ?? initialNote ?? "");
+  function setNote(value: string) {
+    setNoteState(value);
+    if (caseId) {
+      if (value.trim()) noteDrafts.set(caseId, value);
+      else noteDrafts.delete(caseId);
+    }
+  }
   // "custom" = fecha y hora elegidas a mano; si no, la clave de una opción rápida.
   const [choice, setChoice] = useState<string>(initialCommitment ? "custom" : "tomorrow");
   const [date, setDate] = useState(initialCommitment ? limaDateOf(new Date(initialCommitment)) : "");
