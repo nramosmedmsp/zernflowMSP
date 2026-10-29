@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyStatusUpdate, attachLocalMeta, attachMedia, mapZernioMessage, strongerStatus, mergeMessages, pageLimit, sortMessages, type InboxMessage } from "./inbox-messages";
+import { applyStatusUpdate, attachLocalMeta, attachMedia, failedBotMessages, mapZernioMessage, strongerStatus, mergeMessages, pageLimit, sortMessages, type InboxMessage } from "./inbox-messages";
 import { deliveryErrorText } from "./delivery-errors";
 
 describe("mapZernioMessage", () => {
@@ -167,5 +167,57 @@ describe("autor y estado registrados", () => {
     expect(next[0].status).toBe("delivered");
     expect(applyStatusUpdate(next, { platform_message_id: "w2", status: "delivered" })).toBe(next);
     expect(applyStatusUpdate(list, { platform_message_id: null, status: "read" })).toBe(list);
+  });
+});
+
+describe("failedBotMessages (M-10)", () => {
+  const row = (over: Record<string, unknown>) =>
+    ({
+      id: "r1",
+      conversation_id: "c",
+      direction: "outbound",
+      text: "Menú: 1) Precios",
+      attachments: null,
+      quick_reply_payload: null,
+      postback_payload: null,
+      callback_data: null,
+      platform_message_id: null,
+      sent_by_flow_id: "f1",
+      sent_by_node_id: null,
+      sent_by_user_id: null,
+      status: "failed",
+      status_at: null,
+      error_code: null,
+      error_text: "Zernio rechazó el mensaje",
+      client_message_id: null,
+      created_at: "2026-10-28T10:00:00Z",
+      ...over,
+    }) as never;
+  const loaded = [{ id: "a", created_at: "2026-10-28T09:00:00Z" }] as unknown as InboxMessage[];
+
+  it("muestra el envío fallido del bot con su motivo", () => {
+    const out = failedBotMessages([row({})], loaded, false);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: "r1", direction: "outbound", status: "failed", error: "Zernio rechazó el mensaje", sent_by_flow_id: "f1" });
+  });
+
+  it("no mezcla lo que Zernio ya lista, lo enviado bien ni los envíos de asesores", () => {
+    const out = failedBotMessages(
+      [
+        row({ id: "ok", status: "sent" }),
+        row({ id: "con-id", platform_message_id: "wamid.9" }),
+        row({ id: "asesor", sent_by_flow_id: null }),
+        row({ id: "entrante", direction: "inbound" }),
+      ],
+      loaded,
+      false,
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it("con páginas anteriores pendientes solo entran los posteriores al mensaje más antiguo cargado", () => {
+    const old = row({ id: "viejo", created_at: "2026-10-27T08:00:00Z" });
+    expect(failedBotMessages([old], loaded, true)).toHaveLength(0);
+    expect(failedBotMessages([old], loaded, false)).toHaveLength(1);
   });
 });

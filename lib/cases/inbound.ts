@@ -23,6 +23,7 @@ import { reopenWindowMs } from "./protection";
 import { notifySupervisors } from "./supervisors";
 import type { CaseMessenger } from "./messaging";
 import { sendOffHoursReply, type OffHoursReplyOutcome } from "./off-hours";
+import { cancelActiveSessions } from "@/lib/flow-engine/waiting-session";
 import { botOutboundPatch, humanOutboundPatch, inboundPatch, shouldReopen } from "./rules";
 
 interface ReopenType {
@@ -429,20 +430,37 @@ export async function handleHumanOutbound(
     }
   }
 
+  await pauseBotForHuman(db, { workspaceId: row.workspace_id, contactId: row.contact_id, conversationId: params.conversationId });
+}
+
+/**
+ * Una persona escribió en el chat: el bot se pausa (se reanuda al cerrar la
+ * gestión) y se cancelan sus esperas activas en ese canal, para que no se
+ * retomen fuera de contexto ni sigan enviando después (M-11, B-16).
+ */
+async function pauseBotForHuman(
+  db: Db,
+  params: { workspaceId: string; contactId: string; conversationId?: string | null },
+): Promise<void> {
   let pause = db
     .from("conversations")
     .update({ is_automation_paused: true })
-    .eq("workspace_id", row.workspace_id)
-    .eq("contact_id", row.contact_id);
+    .eq("workspace_id", params.workspaceId)
+    .eq("contact_id", params.contactId);
   if (params.conversationId) pause = pause.eq("id", params.conversationId);
-  const { error: pauseError } = await pause;
-  if (pauseError) console.error("[cases] pause automation", pauseError.message);
+  const { data: paused, error: pauseError } = await pause.select("id, channel_id");
+  if (pauseError) {
+    console.error("[cases] pause automation", pauseError.message);
+    return;
+  }
+  const channelIds = [...new Set((paused ?? []).map((c) => c.channel_id))];
+  await cancelActiveSessions(db, { contactId: params.contactId, channelIds });
 }
 
 /**
  * Respuesta humana enviada en una conversación: la aplica a la gestión
  * abierta activa del contacto (la asignada a quien responde, o la más
- * reciente). Sin gestión abierta no hace nada.
+ * reciente). Sin gestión abierta solo pausa el bot.
  */
 export async function handleHumanOutboundForConversation(
   db: Db,
@@ -450,7 +468,7 @@ export async function handleHumanOutboundForConversation(
 ): Promise<void> {
   const { data: conversation } = await db
     .from("conversations")
-    .select("id, contact_id")
+    .select("id, contact_id, workspace_id")
     .eq("id", params.conversationId)
     .maybeSingle();
   if (!conversation) return;
@@ -460,7 +478,16 @@ export async function handleHumanOutboundForConversation(
     .eq("contact_id", conversation.contact_id)
     .eq("status", "open")
     .order("opened_at", { ascending: false, nullsFirst: false });
-  if (!open || open.length === 0) return;
+  if (!open || open.length === 0) {
+    // Sin gestión abierta no hay nada que sellar, pero una persona está
+    // hablando: el bot no debe contestar encima de la conversación (M-12).
+    await pauseBotForHuman(db, {
+      workspaceId: conversation.workspace_id,
+      contactId: conversation.contact_id,
+      conversationId: conversation.id,
+    });
+    return;
+  }
   const target = open.find((c) => c.assignee_id === params.userId) ?? open[0];
   await handleHumanOutbound(db, {
     caseId: target.id,

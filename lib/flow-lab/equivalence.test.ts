@@ -41,6 +41,17 @@ import { loadLabCatalog } from "./load-catalog";
 import { createLabState } from "./state";
 import type { LabCatalog, LabState, LabTrace } from "./types";
 
+/**
+ * matchTrigger desempata por prioridad, antigüedad e id (B-17): con ids al azar
+ * (los de FakeDb) dos disparadores empatados saldrían en cualquier orden. Aquí
+ * los ids crecen en el orden en que se instalan, como el orden de inserción
+ * que sigue el laboratorio.
+ */
+let triggerSeq = 0;
+function withOrderedIds(rows: Row[]): Row[] {
+  return rows.map((r) => ({ ...r, id: `trg-${String(++triggerSeq).padStart(6, "0")}` }));
+}
+
 type Row = Record<string, unknown>;
 type ChannelRow = Database["public"]["Tables"]["channels"]["Row"];
 
@@ -140,7 +151,7 @@ class Harness {
       const resolved = resolveFlowTemplate(template, templateCatalog);
       const flowId = `flow-${template.id}`;
       fake.seed("flows", [{ id: flowId, workspace_id: WS, name: template.name, status: "published", nodes: resolved.nodes, edges: resolved.edges }]);
-      fake.seed("triggers", buildDesiredTriggers(resolved.nodes as unknown as Array<Record<string, unknown>>, flowId) as unknown as Row[]);
+      fake.seed("triggers", withOrderedIds(buildDesiredTriggers(resolved.nodes as unknown as Array<Record<string, unknown>>, flowId) as unknown as Row[]));
     }
 
     this.catalog = await loadLabCatalog(WS, { db: this.db });
@@ -492,7 +503,7 @@ describe("equivalencia con el motor real", () => {
       { id: "e3", source: "w", target: "s" },
     ];
     h.fake.seed("flows", [{ id: flowId, workspace_id: WS, name: "Menú de sedes", status: "published", nodes, edges }]);
-    h.fake.seed("triggers", buildDesiredTriggers(nodes as unknown as Array<Record<string, unknown>>, flowId) as unknown as Row[]);
+    h.fake.seed("triggers", withOrderedIds(buildDesiredTriggers(nodes as unknown as Array<Record<string, unknown>>, flowId) as unknown as Row[]));
     h.catalog = await loadLabCatalog(WS, { db: h.db });
     h.state = createLabState(h.catalog, {
       clock: START,

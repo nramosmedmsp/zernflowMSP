@@ -7,7 +7,6 @@ import {
   Clock,
   Tag,
   FileText,
-  Globe,
   ArrowRightLeft,
   UserCheck,
   Bell,
@@ -137,13 +136,8 @@ const categories: PaletteCategory[] = [
         icon: FileText,
         actionType: "setCustomField",
       },
-      {
-        type: "action",
-        nodeType: "httpRequest",
-        label: "Solicitud HTTP",
-        icon: Globe,
-        actionType: "httpRequest",
-      },
+      // "Solicitud HTTP" (httpRequest) ya no se ofrece para agregar nodos
+      // nuevos; el motor y los flujos existentes siguen soportándolo.
       {
         type: "action",
         nodeType: "goToFlow",

@@ -14,7 +14,6 @@ import {
 import { resolveSegmentContacts, type SegmentContactRow } from "./resolve";
 import type { SegmentFilter } from "./segment";
 import { buildContactTemplateParams, needsCustomFields } from "./variables";
-import { windowCutoffIso } from "./window";
 
 export interface BroadcastPlan {
   kind: "text" | "template";
@@ -44,7 +43,6 @@ async function loadCandidates(
   workspaceId: string,
   contacts: SegmentContactRow[],
   withConversations: boolean,
-  now: number,
 ): Promise<ContactCandidate[]> {
   const ids = contacts.map((c) => c.id);
   const wanted = new Set(ids);
@@ -59,44 +57,29 @@ async function loadCandidates(
     linksByContact.set(l.contact_id, list);
   }
 
-  const convsByContact = new Map<string, { id: string; channelId: string; lateConversationId: string | null }[]>();
-  const lastInbound = new Map<string, string>();
+  const convsByContact = new Map<string, { id: string; channelId: string; lateConversationId: string | null; lastInboundAt: string | null }[]>();
   if (withConversations) {
-    const conversations = await pageAll<{ id: string; contact_id: string; channel_id: string; late_conversation_id: string | null }>(
-      (from, to) =>
-        db
-          .from("conversations")
-          .select("id, contact_id, channel_id, late_conversation_id")
-          .eq("workspace_id", workspaceId)
-          .order("id")
-          .range(from, to),
+    // El último mensaje del cliente vive en la conversación (conversations.last_inbound_at):
+    // en los canales reales los mensajes los guarda Zernio, no la tabla `messages`.
+    const conversations = await pageAll<{
+      id: string;
+      contact_id: string;
+      channel_id: string;
+      late_conversation_id: string | null;
+      last_inbound_at: string | null;
+    }>((from, to) =>
+      db
+        .from("conversations")
+        .select("id, contact_id, channel_id, late_conversation_id, last_inbound_at")
+        .eq("workspace_id", workspaceId)
+        .order("id")
+        .range(from, to),
     );
-    const relevant = conversations.filter((c) => wanted.has(c.contact_id));
-    for (const c of relevant) {
+    for (const c of conversations) {
+      if (!wanted.has(c.contact_id)) continue;
       const list = convsByContact.get(c.contact_id) ?? [];
-      list.push({ id: c.id, channelId: c.channel_id, lateConversationId: c.late_conversation_id });
+      list.push({ id: c.id, channelId: c.channel_id, lateConversationId: c.late_conversation_id, lastInboundAt: c.last_inbound_at });
       convsByContact.set(c.contact_id, list);
-    }
-
-    // Mensajes entrantes de las últimas 24 h: basta el más reciente de cada conversación.
-    const cutoff = windowCutoffIso(now);
-    const convIds = relevant.map((c) => c.id);
-    for (let i = 0; i < convIds.length; i += 200) {
-      const part = convIds.slice(i, i + 200);
-      const inbound = await pageAll<{ conversation_id: string; created_at: string }>((from, to) =>
-        db
-          .from("messages")
-          .select("conversation_id, created_at")
-          .eq("direction", "inbound")
-          .gte("created_at", cutoff)
-          .in("conversation_id", part)
-          .order("created_at", { ascending: false })
-          .range(from, to),
-      );
-      for (const m of inbound) {
-        const prev = lastInbound.get(m.conversation_id);
-        if (!prev || m.created_at > prev) lastInbound.set(m.conversation_id, m.created_at);
-      }
     }
   }
 
@@ -107,7 +90,7 @@ async function loadCandidates(
     conversations: (convsByContact.get(c.id) ?? []).map((conv) => ({
       channelId: conv.channelId,
       lateConversationId: conv.lateConversationId,
-      lastInboundAt: lastInbound.get(conv.id) ?? null,
+      lastInboundAt: conv.lastInboundAt,
     })),
   }));
 }
@@ -121,7 +104,7 @@ export async function planBroadcast(
 ): Promise<BroadcastPlan> {
   const contacts = await resolveSegmentContacts(db, workspaceId, filter);
   const channels = await loadChannels(db, workspaceId);
-  const candidates = await loadCandidates(db, workspaceId, contacts, content.kind === "text", now);
+  const candidates = await loadCandidates(db, workspaceId, contacts, content.kind === "text");
 
   const excluded = { noConversation: 0, closedWindow: 0, noPhone: 0, emptyVariable: 0 };
 

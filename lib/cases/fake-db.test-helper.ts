@@ -96,6 +96,7 @@ const DEFAULTS: Record<string, () => Row> = {
   conversations: () => ({
     is_automation_paused: false,
     unread_count: 0,
+    last_inbound_at: null,
     complaint_flagged_at: null,
     complaint_excerpt: null,
     complaint_alerted_at: null,
@@ -124,6 +125,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
   private filters: Filter[] = [];
   private orders: { col: string; asc: boolean; nullsFirst: boolean }[] = [];
   private limitN: number | null = null;
+  private rangeFrom = 0;
   private returning = false;
   private head = false;
   private count = false;
@@ -235,6 +237,12 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     this.limitN = n;
     return this;
   }
+  /** Filas desde la posición `from` hasta `to` (ambas incluidas), como PostgREST. */
+  range(from: number, to: number) {
+    this.rangeFrom = from;
+    this.limitN = to - from + 1;
+    return this;
+  }
   single() {
     this.one = "single";
     return this;
@@ -264,6 +272,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         return 0;
       });
     }
+    if (this.rangeFrom > 0) result = result.slice(this.rangeFrom);
     if (this.limitN !== null) result = result.slice(0, this.limitN);
     const data = clone(result);
     if (this.one === "single") {
@@ -292,6 +301,15 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
       }
       case "insert": {
         const list = Array.isArray(this.payload) ? this.payload : [this.payload as Row];
+        this.db.beforeInsert.get(this.table)?.();
+        // Restricciones únicas opt-in (FakeDb.unique): imita el error 23505 de Postgres.
+        for (const r of list) {
+          for (const cols of this.db.uniques.get(this.table) ?? []) {
+            if (this.db.rows(this.table).some((x) => cols.every((c) => x[c] === r[c]))) {
+              return { data: null, error: { code: "23505", message: `duplicate key (${cols.join(", ")})` } };
+            }
+          }
+        }
         const inserted = list.map((r) => this.db.insertRow(this.table, r));
         if (!this.returning) return { data: null, error: null };
         return this.finish(inserted);
@@ -330,6 +348,11 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
       case "delete": {
         const rows = this.matching();
         this.db.tables[this.table] = this.db.rows(this.table).filter((r) => !rows.includes(r));
+        // ON DELETE CASCADE de contact_channels (00001).
+        if (this.table === "contacts") {
+          const gone = new Set(rows.map((r) => r.id));
+          this.db.tables.contact_channels = this.db.rows("contact_channels").filter((l) => !gone.has(l.contact_id));
+        }
         return { data: this.returning ? clone(rows) : null, error: null };
       }
       default:
@@ -350,6 +373,14 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
 export class FakeDb {
   tables: Record<string, Row[]> = {};
   failNext = new Map<string, string>();
+  /** Restricciones únicas (columnas) por tabla; solo las que la prueba declara con `unique()`. */
+  uniques = new Map<string, string[][]>();
+  /** Se ejecuta justo antes de cada inserción en la tabla (para simular una carrera con otra solicitud). */
+  beforeInsert = new Map<string, () => void>();
+
+  unique(table: string, cols: string[]): void {
+    this.uniques.set(table, [...(this.uniques.get(table) ?? []), cols]);
+  }
   users = new Map<string, { id: string; email: string; user_metadata: Record<string, unknown> }>();
 
   rows(table: string): Row[] {

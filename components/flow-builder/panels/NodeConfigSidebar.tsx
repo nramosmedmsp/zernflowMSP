@@ -45,7 +45,8 @@ function getFlowVariables({
   nodes: Node[];
   edges: Edge[];
 }): string[] {
-  const variables = ["message"];
+  // Mensaje del cliente y datos del contacto que el bot carga solo (lib/flow-engine/contact-variables.ts).
+  const variables = ["message", "nombre", "fecha_clave", "empresa"];
 
   const triggerNode = nodes.find((n) => n.type === "trigger");
   const triggerType = (triggerNode?.data as Record<string, unknown> | undefined)

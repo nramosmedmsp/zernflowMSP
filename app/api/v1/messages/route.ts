@@ -10,6 +10,7 @@ import { zernioErrorMessage, zernioFailed, zernioThrown } from "../templates/zer
 import {
   attachLocalMeta,
   attachMedia,
+  failedBotMessages,
   fromLocalMessage,
   mapZernioMessage,
   pageLimit,
@@ -130,8 +131,23 @@ export async function GET(request: NextRequest) {
 
     const nextCursor = data?.pagination?.nextCursor ?? null;
     const hasMore = !!data?.pagination?.hasMore && !!nextCursor;
+    // Los envíos del bot que fallaron solo existen en `messages`: se muestran como "no enviado".
+    const { data: failedRows } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "outbound")
+      .eq("status", "failed")
+      .is("platform_message_id", null)
+      .not("sent_by_flow_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    const withBotFailures = [...messages, ...failedBotMessages((failedRows ?? []) as MessageRow[], messages, hasMore)];
     const page: MessagesPage = {
-      messages: await withLocalMeta(supabase, await withMedia(supabase, sortMessages(messages), conversationId), conversationId),
+      messages: await withFlowNames(
+        supabase,
+        await withLocalMeta(supabase, await withMedia(supabase, sortMessages(withBotFailures), conversationId), conversationId),
+      ),
       olderCursor: hasMore ? nextCursor : null,
       hasMore,
     };

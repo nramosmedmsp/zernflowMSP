@@ -6,6 +6,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { groupCasesByContact, type InboxCase, type InboxConversation } from "./inbox-model";
+import {
+  CASES_REFRESH_INTERVAL_MS,
+  CASES_REFRESH_MIN_GAP_MS,
+  dropHiddenConversations,
+  lostContactIds,
+  replaceActiveCases,
+} from "./inbox-refresh";
+
+const MAX_ACTIVE_CASES = 1000;
 
 function isActive(c: InboxCase): boolean {
   return c.status === "open" || c.status === "scheduled";
@@ -66,6 +75,58 @@ export function useInboxData({
       .in("status", ["open", "scheduled"]);
     setCases((prev) => [...prev.filter((c) => c.contact_id !== contactId), ...((data ?? []) as InboxCase[])]);
   }, []);
+
+  // M-19: la gestión que se reasignó a otro asesor deja de llegarle a este por
+  // Realtime (la RLS ya no se la muestra). Se vuelven a pedir las activas al
+  // volver a la pestaña, cada 60 s y a pedido, y se quita lo que ya no se ve.
+  const casesRef = useRef(cases);
+  useEffect(() => {
+    casesRef.current = cases;
+  }, [cases]);
+  const lastRefresh = useRef(0);
+  const refreshActiveCases = useCallback(
+    async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastRefresh.current < CASES_REFRESH_MIN_GAP_MS) return;
+      lastRefresh.current = now;
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("cases")
+        .select("*")
+        .eq("workspace_id", workspaceId)
+        .in("status", ["open", "scheduled"])
+        .order("waiting_since", { ascending: true, nullsFirst: false })
+        .limit(MAX_ACTIVE_CASES);
+      if (error || !data) return;
+      const fresh = replaceActiveCases(data as InboxCase[]);
+      const lost = lostContactIds(casesRef.current, fresh);
+      setCases(fresh);
+      if (lost.length === 0) return;
+      const { data: visible, error: visibleError } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("workspace_id", workspaceId)
+        .in("contact_id", lost);
+      if (visibleError || !visible) return;
+      const visibleIds = new Set(visible.map((c) => c.id as string));
+      setConversations((prev) => dropHiddenConversations(prev, lost, visibleIds));
+    },
+    [workspaceId],
+  );
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshActiveCases();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    const timer = setInterval(onVisible, CASES_REFRESH_INTERVAL_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      clearInterval(timer);
+    };
+  }, [refreshActiveCases]);
 
   const markConversationRead = useCallback((conversationId: string) => {
     setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, unread_count: 0 } : c)));
@@ -143,6 +204,7 @@ export function useInboxData({
     casesByContact,
     ensureContactConversations,
     refreshContactCases,
+    refreshActiveCases,
     markConversationRead,
   };
 }

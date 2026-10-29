@@ -7,8 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   alertSettingsKey,
-  inAlertScope,
-  newMessageIds,
+  evaluateAlerts,
   parseAlertSettings,
   titleWithCount,
   unreadChatsInScope,
@@ -93,18 +92,28 @@ export function useNewMessageAlerts({
     latest.current = { settings, casesByContact, selectedId, onOpen };
   }, [settings, casesByContact, selectedId, onOpen]);
 
+  const pending = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     const before = previous.current;
     previous.current = unreadSnapshot(conversations);
     if (!before) return;
-    const { settings: s, casesByContact: cases, selectedId: open } = latest.current;
-    if (!s.sound && !s.desktop) return;
+    const { settings: s, selectedId: open } = latest.current;
     const visible = document.visibilityState === "visible";
-    const fresh = newMessageIds(before, conversations)
-      .map((id) => conversations.find((c) => c.id === id)!)
-      .filter((c) => inAlertScope(cases.get(c.contact_id), userId, s.scope))
-      // El chat que estás mirando no avisa.
-      .filter((c) => !(visible && c.id === open));
+    // Se evalúa aunque el sonido esté apagado para no acumular pendientes viejos.
+    const result = evaluateAlerts({
+      before,
+      conversations,
+      pending: pending.current,
+      casesByContact,
+      userId,
+      scope: s.scope,
+      openId: open,
+      visible,
+      now: Date.now(),
+    });
+    pending.current = result.pending;
+    if (!s.sound && !s.desktop) return;
+    const fresh = result.alertIds.map((id) => conversations.find((c) => c.id === id)!);
     if (fresh.length === 0) return;
 
     if (s.sound) playChime();
@@ -122,7 +131,7 @@ export function useNewMessageAlerts({
         };
       }
     }
-  }, [conversations, userId]);
+  }, [conversations, casesByContact, userId]);
 
   // Número en la pestaña.
   const count = settings.tabCount ? unreadChatsInScope(conversations, casesByContact, userId, settings.scope) : 0;

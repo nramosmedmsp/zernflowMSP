@@ -108,6 +108,14 @@ async function readCapped(res: Response, cap: number): Promise<Uint8Array | "too
   return out;
 }
 
+/** Veces que se intenta copiar un archivo recibido antes de darlo por perdido (M-13). */
+export const MAX_MEDIA_ATTEMPTS = 3;
+
+/** ¿Se puede volver a intentar la copia? Solo los "fallidos" (no los muy pesados ni los vencidos) y con límite. */
+export function canRetryMedia(row: { status: string; fetch_attempts?: number | null }): boolean {
+  return row.status === "failed" && (row.fetch_attempts ?? 1) < MAX_MEDIA_ATTEMPTS;
+}
+
 export interface InboundAttachmentInput {
   type?: string | null;
   url?: string | null;
@@ -158,6 +166,11 @@ export async function storeInboundMedia(
     apiKey: string | null;
     /** Índice del primer adjunto de la lista (por defecto 0). */
     firstIndex?: number;
+    /**
+     * Reintento de un archivo que había fallado: reemplaza la fila existente y
+     * guarda en cuántos intentos va. Sin esto, una fila ya registrada se respeta.
+     */
+    retryAttempt?: number;
   },
 ): Promise<void> {
   const list = params.attachments.slice(0, 5);
@@ -182,22 +195,28 @@ export async function storeInboundMedia(
           size = fetched.bytes.byteLength;
         }
       }
-      const { error } = await service.from("message_media").upsert(
-        {
-          workspace_id: params.workspaceId,
-          conversation_id: params.conversationId,
-          platform_message_id: params.platformMessageId,
-          attachment_index: index,
-          direction: "inbound",
-          kind: fetched.kind,
-          storage_path: storagePath,
-          mime_type: mime,
-          file_name: att.filename ? safeFileName(att.filename) : null,
-          size_bytes: size,
-          status,
-        },
-        { onConflict: "conversation_id,platform_message_id,attachment_index", ignoreDuplicates: true },
-      );
+      const row = {
+        workspace_id: params.workspaceId,
+        conversation_id: params.conversationId,
+        platform_message_id: params.platformMessageId,
+        attachment_index: index,
+        direction: "inbound" as const,
+        kind: fetched.kind,
+        storage_path: storagePath,
+        mime_type: mime,
+        file_name: att.filename ? safeFileName(att.filename) : null,
+        size_bytes: size,
+        status,
+        fetch_attempts: params.retryAttempt ?? 1,
+      };
+      // En un reintento sin nombre de archivo se conserva el que ya estaba guardado.
+      if (params.retryAttempt !== undefined && !att.filename) delete (row as Partial<typeof row>).file_name;
+      const { error } = await service
+        .from("message_media")
+        .upsert(row, {
+          onConflict: "conversation_id,platform_message_id,attachment_index",
+          ignoreDuplicates: params.retryAttempt === undefined,
+        });
       if (error) console.error("[media] message_media inbound", error.message);
     }),
   );

@@ -897,6 +897,8 @@ export interface Database {
           last_message_preview: string | null;
           unread_count: number;
           is_automation_paused: boolean;
+          /** Último mensaje del cliente (00032); base de la ventana de 24 h. */
+          last_inbound_at: string | null;
           // ── Detector de reclamos (00029) ──
           complaint_flagged_at: string | null;
           complaint_excerpt: string | null;
@@ -918,6 +920,7 @@ export interface Database {
           last_message_preview?: string | null;
           unread_count?: number;
           is_automation_paused?: boolean;
+          last_inbound_at?: string | null;
           complaint_flagged_at?: string | null;
           complaint_excerpt?: string | null;
           complaint_alerted_at?: string | null;
@@ -933,6 +936,7 @@ export interface Database {
           last_message_preview?: string | null;
           unread_count?: number;
           is_automation_paused?: boolean;
+          last_inbound_at?: string | null;
           complaint_flagged_at?: string | null;
           complaint_excerpt?: string | null;
           complaint_alerted_at?: string | null;
@@ -978,6 +982,8 @@ export interface Database {
           size_bytes: number | null;
           status: MessageMediaStatus;
           uploaded_by: string | null;
+          /** Intentos de copiar el archivo (00032). */
+          fetch_attempts: number;
           created_at: string;
         };
         Insert: {
@@ -994,11 +1000,13 @@ export interface Database {
           size_bytes?: number | null;
           status?: MessageMediaStatus;
           uploaded_by?: string | null;
+          fetch_attempts?: number;
           created_at?: string;
         };
         Update: {
           storage_path?: string | null;
           status?: MessageMediaStatus;
+          fetch_attempts?: number;
         };
         Relationships: [
           {

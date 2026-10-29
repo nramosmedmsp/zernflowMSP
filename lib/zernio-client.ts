@@ -9,6 +9,12 @@ import Zernio from "@zernio/node";
 
 export type { Zernio };
 
-export function createZernioClient(apiKey: string): Zernio {
-  return new Zernio({ apiKey });
+/**
+ * Tiempo máximo de cada llamada. El SDK espera 5 minutos por defecto: un envío
+ * colgado dejaría sin respuesta al webhook o al cron (límite de 60 s).
+ */
+export const ZERNIO_TIMEOUT_MS = 20_000;
+
+export function createZernioClient(apiKey: string, options: { timeoutMs?: number } = {}): Zernio {
+  return new Zernio({ apiKey, timeout: options.timeoutMs ?? ZERNIO_TIMEOUT_MS });
 }

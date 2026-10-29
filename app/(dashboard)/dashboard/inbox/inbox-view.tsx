@@ -14,6 +14,7 @@ import { useContactCases } from "@/components/inbox/use-contact-cases";
 import { useCaseNotes } from "@/components/inbox/use-case-notes";
 import type { InboxCase, InboxConversation, InboxMeta, InboxRow } from "@/components/inbox/inbox-model";
 import { createClient } from "@/lib/supabase/client";
+import { persistConversationRead } from "@/lib/inbox-read";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { outboxMessages } from "@/lib/inbox-outbox";
@@ -187,7 +188,7 @@ export function InboxView({
     const markRead = () => {
       if (document.hidden) return;
       markConversationRead(selectedId);
-      void createClient().from("conversations").update({ unread_count: 0 }).eq("id", selectedId);
+      void persistConversationRead(createClient(), selectedId);
     };
     markRead();
     document.addEventListener("visibilitychange", markRead);

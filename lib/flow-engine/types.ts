@@ -217,6 +217,8 @@ export interface DistributeCaseNodeData {
 }
 
 export interface FlowExecutionContext {
+  /** Flujos que ya saltaron uno a otro en esta ejecución (protección contra bucles de «Ir a flujo»). */
+  goToChain?: string[];
   triggerId: string;
   flowId: string;
   channelId: string;

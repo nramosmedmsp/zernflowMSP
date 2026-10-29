@@ -23,6 +23,7 @@ import type { CaseMessenger } from "./messaging";
 import { detectClientNoReply } from "./no-reply";
 import { reassignWaitingCases } from "./reassign";
 import { resolveTargetTeamId } from "./routing";
+import { resumeIdlePausedBots } from "./bot-resume";
 import { alertUnhandledComplaints } from "./complaint";
 import { solutionDueAt } from "./protection";
 
@@ -45,6 +46,8 @@ export interface CaseTaskStats {
   solutionAlerts: number;
   commitmentAlerts: number;
   complaintAlerts: number;
+  /** Bots reanudados por llevar 24 h sin mensaje humano y sin gestión abierta. */
+  botsResumed: number;
   stoppedEarly: boolean;
 }
 
@@ -660,6 +663,7 @@ export async function runCaseTasks(
     solutionAlerts: 0,
     commitmentAlerts: 0,
     complaintAlerts: 0,
+    botsResumed: 0,
     stoppedEarly: false,
   };
 
@@ -742,6 +746,14 @@ export async function runCaseTasks(
       async () => {
         const r = await alertUnhandledComplaints(db, { deadline: opts.deadline, now: opts.now });
         stats.complaintAlerts = r.alerted;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "bot_resume",
+      async () => {
+        const r = await resumeIdlePausedBots(db, { deadline: opts.deadline, now: opts.now });
+        stats.botsResumed = r.resumed;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],

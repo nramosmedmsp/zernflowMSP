@@ -134,7 +134,10 @@ export function simulateFlow(
 
   // Estado simulado del contacto y la gestión: los nodos lo modifican y las
   // condiciones lo leen (igual que el motor, que escribe en la base).
-  const variables: Record<string, string> = resume ? { ...resume.variables } : { message: config.incomingMessage };
+  // Los datos del contacto (nombre, fecha clave, empresa) son de ejemplo: la prueba no tiene un contacto real.
+  const variables: Record<string, string> = resume
+    ? { ...resume.variables }
+    : { message: config.incomingMessage, nombre: "María", fecha_clave: "", empresa: "Tu tienda" };
   const tags = new Set<string>(resume ? resume.tags : (config.mockContact?.tags ?? []));
   const customFields: Record<string, string> = resume ? { ...resume.customFields } : { ...(config.mockContact?.customFields ?? {}) };
   let isSubscribed = resume ? resume.isSubscribed : (config.mockContact?.isSubscribed ?? true);
@@ -297,6 +300,7 @@ export function simulateFlow(
         const messages = (data.messages as RawMessage[]) || [];
         const texts = messages
           .filter((m) => m.text)
+          // En la prueba una variable desconocida se deja visible para detectar errores de escritura; el envío real la deja vacía.
           .map((m) => interpolate(m.text!, variables));
         const buttons: SimulatedButton[] = [
           ...messages.flatMap((m) => m.buttons ?? []),

@@ -4,6 +4,7 @@
 // pausa solo cuando una persona responde (handleHumanOutbound) y se reanuda al
 // quedar el contacto sin gestiones abiertas (resumeAutomationIfIdle).
 
+import { cancelActiveSessions } from "@/lib/flow-engine/waiting-session";
 import { GENERIC_ERROR, logActivity, type Db, type EngineResult } from "./io";
 
 export async function setConversationBotPaused(
@@ -19,7 +20,7 @@ export async function setConversationBotPaused(
 ): Promise<EngineResult<{ paused: boolean; changed: boolean }>> {
   const { data: conversation } = await db
     .from("conversations")
-    .select("id, contact_id, is_automation_paused")
+    .select("id, contact_id, channel_id, is_automation_paused")
     .eq("id", params.conversationId)
     .eq("workspace_id", params.workspaceId)
     .maybeSingle();
@@ -37,6 +38,9 @@ export async function setConversationBotPaused(
     console.error("[cases] set bot paused", error.message);
     return { error: GENERIC_ERROR };
   }
+
+  // Pausar a mano también corta lo que el bot dejó esperando (M-11).
+  if (params.paused) await cancelActiveSessions(db, { contactId: conversation.contact_id, channelIds: [conversation.channel_id] });
 
   await logActivity(db, {
     workspace_id: params.workspaceId,

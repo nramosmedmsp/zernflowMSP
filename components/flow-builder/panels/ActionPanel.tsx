@@ -302,27 +302,14 @@ function GoToFlowConfig({ data, onChange }: ActionSubPanelProps) {
           className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
         />
         <p className="mt-1.5 text-xs text-muted-foreground">
-          El contacto será derivado a este flujo.
+          El contacto será derivado a este flujo (debe ser de este espacio y estar publicado).
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <label className="relative inline-flex cursor-pointer items-center">
-          <input
-            type="checkbox"
-            checked={data.returnAfter || false}
-            onChange={(e) => onChange({ ...data, returnAfter: e.target.checked })}
-            className="peer sr-only"
-          />
-          <div className="peer h-5 w-9 rounded-full bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-card after:transition-all peer-checked:bg-muted0 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-ring" />
-        </label>
-        <div>
-          <p className="text-sm font-medium text-foreground">Volver después</p>
-          <p className="text-xs text-muted-foreground">
-            Regresa a este flujo cuando termine el flujo de destino
-          </p>
-        </div>
-      </div>
+      <p className="rounded-lg border border-border bg-muted p-3 text-xs text-muted-foreground">
+        El contacto sigue en el flujo de destino: este flujo termina aquí. Un flujo no puede volver a un
+        flujo por el que ya pasó sin esperar una respuesta del cliente de por medio (evita bucles).
+      </p>
     </div>
   );
 }
