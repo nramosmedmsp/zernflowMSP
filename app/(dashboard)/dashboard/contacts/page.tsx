@@ -18,7 +18,7 @@ export default async function ContactsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = parseContactListParams(await searchParams);
-  const { workspace, supabase, role } = await getWorkspace();
+  const { workspace, supabase, role, user } = await getWorkspace();
 
   // Cliente del usuario: la RLS decide qué contactos ve. El filtrado, el orden
   // y la paginación ocurren en la base.
@@ -51,6 +51,9 @@ export default async function ContactsPage({
   if (params.page > pages) redirect(contactListHref({ ...params, page: pages }));
 
   const members = "members" in membersRes ? membersRes.members : [];
+  // Un asesor solo ve sus contactos: no se le ofrecen otras personas como responsable.
+  const supervises = !!members.find((m) => m.userId === user.id)?.teams.some((t) => t.role === "supervisor");
+  const ownerOptions = isAdminRole(role) || supervises ? members : members.filter((m) => m.userId === user.id);
 
   return (
     <ContactsView
@@ -66,6 +69,7 @@ export default async function ContactsPage({
       }))}
       teams={teamsRes.data ?? []}
       members={members.map((m) => ({ userId: m.userId, name: m.name }))}
+      ownerOptions={ownerOptions.map((m) => ({ userId: m.userId, name: m.name }))}
       workspaceId={workspace.id}
       canImport={isAdminRole(role)}
     />

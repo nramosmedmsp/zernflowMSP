@@ -22,6 +22,7 @@ import type { InboxMessage } from "@/lib/inbox-messages";
 import { useOutbox } from "@/components/inbox/use-outbox";
 import { useNewMessageAlerts } from "@/components/inbox/use-new-message-alerts";
 import { AlertSettingsButton } from "@/components/inbox/alert-settings";
+import { alertScopesFor } from "@/lib/inbox-alerts";
 import { useReconnect } from "@/components/inbox/use-reconnect";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -93,12 +94,17 @@ export function InboxView({
   useEffect(() => {
     const key = `${paramContact ?? ""}|${paramCase ?? ""}`;
     if (lastParams.current === key) return;
-    lastParams.current = key;
-    if (!paramContact || !UUID_RE.test(paramContact)) return;
+    // El enlace se da por atendido solo cuando el chat se abrió: si llega otro
+    // mensaje mientras carga, este efecto corre de nuevo y lo termina.
+    if (!paramContact || !UUID_RE.test(paramContact)) {
+      lastParams.current = key;
+      return;
+    }
     const wantedCase = paramCase && UUID_RE.test(paramCase) ? paramCase : null;
 
     const current = conversations.find((c) => c.id === selectedId);
     if (current?.contact_id === paramContact) {
+      lastParams.current = key;
       if (wantedCase) setActiveCaseId(wantedCase);
       return;
     }
@@ -107,6 +113,7 @@ export function InboxView({
       let list = conversations.filter((c) => c.contact_id === paramContact);
       if (list.length === 0) list = await ensureContactConversations(paramContact, true);
       if (cancelled) return;
+      lastParams.current = key;
       const target = latestConversation(list);
       if (!target) {
         setNotice({ text: "Este contacto no tiene un chat que puedas ver.", contactId: paramContact });
@@ -212,8 +219,8 @@ export function InboxView({
   const outbox = useOutbox({ onDelivered: handleDelivered });
   const { settle } = outbox;
   const selectedOutbox = useMemo(
-    () => (selectedId ? outboxMessages(outbox.items, selectedId) : []),
-    [outbox.items, selectedId],
+    () => (selectedId ? outboxMessages(outbox.items, selectedId, meta.userId) : []),
+    [outbox.items, selectedId, meta.userId],
   );
   const handleServerMessages = useCallback(
     (serverMessages: InboxMessage[]) => {
@@ -268,7 +275,7 @@ export function InboxView({
           syncing={syncing}
           syncError={conversations.length > 0 ? syncError : null}
           failedConversationIds={outbox.failedIds}
-          headerActions={<AlertSettingsButton settings={alerts.settings} onChange={alerts.update} />}
+          headerActions={<AlertSettingsButton settings={alerts.settings} onChange={alerts.update} scopes={alertScopesFor(meta)} />}
         />
       </div>
 

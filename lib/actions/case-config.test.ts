@@ -619,6 +619,7 @@ describe("quitar una etapa", () => {
     seedCase("Venta", "Pagado", { status: "won", closed_at: "2026-10-18T16:00:00.000Z" });
     const used = stageId("Venta", "Pagado");
     const unused = stageId("Venta", "No compró");
+    fake.seed("case_stages", [{ case_type_id: typeId("Venta"), name: "Otra de cierre", kind: "resolved", position: 9 }]);
 
     const archived = await removeItem({ list: "stage", id: used });
     expect(archived).toMatchObject({ ok: true, outcome: "archive", moved: 0, message: expect.stringContaining("historial") });
@@ -748,6 +749,7 @@ describe("tipos de gestión: destino, tiempos y quitar", () => {
 
   it("general: nombre, color, ícono, proactiva, interruptores y tipos de contacto sugeridos", async () => {
     const id = typeId("Consulta");
+    fake.seed("case_categories", [{ case_type_id: id, name: "Consulta general", position: 0 }]);
     const prospecto = contactTypeId("Prospecto");
     expect(
       await updateCaseType({
@@ -791,6 +793,135 @@ describe("tipos de gestión: destino, tiempos y quitar", () => {
     // Recompra la programa la regla de Venta (plantilla): se archiva aunque nunca tuvo gestiones.
     const result = await removeCaseType(typeId("Recompra"));
     expect(result).toMatchObject({ ok: true, outcome: "archive", message: expect.stringContaining("otra parte") });
+  });
+});
+
+describe("R2-10 / R2-3: plazo de la solución, archivar y plantilla automática", () => {
+  const caseOf = (typeName: string, extra: Record<string, unknown> = {}) => {
+    const first = fake.rows("case_stages").filter((x) => x.case_type_id === typeId(typeName) && x.kind === "open").sort((a, b) => (a.position as number) - (b.position as number))[0];
+    return seedCase(typeName, first.name as string, extra);
+  };
+
+  it("al encender o cambiar el plazo, las abiertas sin reloj empiezan a contar desde ahora", async () => {
+    const old = caseOf("Postventa");
+    const withClock = caseOf("Postventa", { solution_clock_at: "2026-10-01T10:00:00.000Z" });
+    const closed = caseOf("Postventa", { status: "resolved" });
+    const other = caseOf("Venta");
+    const before = Date.now();
+    expect(await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: 24 })).toEqual({ ok: true });
+    const clock = (id: unknown) => fake.rows("cases").find((c) => c.id === id)!.solution_clock_at as string | null | undefined;
+    expect(new Date(clock(old.id)!).getTime()).toBeGreaterThanOrEqual(before);
+    expect(clock(withClock.id)).toBe("2026-10-01T10:00:00.000Z");
+    expect(clock(closed.id) ?? null).toBeNull();
+    expect(clock(other.id) ?? null).toBeNull();
+  });
+
+  it("no toca los relojes si el plazo no cambia o se apaga", async () => {
+    await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: 24 });
+    const later = caseOf("Postventa");
+    expect(await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: 24 })).toEqual({ ok: true });
+    expect(fake.rows("cases").find((c) => c.id === later.id)!.solution_clock_at ?? null).toBeNull();
+    expect(await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: "" })).toEqual({ ok: true });
+    expect(fake.rows("cases").find((c) => c.id === later.id)!.solution_clock_at ?? null).toBeNull();
+  });
+
+  it("no se archiva un tipo con gestiones programadas pendientes", async () => {
+    caseOf("Recompra", { status: "scheduled", scheduled_for: "2026-12-01T14:00:00.000Z" });
+    const res = await archiveCaseType(typeId("Recompra"));
+    expect(res).toMatchObject({ error: expect.stringContaining("1 gestión programada") });
+    expect(fake.rows("case_types").find((t) => t.name === "Recompra")!.archived_at ?? null).toBeNull();
+    // Quitarlo tampoco lo archiva a escondidas.
+    expect(await removeCaseType(typeId("Recompra"))).toMatchObject({ error: expect.stringContaining("programada") });
+    expect(fake.rows("case_types").find((t) => t.name === "Recompra")!.archived_at ?? null).toBeNull();
+  });
+
+  it("archivar un tipo que otra regla programa avisa qué reglas dejan de crearlo", async () => {
+    const res = await archiveCaseType(typeId("Recompra"));
+    expect(res).toMatchObject({ ok: true, message: expect.stringContaining("regla") });
+    expect(fake.rows("case_types").find((t) => t.name === "Recompra")!.archived_at).not.toBeNull();
+    // Uno sin referencias archiva sin mensaje.
+    expect(await archiveCaseType(typeId("Postventa"))).toEqual({ ok: true });
+  });
+
+  it("dejar de ser proactivo quita la plantilla automática", async () => {
+    const id = typeId("Recompra");
+    fake.rows("case_types").find((t) => t.id === id)!.is_proactive = true;
+    fake.rows("case_types").find((t) => t.id === id)!.auto_template = { template_name: "recordatorio", language: "es", params: ["{nombre}"] };
+    expect(await updateCaseType({ id, isProactive: false })).toEqual({ ok: true });
+    const row = fake.rows("case_types").find((t) => t.id === id)!;
+    expect(row.is_proactive).toBe(false);
+    expect(row.auto_template).toBeNull();
+  });
+});
+
+describe("R2-4 / R2-5 / R2-7: avisos al archivar y etapas de cierre", () => {
+  const flowWith = (id: string, name = "Bienvenida") =>
+    fake.seed("flows", [{ workspace_id: WS, name, status: "published", nodes: [{ id: "n1", type: "change_stage", data: { stageId: id } }], edges: [] }]);
+
+  it("R2-4: archivar un tipo de contacto que usa una regla lo avisa", async () => {
+    const res = await archiveContactType(contactTypeId("Cliente"));
+    expect(res).toMatchObject({ ok: true, warning: expect.stringContaining("regla") });
+    // Uno sin reglas no avisa.
+    const created = await createContactType({ name: "VIP" });
+    if (!("ok" in created)) throw new Error();
+    expect(await archiveContactType(created.id)).toEqual({ ok: true });
+  });
+
+  it("R2-4: archivar una etapa usada por una regla lo avisa", async () => {
+    const venta = typeId("Venta");
+    const extra = fake.seed("case_stages", [{ case_type_id: venta, name: "Intermedia", kind: "open", position: 9 }])[0];
+    fake.seed("case_rules", [{ case_type_id: venta, position: 9, enabled: true, trigger: "on_stage", trigger_stage_id: extra.id, action: "ask_key_date", params: { label: "x" }, condition: {} }]);
+    const res = await archiveItem({ list: "stage", id: extra.id as string });
+    expect(res).toMatchObject({ ok: true, warning: expect.stringContaining("regla") });
+  });
+
+  it("R2-5: los flujos que usan una etapa o un tipo cuentan como uso", async () => {
+    const stage = stageId("Consulta", "Abierta");
+    const extra = fake.seed("case_stages", [{ case_type_id: typeId("Consulta"), name: "Segunda", kind: "open", position: 5 }])[0];
+    flowWith(extra.id as string);
+    const archived = await archiveItem({ list: "stage", id: extra.id as string });
+    expect(archived).toMatchObject({ ok: true, warning: expect.stringContaining("«Bienvenida»") });
+    expect(stage).toBeTruthy();
+    // Borrar un tipo sin gestiones pero usado por un flujo lo archiva en vez de borrarlo.
+    flowWith(typeId("Consulta"), "Consultas");
+    const removed = await removeCaseType(typeId("Consulta"));
+    expect(removed).toMatchObject({ ok: true, outcome: "archive" });
+    expect(fake.rows("case_types").some((t) => t.name === "Consulta")).toBe(true);
+  });
+
+  it("R2-5: archivar un tipo usado por un flujo lo avisa", async () => {
+    flowWith(typeId("Postventa"), "Postventa bot");
+    const res = await archiveCaseType(typeId("Postventa"));
+    expect(res).toMatchObject({ ok: true, message: expect.stringContaining("«Postventa bot»") });
+  });
+
+  it("R2-7: no se quita la última etapa de cierre", async () => {
+    const stages = fake.rows("case_stages").filter((x) => x.case_type_id === typeId("Consulta"));
+    const closing = stages.filter((x) => x.kind !== "open");
+    for (const c of closing.slice(1)) await archiveItem({ list: "stage", id: c.id as string });
+    const last = closing[0];
+    const err = await archiveItem({ list: "stage", id: last.id as string });
+    expect(err).toEqual({ error: expect.stringContaining("al menos una etapa de cierre") });
+    expect(await removeItem({ list: "stage", id: last.id as string })).toMatchObject({ error: expect.stringContaining("etapa de cierre") });
+    expect(await updateItem({ list: "stage", id: last.id as string, kind: "open", confirmedKindChange: true })).toMatchObject({ error: expect.any(String) });
+  });
+
+  it("R2-7: un tipo protegido conserva al menos una etapa «Resuelta»", async () => {
+    const id = typeId("Postventa");
+    await updateCaseType({ id, protected: true });
+    const stages = fake.rows("case_stages").filter((x) => x.case_type_id === id && x.kind !== "open");
+    const resolved = stages.filter((x) => x.kind === "resolved");
+    for (const r of resolved.slice(1)) await archiveItem({ list: "stage", id: r.id as string });
+    const res = await archiveItem({ list: "stage", id: resolved[0].id as string });
+    expect(res).toMatchObject({ error: expect.stringContaining("Resuelta") });
+  });
+
+  it("R2-6: no se puede exigir categoría si el tipo no tiene categorías activas", async () => {
+    const id = typeId("Consulta");
+    fake.tables.case_categories = fake.rows("case_categories").filter((c) => c.case_type_id !== id);
+    expect(await updateCaseType({ id, requireCategory: true })).toMatchObject({ error: expect.stringContaining("categoría activa") });
+    fake.seed("case_categories", [{ case_type_id: id, name: "Una", position: 0 }]);
+    expect(await updateCaseType({ id, requireCategory: true })).toEqual({ ok: true });
   });
 });
 

@@ -133,3 +133,27 @@ describe("findKeywordCollisions (B-17)", () => {
     expect(issues).toHaveLength(1);
   });
 });
+
+describe("avisos de publicación (R2-B10, R2-B22)", () => {
+  const caseTrigger = (triggerType: string, extra = {}): FlowNodeLike => ({ id: "t", type: "trigger", data: { triggerType, ...extra } });
+
+  it("un disparador de gestión sin tipo avisa que se activaría con cualquier gestión", () => {
+    const c = codes([caseTrigger("case_opened"), msg("m", "Hola")], [edge("t", "m")]);
+    expect(c).toContain("case_trigger_no_type");
+    expect(codes([caseTrigger("case_opened", { caseTypeId: "ct-1" }), msg("m", "Hola")], [edge("t", "m")])).not.toContain("case_trigger_no_type");
+  });
+
+  it("el cambio de etapa sin etapa avisa", () => {
+    const c = codes([caseTrigger("case_stage_changed", { caseTypeId: "ct-1" }), msg("m", "Hola")], [edge("t", "m")]);
+    expect(c).toContain("case_trigger_no_stage");
+    expect(c).not.toContain("case_trigger_no_type");
+  });
+
+  it("un flujo de comentario con varios mensajes avisa que solo el primero sale como respuesta privada", () => {
+    const t = caseTrigger("comment_keyword", { keywords: [{ value: "info" }] });
+    const issues = validateFlowGraph([t, msg("m1", "Uno"), msg("m2", "Dos")], [edge("t", "m1"), edge("m1", "m2")]);
+    expect(issues.find((i) => i.code === "comment_multi_message")?.severity).toBe("warning");
+    expect(hasErrors(issues)).toBe(false);
+    expect(codes([t, msg("m1", "Uno")], [edge("t", "m1")])).not.toContain("comment_multi_message");
+  });
+});

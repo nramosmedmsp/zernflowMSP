@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useToast } from "@/components/ui/toast";
 import {
   ArrowLeft,
@@ -18,6 +18,7 @@ import { updateSequence, deleteSequence } from "@/lib/actions/sequences";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { TemplateContentEditor } from "@/components/sequences/template-content-editor";
 import { validateSequenceSteps } from "@/lib/broadcasts/sequence-step";
+import { ensureStepIds } from "@/lib/sequences/steps";
 import type { SequenceStep, TemplateMessageContent } from "@/lib/types/database";
 
 interface SequenceEditorProps {
@@ -52,16 +53,35 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
   const router = useRouter();
   const [name, setName] = useState(sequence.name);
   const [description, setDescription] = useState(sequence.description || "");
-  const [steps, setSteps] = useState<SequenceStep[]>(sequence.steps);
+  // Cada paso lleva un id estable: sirve de key (R2-B4) y las inscripciones activas lo usan para no desordenarse.
+  const initialSteps = useRef<SequenceStep[]>(ensureStepIds(sequence.steps));
+  const [steps, setSteps] = useState<SequenceStep[]>(initialSteps.current);
   const [status, setStatus] = useState(sequence.status);
+  const statusNow = useRef(status);
+  statusNow.current = status;
   const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
-  const handleSave = useCallback(async () => {
+  // Lo último guardado, para saber si hay cambios sin guardar (R2-B21).
+  const signature = JSON.stringify([name.trim(), description.trim(), steps, status]);
+  const savedSignature = useRef(
+    JSON.stringify([sequence.name.trim(), (sequence.description || "").trim(), initialSteps.current, sequence.status]),
+  );
+  const dirty = signature !== savedSignature.current;
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  const handleSave = useCallback(async (nextStatus?: "draft" | "active" | "paused") => {
+    const status = nextStatus ?? statusNow.current;
     setError(null);
     setSuccess(null);
 
@@ -95,8 +115,10 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
         setError(result.error);
         toast.error(result.error);
       } else {
+        setStatus(status);
+        savedSignature.current = JSON.stringify([name.trim(), description.trim(), steps, status]);
         setSuccess("Guardado");
-        toast.success("Secuencia guardada");
+        toast.success(nextStatus === "paused" ? "Secuencia pausada" : nextStatus === "active" ? "Secuencia activada" : "Secuencia guardada");
         setTimeout(() => setSuccess(null), 2000);
       }
     } catch {
@@ -105,16 +127,21 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
     } finally {
       setSaving(false);
     }
-  }, [sequence.id, name, description, steps, status, toast]);
+  }, [sequence.id, name, description, steps, toast]);
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);
-    const result = await deleteSequence(sequence.id);
-    if (result.error) {
-      setError(result.error);
+    try {
+      const result = await deleteSequence(sequence.id);
+      if (result.error) {
+        setError(result.error);
+        setDeleting(false);
+      } else {
+        router.push("/dashboard/sequences");
+      }
+    } catch {
+      setError("No se pudo eliminar la secuencia. Revisa tu conexión e inténtalo de nuevo.");
       setDeleting(false);
-    } else {
-      router.push("/dashboard/sequences");
     }
   }, [sequence.id, router]);
 
@@ -122,10 +149,10 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
     (index: number, type: "message" | "template" | "delay") => {
       const newStep: SequenceStep =
         type === "message"
-          ? { type: "message", content: "" }
+          ? { id: crypto.randomUUID(), type: "message", content: "" }
           : type === "template"
-            ? { type: "template", template: null }
-            : { type: "delay", delayMinutes: 60 };
+            ? { id: crypto.randomUUID(), type: "template", template: null }
+            : { id: crypto.randomUUID(), type: "delay", delayMinutes: 60 };
 
       const updated = [...steps];
       updated.splice(index, 0, newStep);
@@ -153,20 +180,26 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
     [steps]
   );
 
+  // Pausar y Activar se guardan al momento (con lo que se ve en pantalla): antes solo cambiaban
+  // la etiqueta y había que acordarse de Guardar. Pausar no cancela a nadie: las personas
+  // inscritas siguen donde iban cuando se vuelve a activar.
   const toggleStatus = useCallback(() => {
     if (status === "active") {
-      setError(null);
-      setStatus("paused");
+      void handleSave("paused");
     } else {
       const problem = validateSequenceSteps(steps);
       if (problem) {
         setError(problem);
         return;
       }
-      setError(null);
-      setStatus("active");
+      void handleSave("active");
     }
-  }, [status, steps]);
+  }, [status, steps, handleSave]);
+
+  const goBack = useCallback(() => {
+    if (dirty) setConfirmLeave(true);
+    else router.push("/dashboard/sequences");
+  }, [dirty, router]);
 
   const statusInfo = statusConfig[status];
 
@@ -176,7 +209,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
       <div className="border-b border-border px-8 py-6">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => router.push("/dashboard/sequences")}
+            onClick={goBack}
             className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <ArrowLeft className="h-5 w-5" />
@@ -203,6 +236,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
           <div className="flex items-center gap-2">
             <button
               onClick={toggleStatus}
+              disabled={saving}
               className={cn(
                 "rounded-lg px-4 py-2 text-sm font-medium transition-colors",
                 status === "active"
@@ -213,7 +247,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
               {status === "active" ? "Pausar" : "Activar"}
             </button>
             <button
-              onClick={handleSave}
+              onClick={() => void handleSave()}
               disabled={saving || !name.trim()}
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
@@ -228,6 +262,18 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
             >
               <Trash2 className="h-4 w-4" />
             </button>
+            <ConfirmDialog
+              open={confirmLeave}
+              title="Salir sin guardar"
+              message="Hay cambios sin guardar en esta secuencia. Si sales ahora se perderán."
+              confirmLabel="Salir sin guardar"
+              destructive
+              onConfirm={() => {
+                setConfirmLeave(false);
+                router.push("/dashboard/sequences");
+              }}
+              onCancel={() => setConfirmLeave(false)}
+            />
             <ConfirmDialog
               open={confirmDelete}
               title="Eliminar secuencia"
@@ -291,7 +337,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
             )}
 
             {steps.map((step, index) => (
-              <div key={index}>
+              <div key={step.id ?? index}>
                 <StepCard
                   workspaceId={workspaceId}
                   step={step}

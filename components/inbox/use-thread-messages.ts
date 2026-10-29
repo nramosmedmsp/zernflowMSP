@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import { applyStatusUpdate, mergeMessages, type InboxMessage, type MessagesPage } from "@/lib/inbox-messages";
 import type { MessageStatus } from "@/lib/types/database";
 import { useReconnect } from "./use-reconnect";
+import { uniqueChannelName } from "@/lib/realtime-channel";
 
 export type ThreadStatus = "loading" | "ready" | "error";
 
@@ -112,7 +113,7 @@ export function useThreadMessages(conversationId: string | null) {
     let lastMessageAt: string | null | undefined;
     let subscribedBefore = false;
     const channel = supabase
-      .channel(`conversation-${conversationId}`)
+      .channel(uniqueChannelName(`conversation-${conversationId}`))
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "conversations", filter: `id=eq.${conversationId}` },

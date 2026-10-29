@@ -496,6 +496,17 @@ describe("plantilla automática de las proactivas", () => {
     expect(stageName(caseById(caseId))).toBe("Por vencer");
   });
 
+  it("R2: quien pidió la baja no recibe la plantilla automática", async () => {
+    const caseId = await scheduledRenovacion();
+    fake.rows("contacts")[0].is_subscribed = false;
+    const m = messenger();
+    const r = await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(r).toMatchObject({ activated: 1, autoTemplates: { sent: 0, failed: 0 } });
+    expect(m.sendTemplate).not.toHaveBeenCalled();
+    expect(activity("auto_template_skipped", caseId)).toMatchObject([{ meta: { reason: "unsubscribed" } }]);
+    expect(caseById(caseId).auto_template_sent_at ?? null).toBeNull();
+  });
+
   it("un tipo sin plantilla no envía nada", async () => {
     await scheduledRenovacion();
     fake.rows("case_types").find((t) => t.name === "Renovación")!.auto_template = null;
@@ -803,5 +814,19 @@ describe("scheduleCasesForKeyDate", () => {
     const r = await scheduleCasesForKeyDate(db(), "ws-otro", contactId, { now: NOW });
     expect(r.scheduled).toEqual([]);
     expect(fake.rows("cases")).toHaveLength(0);
+  });
+});
+
+describe("R2-12: sin avisos de madrugada si todos están ausentes", () => {
+  beforeEach(async () => {
+    await setup();
+    setSettings({ business_hours: WEEKDAYS });
+  });
+
+  it("fuera de horario y sin nadie disponible no avisa «sin asignar»", async () => {
+    for (const m of fake.rows("workspace_members")) m.availability = "away";
+    const result = (await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at: SUNDAY_10AM }))!;
+    expect(result.assignment).toMatchObject({ status: "unassigned", reason: "off_hours" });
+    expect(notifications("case_unassigned")).toHaveLength(0);
   });
 });

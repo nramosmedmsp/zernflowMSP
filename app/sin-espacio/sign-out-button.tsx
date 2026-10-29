@@ -10,9 +10,14 @@ export function SignOutButton() {
 
   async function handleSignOut() {
     setLoading(true);
-    await createClient().auth.signOut();
-    router.push("/login");
-    router.refresh();
+    try {
+      await createClient().auth.signOut();
+      router.push("/login");
+      router.refresh();
+    } catch {
+      // Sin conexión: el botón vuelve a quedar disponible.
+      setLoading(false);
+    }
   }
 
   return (

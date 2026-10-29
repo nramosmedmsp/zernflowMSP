@@ -367,3 +367,50 @@ describe("primera respuesta: solo humana", () => {
     expect(firstResponseSeconds).toBeNull();
   });
 });
+
+describe("R2-15: gana la regla más específica", () => {
+  it("«desde la 2.ª» gana a «Cliente» aunque esté escrita antes", () => {
+    const reversed = [
+      rule({ id: "a", position: 0, action: "set_contact_type", params: { contact_type_id: FRECUENTE, from_nth_win: 2 } }),
+      rule({ id: "b", position: 1, action: "set_contact_type", params: { contact_type_id: CLIENTE } }),
+    ];
+    expect(planRules({ rules: reversed, ctx: won(PROSPECTO), wonCount: 2, now: NOW, keyDate: null }).contactTypeId).toBe(FRECUENTE);
+    // Con una sola ganada la regla de la 2.ª no aplica: queda Cliente.
+    expect(planRules({ rules: reversed, ctx: won(PROSPECTO), wonCount: 1, now: NOW, keyDate: null }).contactTypeId).toBe(CLIENTE);
+  });
+
+  it("gana la de mayor N; a igual N, la que está más abajo", () => {
+    const rules = [
+      rule({ id: "a", position: 0, action: "set_contact_type", params: { contact_type_id: SOCIO, from_nth_win: 3 } }),
+      rule({ id: "b", position: 1, action: "set_contact_type", params: { contact_type_id: FRECUENTE, from_nth_win: 2 } }),
+      rule({ id: "c", position: 2, action: "set_contact_type", params: { contact_type_id: CLIENTE } }),
+      rule({ id: "d", position: 3, action: "set_contact_type", params: { contact_type_id: EX_SOCIO } }),
+    ];
+    expect(planRules({ rules, ctx: won(null), wonCount: 3, now: NOW, keyDate: null }).contactTypeId).toBe(SOCIO);
+    expect(planRules({ rules, ctx: won(null), wonCount: 2, now: NOW, keyDate: null }).contactTypeId).toBe(FRECUENTE);
+    // Sin N (cuenta como 1) empatan Cliente y Ex socio: la última por posición.
+    expect(planRules({ rules, ctx: won(null), wonCount: 1, now: NOW, keyDate: null }).contactTypeId).toBe(EX_SOCIO);
+  });
+});
+
+describe("R2-6: categoría obligatoria sin categorías activas", () => {
+  const stages = [
+    { id: "s-open", name: "Abierta", kind: "open" as const, position: 0, archived_at: null },
+    { id: "s-res", name: "Resuelta", kind: "resolved" as const, position: 1, archived_at: null },
+  ];
+  const input = (categories: { id: string; archived_at: string | null }[]) => ({
+    caseType: { require_category: true, require_outcome_reason: false },
+    stages,
+    reasons: [],
+    categories,
+    currentCategoryId: null,
+    request: { kind: "resolved" as const },
+  });
+  it("sin categorías activas no bloquea el cierre", () => {
+    expect(validateClose(input([]))).toMatchObject({ ok: true });
+    expect(validateClose(input([{ id: "c", archived_at: "2026-01-01T00:00:00Z" }]))).toMatchObject({ ok: true });
+  });
+  it("con una categoría activa sigue siendo obligatoria", () => {
+    expect(validateClose(input([{ id: "c", archived_at: null }]))).toEqual({ ok: false, error: "Elige una categoría antes de cerrar." });
+  });
+});

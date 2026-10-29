@@ -9,6 +9,7 @@ import {
   parseCloseRequest,
   reopenWindowMs,
   solutionDueAt,
+  solutionScheduleFor,
   solutionState,
 } from "./protection";
 
@@ -103,8 +104,33 @@ describe("closeGate", () => {
 
 describe("pedido de cierre guardado", () => {
   it("ida y vuelta", () => {
-    const request = { stageId: "s", reasonId: "r", note: "n", categoryId: null, requestedBy: "u", requestedAt: "2026-10-28T10:00:00Z" };
+    const request = {
+      stageId: "s",
+      reasonId: "r",
+      note: "n",
+      categoryId: null,
+      keyDate: null,
+      scheduleAt: null,
+      skipSchedule: false,
+      requestedBy: "u",
+      requestedAt: "2026-10-28T10:00:00Z",
+    };
     expect(parseCloseRequest(closeRequestToJson(request))).toEqual(request);
+  });
+  it("guarda la fecha clave y la programación elegidas (B-13)", () => {
+    const request = {
+      stageId: "s",
+      reasonId: null,
+      note: null,
+      categoryId: null,
+      keyDate: "2027-01-15",
+      scheduleAt: "2027-02-01",
+      skipSchedule: false,
+      requestedBy: "u",
+      requestedAt: "2026-10-28T10:00:00Z",
+    };
+    expect(parseCloseRequest(closeRequestToJson(request))).toEqual(request);
+    expect(parseCloseRequest(closeRequestToJson({ ...request, scheduleAt: null, skipSchedule: true }))?.skipSchedule).toBe(true);
   });
   it("lo inválido es null", () => {
     expect(parseCloseRequest(null)).toBeNull();
@@ -154,5 +180,68 @@ describe("claimBadge", () => {
     expect(claimBadge({ ...open, solutionStatus: "in_progress", nextActionAt: "2026-10-31T10:00:00Z" }, 24, now)).toBeNull();
     expect(claimBadge(open, null, now)).toBeNull();
     expect(claimBadge({ ...open, status: "resolved" }, 24, now)).toBeNull();
+  });
+});
+
+describe("R2-10: el plazo de la solución cuenta horas hábiles", () => {
+  // Lima = UTC-5. 2026-10-16 es viernes.
+  const SPLIT: [string, string][] = [
+    ["09:00", "13:00"],
+    ["14:00", "19:00"],
+  ];
+  const WEEK = { mon: SPLIT, tue: SPLIT, wed: SPLIT, thu: SPLIT, fri: SPLIT, sat: [], sun: [] };
+  const schedules = { workspaceHours: WEEK, teamHours: { sede: null }, holidays: [] };
+  const lima = (date: string, time: string) => `${date}T${time}:00-05:00`;
+  const open = (extra = {}) => ({
+    status: "open",
+    openedAt: new Date(lima("2026-10-16", "17:00")).toISOString(),
+    solutionStatus: null,
+    solutionNote: null,
+    nextActionAt: null,
+    solutionSchedule: solutionScheduleFor(schedules, "sede"),
+    ...extra,
+  });
+
+  it("24 h hábiles abiertas el viernes a las 17:00 vencen el martes, no el sábado", () => {
+    // Quedan 2 h el viernes (17-19). Lunes 9 h (9-13 y 14-19), martes hasta cumplir 22 h restantes... total 24.
+    const due = solutionDueAt(open(), 24)!;
+    const clock = new Date(open().openedAt).getTime() + 24 * 3_600_000;
+    expect(due.getTime()).toBeGreaterThan(clock + 24 * 3_600_000);
+    expect(due.toISOString()).toBe(new Date(lima("2026-10-21", "13:00")).toISOString());
+  });
+
+  it("sin horario (o con horario vacío) siguen siendo horas de reloj", () => {
+    const base = open({ solutionSchedule: null });
+    expect(solutionDueAt(base, 24)!.getTime()).toBe(new Date(base.openedAt).getTime() + 24 * 3_600_000);
+    expect(solutionScheduleFor({ workspaceHours: null, teamHours: {}, holidays: [] }, null)).toBeNull();
+    expect(solutionScheduleFor(null, "x")).toBeNull();
+  });
+
+  it("el equipo con horario propio manda sobre el de la empresa y suma sus feriados", () => {
+    const night = { mon: [["18:00", "22:00"]], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
+    const s = solutionScheduleFor(
+      { workspaceHours: WEEK, teamHours: { noche: night as never }, holidays: [{ date: "2026-10-19", team_id: "noche" }, { date: "2026-10-20", team_id: null }] },
+      "noche",
+    )!;
+    expect(s.hours?.mon).toEqual(night.mon);
+    expect(s.holidays.sort()).toEqual(["2026-10-19", "2026-10-20"]);
+  });
+
+  it("el estado pendiente informa lo que queda en horas hábiles", () => {
+    const now = new Date(lima("2026-10-16", "18:00"));
+    const state = solutionState(open(), 24, now);
+    expect(state.kind).toBe("pending");
+    if (state.kind === "pending") {
+      expect(state.businessMsLeft).toBe(23 * 3_600_000);
+      expect(state.msLeft).toBeGreaterThan(state.businessMsLeft!);
+    }
+  });
+
+  it("no está atrasada un sábado aunque hayan pasado más de 24 h de reloj", () => {
+    const sat = new Date(lima("2026-10-17", "20:00"));
+    expect(solutionState(open(), 24, sat).kind).toBe("pending");
+    expect(solutionState(open({ solutionSchedule: null }), 24, sat).kind).toBe("overdue"); // en reloj sí
+    const tuesdayLate = new Date(lima("2026-10-21", "14:00"));
+    expect(solutionState(open(), 24, tuesdayLate).kind).toBe("overdue");
   });
 });

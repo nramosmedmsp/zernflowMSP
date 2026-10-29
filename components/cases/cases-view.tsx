@@ -21,7 +21,7 @@ import {
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import type { CaseListRow } from "@/app/(dashboard)/dashboard/cases/load-cases";
-import { claimBadge } from "@/lib/cases/protection";
+import { claimBadge, solutionScheduleFor, type SolutionSchedules } from "@/lib/cases/protection";
 import type { CaseStatus } from "@/lib/types/database";
 
 interface CaseTypeOption {
@@ -44,6 +44,8 @@ interface PersonOption {
 }
 
 export interface CasesViewProps {
+  /** Horarios para contar el plazo de la solución en horas hábiles (R2-10). */
+  solutionSchedules?: SolutionSchedules | null;
   rows: CaseListRow[];
   total: number;
   page: number;
@@ -220,13 +222,25 @@ export function CasesView(props: CasesViewProps) {
             className={SELECT_CLASS}
           >
             <option value="">Todas las etapas</option>
-            {visibleStages.map((s) => (
-              <option key={s.id} value={s.id}>
-                {params.type && params.type !== NONE_FILTER
-                  ? s.name
-                  : `${typeById.get(s.caseTypeId)?.name ?? "Tipo"} · ${s.name}`}
-              </option>
-            ))}
+            {params.type && params.type !== NONE_FILTER
+              ? visibleStages.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))
+              : caseTypes
+                  .filter((t) => visibleStages.some((s) => s.caseTypeId === t.id))
+                  .map((t) => (
+                    <optgroup key={t.id} label={t.name}>
+                      {visibleStages
+                        .filter((s) => s.caseTypeId === t.id)
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
           </select>
           {showAssigneeFilter && (
             <select
@@ -247,7 +261,8 @@ export function CasesView(props: CasesViewProps) {
                 </>
               )}
               <option value={NONE_FILTER}>Sin responsable</option>
-              {members
+              {/* Un asesor no ve las gestiones de otras personas: no se le ofrecen como filtro. */}
+              {(me.canSeeOthers ? members : [])
                 .filter((m) => m.userId !== me.userId)
                 .map((m) => (
                   <option key={m.userId} value={m.userId}>
@@ -313,7 +328,7 @@ export function CasesView(props: CasesViewProps) {
             </p>
           </div>
         ) : (
-          <table className="w-full">
+          <table className="w-full [&_th]:whitespace-nowrap">
             <thead>
               <tr className="border-b border-border bg-muted/50 text-left">
                 {["Contacto", "Tipo", "Etapa", "Estado", "Responsable", "Equipo", "Abierta", dateColumnLabel, "Espera"].map(
@@ -352,6 +367,7 @@ export function CasesView(props: CasesViewProps) {
                   {
                     status: row.status,
                     openedAt: row.openedAt,
+                    solutionSchedule: solutionScheduleFor(props.solutionSchedules, row.teamId),
                     solutionClockAt: row.solutionClockAt,
                     solutionStatus: row.solutionStatus,
                     solutionNote: row.solutionNote,
@@ -448,7 +464,7 @@ export function CasesView(props: CasesViewProps) {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-sm text-muted-foreground" suppressHydrationWarning>
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-muted-foreground" suppressHydrationWarning>
                       {waiting || "—"}
                     </td>
                   </tr>

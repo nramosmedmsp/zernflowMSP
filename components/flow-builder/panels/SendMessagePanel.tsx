@@ -147,10 +147,9 @@ export function SendMessagePanel({ data: rawData, onChange, availableVariables }
       <div className="rounded-lg border border-border bg-muted p-3">
         <p className="text-xs font-medium text-muted-foreground">Notas por plataforma</p>
         <ul className="mt-1.5 space-y-1 text-[11px] text-muted-foreground">
-          <li>Facebook/Instagram/WhatsApp: máximo 3 botones por mensaje</li>
-          <li>Telegram: los botones aparecen como teclado en línea</li>
+          <li>Instagram y WhatsApp: máximo 3 botones por mensaje</li>
           <li>Las respuestas rápidas desaparecen cuando el cliente responde</li>
-          <li>Carruseles: nativos en Facebook/Instagram, en el resto se envían como texto</li>
+          <li>Carruseles: nativos en Instagram, en WhatsApp se envían como texto</li>
           <li>
             WhatsApp: Meta solo acepta mensajes libres dentro de las 24 h
             posteriores al último mensaje del contacto

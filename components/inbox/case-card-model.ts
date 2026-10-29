@@ -2,6 +2,7 @@
 // de etapas, opciones de cierre por tipo y texto/opciones del próximo contacto.
 // Todo en hora de Lima (UTC-5, sin horario de verano).
 
+import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { addDays, limaDateOf, limaDateTimeIso } from "@/lib/cases/dates";
 import { formatSpan, solutionState, typeLockMessage, type SolutionCaseInput } from "@/lib/cases/protection";
 import type { OutcomeKind, StageKind } from "@/lib/types/database";
@@ -139,6 +140,23 @@ export function closeRequestLine(p: {
     .join(" · ");
 }
 
+/**
+ * Cabecera de una gestión cerrada. Usa el nombre de la etapa final ("Cerrada:
+ * Sin solución") y no las palabras de venta ("perdida") que no valen para Postventa.
+ */
+export function closedHeadline(status: string, stageName: string | null): string {
+  if (stageName) return `Cerrada: ${stageName}`;
+  const label = OUTCOME_LABELS[status as keyof typeof OUTCOME_LABELS];
+  return `Cerrada como ${label?.toLowerCase() ?? status}`;
+}
+
+/** Aviso al asesor cuando un supervisor rechazó cerrar su gestión. */
+export function rejectionLine(comment: string | null): string {
+  return comment
+    ? `Un supervisor rechazó cerrar esta gestión: «${comment}». Sigue abierta.`
+    : "Un supervisor rechazó cerrar esta gestión sin solución. Sigue abierta: hay que darle una solución.";
+}
+
 // -------------------------------------------- Plazo de la solución (reclamos)
 
 export type SolutionTone = "amber" | "red" | "ok";
@@ -168,7 +186,7 @@ export function solutionBanner(
     case "pending":
       return {
         tone: "amber",
-        text: `${input.typeName}: registra la solución antes de ${relativeDayTime(new Date(state.dueAt), now)} (quedan ${formatSpan(state.msLeft, { round: "up" })})`,
+        text: `${input.typeName}: registra la solución antes de ${relativeDayTime(new Date(state.dueAt), now)} (quedan ${formatSpan(state.businessMsLeft ?? state.msLeft, { round: "up" })}${state.businessMsLeft === undefined ? "" : " hábiles"})`,
         action: "register",
         actionLabel: "Registrar solución",
       };

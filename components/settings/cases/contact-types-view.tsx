@@ -93,7 +93,7 @@ export function ContactTypesView({ data }: { data: CaseConfigData }) {
     setPending(null);
     if (!p) return;
     if (p.mode === "archive") {
-      await run(() => archiveContactType(p.type.id), `Se archivó «${p.type.name}».${p.type.isDefault ? " Ya no hay un tipo por defecto: elige otro." : ""}`);
+      await run(() => archiveContactType(p.type.id), (r) => `Se archivó «${p.type.name}».${p.type.isDefault ? " Ya no hay un tipo por defecto: elige otro." : ""}${r.warning ? ` ${r.warning}` : ""}`);
     } else {
       await run(() => removeContactType(p.type.id), (r) => r.message);
     }

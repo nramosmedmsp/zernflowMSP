@@ -5,6 +5,7 @@ import { Users, XCircle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateTime } from "@/lib/format";
 import { cancelEnrollment } from "@/lib/actions/sequences";
+import { useToast } from "@/components/ui/toast";
 
 interface Enrollment {
   id: string;
@@ -40,19 +41,26 @@ export function EnrollmentList({
 }) {
   const [enrollments, setEnrollments] = useState(initial);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const toast = useToast();
 
   async function handleCancel(enrollmentId: string) {
     setCancelling(enrollmentId);
-    const result = await cancelEnrollment(enrollmentId);
-
-    if (!result.error) {
+    try {
+      const result = await cancelEnrollment(enrollmentId);
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
       setEnrollments((prev) =>
         prev.map((e) =>
           e.id === enrollmentId ? { ...e, status: "cancelled" as const } : e
         )
       );
+    } catch {
+      toast.error("No se pudo cancelar la inscripción. Revisa tu conexión e inténtalo de nuevo.");
+    } finally {
+      setCancelling(null);
     }
-    setCancelling(null);
   }
 
   return (
@@ -70,7 +78,7 @@ export function EnrollmentList({
               Aún no hay contactos inscritos
             </p>
             <p className="mt-1 text-xs text-muted-foreground/70">
-              Los contactos se pueden inscribir mediante flujos o de forma manual
+              Los contactos se inscriben desde los flujos
             </p>
           </div>
         ) : (

@@ -3,6 +3,14 @@
 // ventana de reapertura. La E/S vive en protected.ts, close.ts, inbound.ts y
 // cron.ts; la tarjeta de la bandeja usa estas mismas funciones.
 
+import {
+  addBusinessMinutes,
+  businessMinutesBetween,
+  effectiveBusinessHours,
+  hasSchedule,
+  holidayDatesFor,
+  type BusinessHours,
+} from "@/lib/business-hours";
 import { isAdminRole } from "@/lib/permissions";
 import type { Json, OutcomeKind } from "@/lib/types/database";
 import { supervisedTeamIds, type ActorInfo } from "./access";
@@ -29,7 +37,41 @@ export function typeLockMessage(typeName: string): string {
 
 // ── Plazo para registrar la solución ───────────────────────────────────────
 
+/**
+ * R2-10: el plazo de la solución cuenta horas HÁBILES del horario de la
+ * gestión (el del equipo o el de la empresa, con sus feriados). Sin horario
+ * configurado (`hours` null) son horas de reloj. Es serializable: viaja al
+ * navegador dentro de la gestión.
+ */
+export interface SolutionSchedule {
+  hours: BusinessHours | null;
+  /** Fechas "YYYY-MM-DD" (Lima). */
+  holidays: string[];
+}
+
+/** Horarios del espacio, para elegir el de cada gestión según su equipo. */
+export interface SolutionSchedules {
+  workspaceHours: BusinessHours | null;
+  /** Horario propio de cada equipo activo (null = usa el de la empresa). */
+  teamHours: Record<string, BusinessHours | null>;
+  holidays: { date: string; team_id: string | null }[];
+}
+
+/** Horario que rige para una gestión según su equipo; null = sin horario (reloj). */
+export function solutionScheduleFor(
+  schedules: SolutionSchedules | null | undefined,
+  teamId: string | null | undefined,
+): SolutionSchedule | null {
+  if (!schedules) return null;
+  const known = teamId && Object.prototype.hasOwnProperty.call(schedules.teamHours, teamId) ? teamId : null;
+  const hours = effectiveBusinessHours(known ? schedules.teamHours[known] : null, schedules.workspaceHours);
+  if (!hasSchedule(hours)) return null;
+  return { hours, holidays: [...holidayDatesFor(schedules.holidays, known)] };
+}
+
 export interface SolutionCaseInput {
+  /** Horario de la gestión (horas hábiles); ausente o null = horas de reloj. */
+  solutionSchedule?: SolutionSchedule | null;
   status: string;
   openedAt: string | null;
   /** Desde cuándo corre el plazo (null = openedAt); la reapertura lo reinicia. */
@@ -40,16 +82,26 @@ export interface SolutionCaseInput {
   nextActionAt: string | null;
 }
 
-/** Momento en que vence el plazo para registrar la solución, o null si no corre. */
+/**
+ * Momento en que vence el plazo para registrar la solución, o null si no
+ * corre. Cuenta horas hábiles si la gestión tiene horario (`solutionSchedule`
+ * o el `schedule` explícito); si no, horas de reloj.
+ */
 export function solutionDueAt(
-  c: Pick<SolutionCaseInput, "openedAt" | "solutionClockAt">,
+  c: Pick<SolutionCaseInput, "openedAt" | "solutionClockAt" | "solutionSchedule">,
   deadlineHours: number | null | undefined,
+  schedule?: SolutionSchedule | null,
 ): Date | null {
   if (!deadlineHours || deadlineHours <= 0) return null;
   const since = c.solutionClockAt ?? c.openedAt;
   if (!since) return null;
   const start = new Date(since).getTime();
   if (Number.isNaN(start)) return null;
+  const sched = schedule === undefined ? c.solutionSchedule : schedule;
+  if (sched && hasSchedule(sched.hours)) {
+    const due = addBusinessMinutes(start, deadlineHours * 60, sched.hours, sched.holidays);
+    if (due) return due;
+  }
   return new Date(start + deadlineHours * HOUR_MS);
 }
 
@@ -57,7 +109,13 @@ export type SolutionState =
   /** El tipo no tiene plazo o la gestión no está abierta. */
   | { kind: "none" }
   /** Falta registrar la solución; todavía hay tiempo. */
-  | { kind: "pending"; dueAt: string; msLeft: number }
+  | {
+      kind: "pending";
+      dueAt: string;
+      msLeft: number;
+      /** Con horario: lo que queda en tiempo de atención (horas hábiles); ausente = el plazo corre en reloj. */
+      businessMsLeft?: number;
+    }
   /** Pasó el plazo sin registrar la solución. */
   | { kind: "overdue"; dueAt: string; msLate: number }
   /** Hay una solución en proceso; `commitmentOverdue` si la fecha compromiso ya pasó. */
@@ -89,9 +147,15 @@ export function solutionState(
   const due = solutionDueAt(c, deadlineHours);
   if (!due) return { kind: "none" };
   const left = due.getTime() - now.getTime();
-  return left > 0
-    ? { kind: "pending", dueAt: due.toISOString(), msLeft: left }
-    : { kind: "overdue", dueAt: due.toISOString(), msLate: -left };
+  if (left > 0) {
+    const sched = c.solutionSchedule;
+    const businessMsLeft =
+      sched && hasSchedule(sched.hours)
+        ? Math.round(businessMinutesBetween(now, due, sched.hours, sched.holidays) * 60_000)
+        : undefined;
+    return { kind: "pending", dueAt: due.toISOString(), msLeft: left, ...(businessMsLeft === undefined ? {} : { businessMsLeft }) };
+  }
+  return { kind: "overdue", dueAt: due.toISOString(), msLate: -left };
 }
 
 export type ClaimBadge = { kind: "late"; label: string } | { kind: "commitment"; label: string } | { kind: "approval"; label: string };
@@ -185,6 +249,10 @@ export interface CloseRequest {
   reasonId: string | null;
   note: string | null;
   categoryId: string | null;
+  /** Fecha clave y programación que eligió quien pidió el cierre (si una regla las pide). */
+  keyDate?: string | null;
+  scheduleAt?: string | null;
+  skipSchedule?: boolean;
   requestedBy: string;
   requestedAt: string;
 }
@@ -195,6 +263,9 @@ export function closeRequestToJson(r: CloseRequest): Json {
     reason_id: r.reasonId,
     note: r.note,
     category_id: r.categoryId,
+    ...(r.keyDate ? { key_date: r.keyDate } : {}),
+    ...(r.scheduleAt ? { schedule_at: r.scheduleAt } : {}),
+    ...(r.skipSchedule ? { skip_schedule: true } : {}),
     requested_by: r.requestedBy,
     requested_at: r.requestedAt,
   };
@@ -216,6 +287,9 @@ export function parseCloseRequest(value: unknown): CloseRequest | null {
     reasonId: text(v.reason_id),
     note: text(v.note),
     categoryId: text(v.category_id),
+    keyDate: text(v.key_date),
+    scheduleAt: text(v.schedule_at),
+    skipSchedule: v.skip_schedule === true,
     requestedBy,
     requestedAt,
   };

@@ -91,9 +91,16 @@ export async function createTeam(
     return { error: "Ya hay un equipo con ese nombre." };
   }
 
+  // R2-1: el primer equipo activo del espacio queda como equipo por defecto (sin él, los
+  // contactos sin sede no tendrían a quién repartirse).
+  const { data: activeTeams } = await ctx.db
+    .from("teams")
+    .select("id")
+    .eq("workspace_id", ctx.workspaceId)
+    .is("archived_at", null);
   const { data, error } = await ctx.db
     .from("teams")
-    .insert({ workspace_id: ctx.workspaceId, name: parsed.name })
+    .insert({ workspace_id: ctx.workspaceId, name: parsed.name, is_default: (activeTeams ?? []).length === 0 })
     .select("id")
     .single();
   if (error || !data) {
@@ -123,13 +130,46 @@ export async function renameTeam(teamId: string, name: string): Promise<TeamActi
   return done();
 }
 
-/** Archiva o reactiva un equipo. Un equipo archivado deja de ser el de por defecto. */
+/**
+ * Archiva o reactiva un equipo. Un equipo archivado deja de ser el de por
+ * defecto, así que el que lo es no se archiva mientras haya otros equipos
+ * activos: primero se elige otro (R2-1).
+ */
 export async function setTeamArchived(teamId: string, archived: boolean): Promise<TeamActionResult> {
   if (typeof archived !== "boolean") return { error: GENERIC_ERROR };
   const ctx = await adminContext();
   if ("error" in ctx) return ctx;
   const team = await loadTeam(ctx, teamId);
   if (!team) return { error: TEAM_NOT_FOUND };
+
+  // R2-8: un tipo con este equipo como destino fijo mandaría sus gestiones a otro lado en silencio.
+  if (archived && !team.archived_at) {
+    const { data: fixedTypes } = await ctx.db
+      .from("case_types")
+      .select("name")
+      .eq("workspace_id", ctx.workspaceId)
+      .eq("fixed_team_id", team.id)
+      .eq("routing", "fixed_team")
+      .is("archived_at", null);
+    if ((fixedTypes ?? []).length > 0) {
+      const names = (fixedTypes ?? []).map((t) => `«${t.name}»`).join(", ");
+      return {
+        error: `Estos tipos de gestión mandan sus gestiones a este equipo: ${names}. Cambia su destino en Configuración → Gestiones antes de archivarlo.`,
+      };
+    }
+  }
+
+  if (archived && team.is_default && !team.archived_at) {
+    const { data: others } = await ctx.db
+      .from("teams")
+      .select("id")
+      .eq("workspace_id", ctx.workspaceId)
+      .is("archived_at", null)
+      .neq("id", team.id);
+    if ((others ?? []).length > 0) {
+      return { error: "Este es el equipo por defecto. Marca otro equipo como por defecto antes de archivarlo." };
+    }
+  }
 
   const patch = archived
     ? { archived_at: team.archived_at ?? new Date().toISOString(), is_default: false }
@@ -151,6 +191,15 @@ export async function setDefaultTeam(teamId: string | null): Promise<TeamActionR
   if ("error" in ctx) return ctx;
 
   if (teamId === null) {
+    // R2-1: con equipos activos siempre tiene que haber uno por defecto.
+    const { data: active } = await ctx.db
+      .from("teams")
+      .select("id")
+      .eq("workspace_id", ctx.workspaceId)
+      .is("archived_at", null);
+    if ((active ?? []).length > 0) {
+      return { error: "Tiene que haber un equipo por defecto. Para cambiarlo, marca otro equipo como por defecto." };
+    }
     const { error } = await ctx.db
       .from("teams")
       .update({ is_default: false })
@@ -201,6 +250,26 @@ export async function setTeamAssignmentMode(
   return done();
 }
 
+/**
+ * R2-17: "El supervisor no recibe chats". Con true, los supervisores del equipo
+ * quedan fuera del reparto automático (se les puede asignar a mano). Por
+ * defecto false: los supervisores entran en el reparto como cualquier miembro.
+ */
+export async function setTeamSupervisorSkipsChats(teamId: string, skips: boolean): Promise<TeamActionResult> {
+  if (typeof skips !== "boolean") return { error: GENERIC_ERROR };
+  const ctx = await adminContext();
+  if ("error" in ctx) return ctx;
+  const team = await loadTeam(ctx, teamId);
+  if (!team) return { error: TEAM_NOT_FOUND };
+
+  const { error } = await ctx.db.from("teams").update({ supervisor_skips_chats: skips }).eq("id", team.id);
+  if (error) {
+    console.error("[teams] setTeamSupervisorSkipsChats", error.message);
+    return { error: GENERIC_ERROR };
+  }
+  return done();
+}
+
 // ── Miembros del equipo ────────────────────────────────────────────────────
 
 export interface TeamMemberInput {
@@ -214,7 +283,21 @@ async function checkMemberInput(
   input: TeamMemberInput,
 ): Promise<{ role: TeamRole; caseTypeIds: string[] | null } | { error: string }> {
   if (!input || !isTeamRole(input.role)) return { error: "El rol de equipo no es válido." };
-  const selection = normalizeCaseTypeSelection(input.caseTypeIds, await activeCaseTypeIds(ctx));
+  // R2-9: los tipos archivados que la persona ya tenía guardados se descartan en vez de rechazar
+  // todo el cambio (si no, no se le podría ni cambiar el rol).
+  let wanted: unknown = input.caseTypeIds;
+  if (Array.isArray(wanted) && wanted.length > 0) {
+    const { data: archived } = await ctx.db
+      .from("case_types")
+      .select("id")
+      .eq("workspace_id", ctx.workspaceId)
+      .not("archived_at", "is", null);
+    const gone = new Set((archived ?? []).map((t) => t.id));
+    const kept = wanted.filter((id) => !(typeof id === "string" && gone.has(id)));
+    // Si solo tenía tipos archivados, queda lista vacía y se pide elegir (no se vuelve "todos" a escondidas).
+    wanted = kept;
+  }
+  const selection = normalizeCaseTypeSelection(wanted, await activeCaseTypeIds(ctx));
   if ("error" in selection) return selection;
   return { role: input.role, caseTypeIds: selection.value };
 }

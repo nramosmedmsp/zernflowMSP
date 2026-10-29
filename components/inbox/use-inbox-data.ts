@@ -13,6 +13,7 @@ import {
   lostContactIds,
   replaceActiveCases,
 } from "./inbox-refresh";
+import { uniqueChannelName } from "@/lib/realtime-channel";
 
 const MAX_ACTIVE_CASES = 1000;
 
@@ -41,9 +42,15 @@ export function useInboxData({
   const requestedContacts = useRef(new Set<string>());
 
   // Al refrescar la página (p. ej. después de sincronizar) llegan datos nuevos.
+  // Se FUSIONA con lo que ya hay: un chat abierto desde una notificación o desde
+  // Contactos (que no está entre los recientes) no debe desaparecer al volver a
+  // la pestaña y refrescar la página (R2-B8).
   useEffect(() => {
-    setConversations(initialConversations);
-    requestedContacts.current = new Set(initialConversations.map((c) => c.contact_id));
+    setConversations((prev) => {
+      const incomingIds = new Set(initialConversations.map((c) => c.id));
+      return [...initialConversations, ...prev.filter((c) => !incomingIds.has(c.id))];
+    });
+    for (const c of initialConversations) requestedContacts.current.add(c.contact_id);
   }, [initialConversations]);
   useEffect(() => {
     setCases(initialCases);
@@ -136,7 +143,7 @@ export function useInboxData({
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase
-      .channel(`inbox-conversations-${workspaceId}`)
+      .channel(uniqueChannelName(`inbox-conversations-${workspaceId}`))
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
@@ -172,7 +179,7 @@ export function useInboxData({
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase
-      .channel(`inbox-cases-${workspaceId}`)
+      .channel(uniqueChannelName(`inbox-cases-${workspaceId}`))
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "cases", filter: `workspace_id=eq.${workspaceId}` },

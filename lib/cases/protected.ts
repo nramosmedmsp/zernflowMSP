@@ -71,6 +71,9 @@ export async function closeOrRequestClose(
     reasonId: checked.outcomeReasonId,
     note,
     categoryId: input.categoryId === undefined ? null : checked.categoryId,
+    keyDate: input.keyDate ?? null,
+    scheduleAt: input.overrides?.schedule_at ?? null,
+    skipSchedule: input.overrides?.skip_schedule === true,
     requestedBy: input.actorId,
     requestedAt,
   });
@@ -149,6 +152,11 @@ export async function approveCloseRequest(
       outcomeReasonId: request.reasonId,
       categoryId: request.categoryId ?? undefined,
       note: request.note,
+      keyDate: request.keyDate ?? null,
+      overrides:
+        request.scheduleAt || request.skipSchedule
+          ? { schedule_at: request.scheduleAt ?? null, skip_schedule: request.skipSchedule }
+          : undefined,
       actorId: params.actorId,
       activityMeta: {
         close_request: { requested_by: request.requestedBy, requested_at: request.requestedAt },

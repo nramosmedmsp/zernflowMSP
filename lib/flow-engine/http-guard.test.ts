@@ -60,7 +60,13 @@ describe("interpolateVariables: codificación y variables desconocidas", () => {
   });
   it("sin opciones deja la variable desconocida tal cual; con blankUnknown la vacía", () => {
     expect(interpolateVariables("Hola {{x}}", {})).toBe("Hola {{x}}");
-    expect(interpolateVariables("Hola {{x}}", {}, { blankUnknown: true })).toBe("Hola ");
-    expect(interpolateVariables("Hola {{x}}", { x: "" }, { blankUnknown: true })).toBe("Hola ");
+    expect(interpolateVariables("Hola {{x}}", {}, { blankUnknown: true })).toBe("Hola");
+    expect(interpolateVariables("Hola {{x}}", { x: "" }, { blankUnknown: true })).toBe("Hola");
+    // Sin nombre el saludo queda bien escrito: sin espacio doble, ni antes de la coma o el signo.
+    const sinNombre = { nombre: "" };
+    expect(interpolateVariables("Hola {{nombre}}, ¿en qué te ayudo?", sinNombre, { blankUnknown: true })).toBe("Hola, ¿en qué te ayudo?");
+    expect(interpolateVariables("Hola {{nombre}}!", sinNombre, { blankUnknown: true })).toBe("Hola!");
+    expect(interpolateVariables("¡Hola {{nombre}} bienvenido!", sinNombre, { blankUnknown: true })).toBe("¡Hola bienvenido!");
+    expect(interpolateVariables("Hola {{nombre}}, ¿en qué te ayudo?", { nombre: "Ana" }, { blankUnknown: true })).toBe("Hola Ana, ¿en qué te ayudo?");
   });
 });

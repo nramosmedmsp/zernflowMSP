@@ -65,10 +65,20 @@ describe("publicar (M-26 y avisos de B-17 / M-31)", () => {
     seedFlow("f1");
     const res = await publish(req(), pubParams("f1"));
     expect(res.status).toBe(200);
-    expect(rows("flows")[0]).toMatchObject({ status: "published", version: 2 });
+    // La primera publicación es la v1 (B-43).
+    expect(rows("flows")[0]).toMatchObject({ status: "published", version: 1 });
     expect(rows("flow_versions")).toHaveLength(1);
+    expect(rows("flow_versions")[0]).toMatchObject({ version: 1 });
     expect(rows("triggers")).toHaveLength(1);
     expect(rows("triggers")[0]).toMatchObject({ flow_id: "f1", type: "keyword", is_active: true });
+  });
+
+  it("publicar de nuevo suma una versión", async () => {
+    seedFlow("f1");
+    await publish(req(), pubParams("f1"));
+    await publish(req(), pubParams("f1"));
+    expect(rows("flows")[0]).toMatchObject({ version: 2 });
+    expect(rows("flow_versions").map((v) => v.version).sort()).toEqual([1, 2]);
   });
 
   it("una palabra clave repetida en otro flujo publicado pide confirmación y se publica al confirmar", async () => {

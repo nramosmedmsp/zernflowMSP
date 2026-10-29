@@ -2,6 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
+import { releaseMemberWork } from "@/lib/cases/member-removal";
 import { rpcAuthUserExists } from "@/lib/supabase/extra-rpc";
 import { findAuthUserByEmail, generateAccessLink } from "@/lib/supabase/admin-users";
 import { sendAppMail } from "@/lib/mail/send";
@@ -374,6 +375,13 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
   if (deleteError) {
     console.error("[removeTeamMember]", deleteError.message);
     return { error: "No se pudo quitar al miembro. Inténtalo de nuevo." };
+  }
+
+  // R2-2: su trabajo no se queda colgado de una persona que ya no está.
+  try {
+    await releaseMemberWork(service, { workspaceId, userId, actorId: ctx.user.id });
+  } catch (err) {
+    console.error("[removeTeamMember] reparto del trabajo", err);
   }
 
   return { ok: true };

@@ -23,6 +23,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
+import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
 import type {
@@ -48,6 +49,7 @@ import {
   STAGE_KINDS,
   STAGE_KIND_CHANGE_NOTICE,
   checkStageKindChange,
+  closeStageProblem,
   cleanKeyDateLabel,
   cleanName,
   decideRemoval,
@@ -370,6 +372,7 @@ interface TypeRow {
   protected?: boolean;
   solution_deadline_hours?: number | null;
   reopen_window_days?: number | null;
+  auto_template?: unknown;
   archived_at: string | null;
 }
 
@@ -442,6 +445,26 @@ async function countContactsOfType(svc: Db, workspaceId: string, contactTypeId: 
 
 function countRuleRefs(rules: readonly RuleConfig[], target: RuleRefTarget, exceptCaseTypeId?: string): number {
   return rules.filter((r) => r.caseTypeId !== exceptCaseTypeId && ruleReferences(r, target)).length;
+}
+
+/**
+ * R2-5: nombres de los flujos (no archivados) cuyos nodos mencionan este id
+ * (etapa, categoría, tipo de gestión...). Los ids son UUID: basta buscarlos en el JSON.
+ */
+async function flowsUsingId(svc: Db, workspaceId: string, id: string): Promise<string[]> {
+  const { data } = await svc.from("flows").select("name, nodes, status").eq("workspace_id", workspaceId).neq("status", "archived");
+  return (data ?? []).filter((f) => JSON.stringify(f.nodes ?? null).includes(id)).map((f) => f.name);
+}
+
+/** R2-4 y R2-5: frase que avisa qué se queda sin efecto al archivar. */
+function usageWarning(ruleRefs: number, flows: readonly string[]): string {
+  const parts: string[] = [];
+  if (ruleRefs > 0) parts.push(`${ruleRefs} ${ruleRefs === 1 ? "regla" : "reglas"} que lo usan dejarán de aplicarse`);
+  if (flows.length > 0) {
+    const names = flows.slice(0, 3).map((n) => `«${n}»`).join(", ");
+    parts.push(`${flows.length === 1 ? "el flujo" : "los flujos"} ${names}${flows.length > 3 ? " y otros" : ""} ${flows.length === 1 ? "tiene" : "tienen"} nodos que lo usan y fallarán`);
+  }
+  return parts.length ? ` Ojo: ${parts.join("; ")}.` : "";
 }
 
 /** Gestiones que están o estuvieron en una etapa, y reglas que dependen de ella. */
@@ -585,8 +608,20 @@ export async function updateCaseType(input: UpdateCaseTypeInput): Promise<Config
     if (input.isProactive !== undefined) {
       patch.is_proactive = input.isProactive === true;
       before.is_proactive = row.is_proactive;
+      // Una plantilla automática solo tiene sentido en un tipo proactivo: al dejar de serlo no se
+      // queda mandando mensajes a escondidas.
+      if (input.isProactive !== true && row.auto_template) {
+        patch.auto_template = null;
+        before.auto_template = row.auto_template;
+      }
     }
     if (input.requireCategory !== undefined) {
+      if (input.requireCategory === true && !row.require_category) {
+        const cats = await listChildren(s.db, "case_categories", row.id);
+        if (!cats.some((c) => c.archived_at === null)) {
+          return { error: "Agrega al menos una categoría activa antes de pedir que se elija al cerrar." };
+        }
+      }
       patch.require_category = input.requireCategory === true;
       before.require_category = row.require_category;
     }
@@ -677,6 +712,24 @@ export async function updateCaseType(input: UpdateCaseTypeInput): Promise<Config
       "update case_types",
     );
     if ((data ?? []).length === 0) return { error: ADMIN_ONLY_MESSAGE };
+
+    // R2-10: al encender o cambiar el plazo de la solución, las gestiones abiertas que aún no
+    // tienen reloj empiezan a contar desde ahora (así las viejas no avisan todas de golpe).
+    const newDeadline = patch.solution_deadline_hours as number | null | undefined;
+    if (newDeadline && newDeadline > 0 && newDeadline !== (row.solution_deadline_hours ?? null)) {
+      const svc = await service();
+      must(
+        await svc
+          .from("cases")
+          .update({ solution_clock_at: nowIso() })
+          .eq("workspace_id", s.workspaceId)
+          .eq("case_type_id", row.id)
+          .eq("status", "open")
+          .is("solution_clock_at", null)
+          .select("id"),
+        "update cases solution_clock_at",
+      );
+    }
     await audit(s, "case_type_updated", "case_type", {
       entityId: row.id,
       name: (patch.name as string | undefined) ?? row.name,
@@ -713,15 +766,47 @@ async function setTypeArchived(s: Session, row: TypeRow, archived: boolean): Pro
   if ((data ?? []).length === 0) throw new Error("case_types: sin permiso");
 }
 
-export async function archiveCaseType(id: string): Promise<ConfigResult> {
+/**
+ * R2-3: qué rompe archivar un tipo. Las gestiones programadas (proactivas) de
+ * un tipo archivado se activarían igual, con su plantilla automática, sin que
+ * nadie pueda verlas en la configuración; y las reglas de otros tipos que lo
+ * programan dejarían de crearlas sin avisar.
+ */
+async function archiveImpact(s: Session, row: TypeRow): Promise<{ scheduled: number; ruleRefs: number }> {
+  const svc = await service();
+  const [scheduled, rules] = await Promise.all([
+    svc
+      .from("cases")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", s.workspaceId)
+      .eq("case_type_id", row.id)
+      .eq("status", "scheduled"),
+    loadWorkspaceRules(s.db, s.workspaceId),
+  ]);
+  must(scheduled, "cases");
+  return { scheduled: scheduled.count ?? 0, ruleRefs: countRuleRefs(rules, { caseTypeId: row.id }, row.id) };
+}
+
+function scheduledBlockMessage(name: string, scheduled: number): string {
+  return `«${name}» tiene ${scheduled} ${scheduled === 1 ? "gestión programada" : "gestiones programadas"} que aún no se activa${scheduled === 1 ? "" : "n"}. Cancélalas o espera a que se activen antes de archivar el tipo.`;
+}
+
+export async function archiveCaseType(id: string): Promise<ConfigResult<{ message?: string }>> {
   return run(async (s) => {
     const row = await ownedType(s, id);
     if (!row) return { error: TYPE_NOT_FOUND };
-    if (row.archived_at === null) {
-      await setTypeArchived(s, row, true);
-      await audit(s, "case_type_archived", "case_type", { entityId: row.id, name: row.name });
-    }
-    return { ok: true };
+    if (row.archived_at !== null) return { ok: true };
+    const impact = await archiveImpact(s, row);
+    if (impact.scheduled > 0) return { error: scheduledBlockMessage(row.name, impact.scheduled) };
+    const flows = await flowsUsingId(await service(), s.workspaceId, row.id);
+    await setTypeArchived(s, row, true);
+    await audit(s, "case_type_archived", "case_type", {
+      entityId: row.id,
+      name: row.name,
+      meta: { rule_refs: impact.ruleRefs, flows },
+    });
+    const warning = usageWarning(impact.ruleRefs, flows);
+    return warning ? { ok: true, message: `El tipo se archivó.${warning}` } : { ok: true };
   });
 }
 
@@ -749,11 +834,16 @@ export async function removeCaseType(id: string): Promise<ConfigResult<{ outcome
       svc.from("team_members").select("team_id").contains("case_type_ids", [row.id]),
     ]);
     must(members, "team_members");
-    const configRefs = countRuleRefs(rules, { caseTypeId: row.id }, row.id) + (members.data ?? []).length;
+    const flowNames = await flowsUsingId(svc, s.workspaceId, row.id);
+    const configRefs = countRuleRefs(rules, { caseTypeId: row.id }, row.id) + (members.data ?? []).length + flowNames.length;
     const outcome = decideRemoval({ historyCount: history, configRefs });
     const what = `El tipo «${row.name}»`;
     if (outcome === "archive") {
-      if (row.archived_at === null) await setTypeArchived(s, row, true);
+      if (row.archived_at === null) {
+        const impact = await archiveImpact(s, row);
+        if (impact.scheduled > 0) return { error: scheduledBlockMessage(row.name, impact.scheduled) };
+        await setTypeArchived(s, row, true);
+      }
       await audit(s, "case_type_archived", "case_type", { entityId: row.id, name: row.name, meta: { history_cases: history, config_refs: configRefs } });
       return { ok: true, outcome, message: removalMessage(outcome, what, history > 0 ? "history" : "config") };
     }
@@ -881,7 +971,9 @@ export async function updateItem(input: UpdateItemInput): Promise<ConfigResult> 
       const valid = list === "stage" ? (STAGE_KINDS as readonly string[]) : (OUTCOME_KINDS as readonly string[]);
       if (!valid.includes(input.kind)) return { error: INVALID };
       if (list === "stage") {
-        const problem = checkStageKindChange({ stages: siblings.map(toStage), stageId: row.id, newKind: input.kind as StageKind });
+        const problem =
+          checkStageKindChange({ stages: siblings.map(toStage), stageId: row.id, newKind: input.kind as StageKind }) ??
+          closeStageProblem({ stages: siblings.map(toStage), stageId: row.id, newKind: input.kind as StageKind, protectedType: type.protected === true });
         if (problem) return { error: problem };
       } else {
         const rules = await loadWorkspaceRules(s.db, s.workspaceId);
@@ -995,6 +1087,13 @@ async function prepareStageRemoval(
     listChildren(s.db, "case_stages", found.type.id),
     countCases(svc, s.workspaceId, "stage_id", found.row.id, true),
   ]);
+  const closeProblem = closeStageProblem({
+    stages: siblings.map(toStage),
+    stageId: found.row.id,
+    newKind: null,
+    protectedType: found.type.protected === true,
+  });
+  if (closeProblem) return { error: closeProblem };
   const plan = planStageRemoval({
     stages: siblings.map(toStage),
     stageId: found.row.id,
@@ -1008,7 +1107,7 @@ async function prepareStageRemoval(
 }
 
 /** Archiva (sin borrar) una etapa, categoría o motivo. Una etapa con gestiones abiertas las mueve antes. */
-export async function archiveItem(input: RemoveItemInput): Promise<ConfigResult<{ moved: number }>> {
+export async function archiveItem(input: RemoveItemInput): Promise<ConfigResult<{ moved: number; warning?: string }>> {
   return run(async (s) => {
     const list = input?.list;
     if (!list || !(list in LIST_TABLE)) return { error: INVALID };
@@ -1021,6 +1120,13 @@ export async function archiveItem(input: RemoveItemInput): Promise<ConfigResult<
       if ("error" in prepared) return prepared;
       moved = prepared.moved;
     }
+    const refTarget: RuleRefTarget =
+      list === "stage" ? { stageId: found.row.id } : list === "category" ? { categoryId: found.row.id } : { outcomeReasonId: found.row.id };
+    const [rulesNow, flows] = await Promise.all([
+      loadWorkspaceRules(s.db, s.workspaceId),
+      flowsUsingId(await service(), s.workspaceId, found.row.id),
+    ]);
+    const ruleRefs = countRuleRefs(rulesNow, refTarget);
     await setChildArchived(s, list, found.row, true);
     await audit(s, `${list}_archived`, list, {
       entityId: found.row.id,
@@ -1028,10 +1134,12 @@ export async function archiveItem(input: RemoveItemInput): Promise<ConfigResult<
       meta: {
         case_type_id: found.type.id,
         case_type: found.type.name,
+        rule_refs: ruleRefs,
+        flows,
         ...(moved > 0 ? { moved_cases: moved, moved_to_stage_id: input.moveToStageId } : {}),
       },
     });
-    return { ok: true, moved };
+    return { ok: true, moved, warning: usageWarning(ruleRefs, flows).trim() || undefined };
   });
 }
 
@@ -1082,7 +1190,8 @@ export async function removeItem(input: RemoveItemInput): Promise<ConfigResult<{
       list === "stage" ? { stageId: row.id } : list === "category" ? { categoryId: row.id } : { outcomeReasonId: row.id };
     const ruleRefs = countRuleRefs(rules, target);
     // Las reglas que arrancan en una etapa se borran con ella (cascada); no cuentan como uso.
-    const configRefs = list === "stage" ? 0 : ruleRefs;
+    const flowRefs = (await flowsUsingId(svc, s.workspaceId, row.id)).length;
+    const configRefs = (list === "stage" ? 0 : ruleRefs) + flowRefs;
     const outcome = decideRemoval({ historyCount: history, configRefs });
 
     if (outcome === "archive") {
@@ -1428,15 +1537,19 @@ async function setContactTypeArchived(s: Session, row: ContactTypeRow, archived:
   if ((data ?? []).length === 0) throw new Error("contact_types: sin permiso");
 }
 
-export async function archiveContactType(id: string): Promise<ConfigResult> {
+export async function archiveContactType(id: string): Promise<ConfigResult<{ warning?: string }>> {
   return run(async (s) => {
     const row = await ownedContactType(s, id);
     if (!row) return { error: CONTACT_TYPE_NOT_FOUND };
+    let warning: string | undefined;
     if (row.archived_at === null) {
+      const rulesNow = await loadWorkspaceRules(s.db, s.workspaceId);
+      const ruleRefs = countRuleRefs(rulesNow, { contactTypeId: row.id });
       await setContactTypeArchived(s, row, true);
-      await audit(s, "contact_type_archived", "contact_type", { entityId: row.id, name: row.name, meta: { was_default: row.is_default } });
+      await audit(s, "contact_type_archived", "contact_type", { entityId: row.id, name: row.name, meta: { was_default: row.is_default, rule_refs: ruleRefs } });
+      warning = usageWarning(ruleRefs, []).trim() || undefined;
     }
-    return { ok: true };
+    return { ok: true, warning };
   });
 }
 
@@ -1505,11 +1618,9 @@ export async function saveKeyDateLabel(label: string): Promise<ConfigResult<{ la
     const next = { ...settings };
     if (clean === null) delete next.key_date_label;
     else next.key_date_label = clean;
-    const { data } = must(
-      await s.db.from("workspaces").update({ settings: next as Json }).eq("id", s.workspaceId).select("id"),
-      "update workspaces",
-    );
-    if ((data ?? []).length === 0) return { error: ADMIN_ONLY_MESSAGE };
+    const saveError = await mergeWorkspaceSettings(s.db, s.workspaceId, settings, next);
+    if (saveError === "sin permiso") return { error: ADMIN_ONLY_MESSAGE };
+    if (saveError) throw new Error(`update workspaces: ${saveError}`);
     await audit(s, "key_date_label_changed", "workspace", { from: previous, to: clean });
     return { ok: true, label: clean ?? "" };
   });

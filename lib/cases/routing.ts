@@ -39,6 +39,12 @@ export interface RoutingTeam {
   id: string;
   isDefault: boolean;
   assignmentMode: AssignmentMode;
+  /**
+   * R2-17: "El supervisor no recibe chats". Si es true, los supervisores del
+   * equipo quedan fuera del reparto automático (la asignación a mano sigue
+   * permitida). Por defecto false: los supervisores entran en el reparto.
+   */
+  supervisorsSkipChats?: boolean;
 }
 
 export interface RoutingTeamMember {
@@ -123,10 +129,12 @@ function servesType(member: RoutingTeamMember, caseTypeId: string | null): boole
 export function eligibleMembers(input: RoutingInput, teamId: string | null): RoutingMember[] {
   const byUser = new Map(input.members.map((m) => [m.userId, m]));
   if (teamId) {
+    const skipSupervisors = input.teams.find((t) => t.id === teamId)?.supervisorsSkipChats === true;
     const seen = new Set<string>();
     const result: RoutingMember[] = [];
     for (const tm of input.teamMembers) {
       if (tm.teamId !== teamId || !servesType(tm, input.caseTypeId) || seen.has(tm.userId)) continue;
+      if (skipSupervisors && tm.role === "supervisor") continue;
       const member = byUser.get(tm.userId);
       if (!member) continue; // ya no es miembro del espacio
       seen.add(tm.userId);

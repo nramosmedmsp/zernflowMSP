@@ -158,7 +158,7 @@ export function GeneralTab({ type, data, run, busy, onGone }: TabProps & { onGon
         onCancel={() => setConfirm(null)}
         onConfirm={async () => {
           setConfirm(null);
-          if (await run(() => archiveCaseType(type.id), "El tipo se archivó.")) onGone();
+          if (await run(() => archiveCaseType(type.id), (r) => r.message ?? "El tipo se archivó.")) onGone();
         }}
       />
       <ConfirmDialog

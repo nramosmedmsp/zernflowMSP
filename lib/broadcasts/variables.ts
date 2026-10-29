@@ -67,8 +67,10 @@ export type RenderedText = { ok: true; text: string } | { ok: false; error: stri
 /**
  * Texto de una difusión o de un paso de secuencia para un contacto, con sus
  * variables ({nombre}, {fecha_clave}, {empresa}, {campo:slug}...) ya puestas.
- * Falla (el contacto no recibe nada) si el texto queda vacío, si una variable
- * queda vacía para ese contacto o si queda una llave que no es una variable.
+ * Si el contacto no tiene un nombre real, `{nombre}` queda vacío y el texto se
+ * limpia ("Hola {nombre}, ..." -> "Hola, ..."): el contacto sí lo recibe.
+ * Falla (el contacto no recibe nada) si el texto queda vacío, si otra variable
+ * ({fecha_clave}, {campo:...}) queda vacía o si queda una llave desconocida.
  */
 export function renderContactText(text: string, vars: ContactTemplateVars): RenderedText {
   const keyDate = formatKeyDate(vars.keyDate);
@@ -79,7 +81,8 @@ export function renderContactText(text: string, vars: ContactTemplateVars): Rend
     workspaceName: vars.workspaceName ?? undefined,
     customFields: vars.customFields,
   });
-  missing.push(...empty);
+  // El nombre es opcional: sin él se saluda sin nombre en vez de excluir al contacto.
+  missing.push(...empty.filter((v) => v !== "{nombre}" && v !== "{primer_nombre}"));
   if (missing.length > 0) {
     return { ok: false, error: `La variable ${[...new Set(missing)].join(", ")} está vacía para este contacto.` };
   }

@@ -6,6 +6,7 @@ import { Upload, Download, Loader2, GitBranch, FileJson, X, Trash2 } from "lucid
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { startRouteProgress } from "@/components/ui/route-progress";
+import { flowFileName } from "@/lib/flow-file-name";
 import type { Json } from "@/lib/types/database";
 
 interface FlowExportData {
@@ -53,7 +54,7 @@ export function ExportFlowButton({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${flow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.flow.json`;
+    a.download = flowFileName(flow.name);
     a.click();
     URL.revokeObjectURL(url);
   }

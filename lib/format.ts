@@ -130,6 +130,11 @@ export function formatRelative(value: DateInput, now: Date = new Date()): string
   return future ? `en ${days} días` : `hace ${days} días`;
 }
 
+/** "1 contacto" / "2 contactos": el sustantivo concuerda con la cantidad. */
+export function pluralize(n: number, one: string, many: string): string {
+  return `${formatNumber(n)} ${n === 1 ? one : many}`;
+}
+
 /** Número con separadores es-PE; "" si no es un número finito. */
 export function formatNumber(n: number | string | null | undefined): string {
   if (n === null || n === undefined) return "";

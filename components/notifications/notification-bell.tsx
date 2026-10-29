@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { markNotificationsRead } from "@/lib/actions/cases";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { uniqueChannelName } from "@/lib/realtime-channel";
 import {
   NOTIFICATION_LIST_LIMIT,
   badgeLabel,
@@ -91,7 +92,7 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
   useEffect(() => {
     let subscribedBefore = false;
     const channel = supabase
-      .channel(`notifications:${userId}:${workspaceId}`)
+      .channel(uniqueChannelName(`notifications:${userId}:${workspaceId}`))
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },

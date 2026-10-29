@@ -61,6 +61,15 @@ function reviewDisabled(userId: string): boolean {
   }
 }
 
+function setReviewDisabled(userId: string, off: boolean): void {
+  try {
+    if (off) window.localStorage.setItem(REVIEW_OFF_KEY + userId, "1");
+    else window.localStorage.removeItem(REVIEW_OFF_KEY + userId);
+  } catch {
+    // Sin almacenamiento: no se puede recordar.
+  }
+}
+
 /** Cuánto se ve en verde lo recién corregido. */
 const FIXED_FLASH_MS = 1500;
 
@@ -101,7 +110,8 @@ export function Composer({
     message: readDraft(draftStorage(), scope, conversation.id, "message"),
     note: readDraft(draftStorage(), scope, conversation.id, "note"),
   }));
-  const [noteMode, setNoteMode] = useState(false);
+  // Si solo quedó escrita una nota interna, el chat abre en modo nota: así el borrador se ve (R2-B16).
+  const [noteMode, setNoteMode] = useState(() => !!noteCase && !!texts.note.trim() && !texts.message.trim());
   const [savingNote, setSavingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -141,7 +151,13 @@ export function Composer({
   const canNote = !!noteCase && noteCase.permissions.canNote;
   const spell = useSpellcheck({ text: input, enabled: true, workspaceId: conversation.workspace_id, ignored: ignoredWords });
   // Una sola lista de cosas por revisar, en vivo: la caja la subraya y la franja la muestra.
-  const items = buildReviewItems(input, spell.issues, ignoredWords);
+  // Con la revisión ortográfica apagada, las {variables} sin reemplazar se revisan igual (R2-B9).
+  const [reviewOff, setReviewOff] = useState(false);
+  useEffect(() => {
+    setReviewOff(reviewDisabled(me.userId));
+  }, [me.userId]);
+  const allItems = buildReviewItems(input, spell.issues, ignoredWords);
+  const items = reviewOff ? allItems.filter((i) => i.source === "llave") : allItems;
   const marks: TextMark[] = [...underlineMarks(items), ...(fixed ?? []).map((r) => ({ ...r, tone: "fixed" as const }))];
 
   // Campos personalizados del contacto para las variables de las respuestas guardadas.
@@ -333,13 +349,16 @@ export function Composer({
 
   /** "No volver a revisar en este equipo": se apaga la revisión y el mensaje sale como está. */
   function disableReview() {
-    try {
-      window.localStorage.setItem(REVIEW_OFF_KEY + me.userId, "1");
-    } catch {
-      // Sin almacenamiento: la revisión sigue activa.
-    }
-    toast.success("Listo: ya no revisaremos la ortografía al enviar en este equipo.");
+    setReviewDisabled(me.userId, true);
+    setReviewOff(true);
+    toast.success("Listo: ya no revisaremos la ortografía al enviar en este equipo. Puedes volver a activarla debajo de la caja.");
     void handleSubmit({ asIs: true });
+  }
+
+  function enableReview() {
+    setReviewDisabled(me.userId, false);
+    setReviewOff(false);
+    toast.success("La revisión ortográfica volvió a activarse.");
   }
 
   const hasFiles = !noteMode && attachments.items.length > 0;
@@ -360,7 +379,18 @@ export function Composer({
     if (!noteMode) {
       if (blocked) return;
       // Sin texto (solo archivos) no hay nada que revisar.
-      if (!text || asIs || reviewDisabled(me.userId)) {
+      if (!text || asIs) {
+        sendMessage(text);
+        return;
+      }
+      // Revisión apagada: solo se frena por {variables} sin reemplazar.
+      if (reviewOff || reviewDisabled(me.userId)) {
+        const pending = buildReviewItems(input, [], ignoredWords).filter((i) => i.source === "llave");
+        if (pending.length > 0) {
+          if (reviewMode) setNudge((n) => n + 1);
+          else setReviewMode(true);
+          return;
+        }
         sendMessage(text);
         return;
       }
@@ -385,7 +415,7 @@ export function Composer({
     if (!noteCase || savingNote || !text) return;
     setSavingNote(true);
     try {
-      const mentions = mentionedIds(text, picked);
+      const mentions = mentionedIds(text, picked, members.filter((m) => m.userId !== me.userId));
       const result = await addCaseNote(noteCase.id, text, mentions, conversation.id);
       if ("error" in result) {
         setError(result.error);
@@ -677,6 +707,8 @@ export function Composer({
               onKeyDown={handleKeyDown}
               onPaste={(e) => {
                 if (e.clipboardData.files.length === 0) return;
+                // Excel, Word y páginas web copian el texto y además una imagen: si hay texto, se pega el texto (R2-B15).
+                if (e.clipboardData.getData("text/plain").trim()) return;
                 e.preventDefault();
                 addFiles(e.clipboardData.files);
               }}
@@ -735,6 +767,8 @@ export function Composer({
           onSendAsIs={() => void handleSubmit({ asIs: true })}
           onApplySafeAndSend={sendWithSafeFixes}
           onDisable={disableReview}
+          reviewOff={reviewOff && !noteMode}
+          onEnable={enableReview}
         />
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1">

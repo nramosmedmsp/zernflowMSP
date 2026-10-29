@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiMember } from "@/lib/api-auth";
+import { cleanSearch } from "@/components/contacts/contact-list-query";
+import { ilikePattern } from "@/components/cases/case-filters";
+
+const MAX_LIMIT = 100;
 
 /**
  * GET /api/v1/contacts
@@ -17,8 +21,11 @@ export async function GET(request: NextRequest) {
   const search = searchParams.get("search");
   const tag = searchParams.get("tag");
   const subscribed = searchParams.get("subscribed");
-  const limit = parseInt(searchParams.get("limit") || "50", 10);
-  const offset = parseInt(searchParams.get("offset") || "0", 10);
+  // Cantidad acotada: un número raro o enorme no pide toda la tabla.
+  const rawLimit = parseInt(searchParams.get("limit") || "50", 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : 50;
+  const rawOffset = parseInt(searchParams.get("offset") || "0", 10);
+  const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0;
 
   let query = supabase
     .from("contacts")
@@ -27,8 +34,11 @@ export async function GET(request: NextRequest) {
     .order("last_interaction_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  if (search) {
-    query = query.or(`display_name.ilike.%${search}%,email.ilike.%${search}%`);
+  // Mismo texto limpio que la pantalla de Contactos (comas y paréntesis rompen el filtro).
+  const text = search ? cleanSearch(search) : "";
+  if (text) {
+    const pattern = ilikePattern(text);
+    query = query.or(`display_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern}`);
   }
 
   if (subscribed === "true") {
@@ -39,7 +49,10 @@ export async function GET(request: NextRequest) {
 
   const { data: contacts, error, count } = await query;
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    console.error("[contacts] no se pudo listar:", error.message);
+    return NextResponse.json({ error: "No se pudieron cargar los contactos. Inténtalo de nuevo." }, { status: 500 });
+  }
 
   // Filter by tag in-memory (Supabase doesn't easily filter through join)
   let filtered = contacts || [];

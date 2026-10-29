@@ -34,6 +34,7 @@ import {
   setDefaultTeam,
   setTeamArchived,
   setTeamAssignmentMode,
+  setTeamSupervisorSkipsChats,
   updateTeamMember,
 } from "./teams";
 
@@ -145,11 +146,52 @@ describe("acciones de equipos: equipos", () => {
     expect(team(SEDE_B).is_default).toBe(true);
     expect(team(SEDE_A).is_default).toBe(false);
     expect(fake.rows("teams").filter((t) => t.workspace_id === WS && t.is_default)).toHaveLength(1);
-    expect(await setDefaultTeam(null)).toEqual({ ok: true });
-    expect(fake.rows("teams").some((t) => t.is_default)).toBe(false);
+  });
+
+  it("R2-1: con equipos activos no se puede dejar al espacio sin equipo por defecto", async () => {
+    expect(await setDefaultTeam(null)).toEqual({
+      error: expect.stringContaining("Tiene que haber un equipo por defecto"),
+    });
+    expect(team(SEDE_A).is_default).toBe(true);
+  });
+
+  it("R2-1: el equipo por defecto no se archiva mientras haya otros activos", async () => {
+    expect(await setTeamArchived(SEDE_A, true)).toEqual({
+      error: expect.stringContaining("Marca otro equipo como por defecto"),
+    });
+    expect(team(SEDE_A).is_default).toBe(true);
+    expect(team(SEDE_A).archived_at ?? null).toBeNull();
+    expect(await setDefaultTeam(SEDE_B)).toEqual({ ok: true });
+    expect(await setTeamArchived(SEDE_A, true)).toEqual({ ok: true });
+  });
+
+  it("R2-1: el primer equipo activo del espacio queda por defecto", async () => {
+    const OTHER_ONLY = randomUUID();
+    state.workspaceId = OTHER_WS;
+    fake.seed("workspace_members", [{ workspace_id: OTHER_WS, user_id: OWNER, role: "owner" }]);
+    fake.seed("teams", [{ id: OTHER_ONLY, workspace_id: OTHER_WS, name: "Archivado", archived_at: "2026-01-01T00:00:00.000Z" }]);
+    fake.rows("teams").find((t) => t.id === FOREIGN_TEAM)!.archived_at = "2026-01-01T00:00:00.000Z";
+    expect(await createTeam(OTHER_WS, "Primero")).toMatchObject({ ok: true });
+    expect(fake.rows("teams").find((t) => t.name === "Primero")).toMatchObject({ is_default: true });
+    expect(await createTeam(OTHER_WS, "Segundo")).toMatchObject({ ok: true });
+    expect(fake.rows("teams").find((t) => t.name === "Segundo")).toMatchObject({ is_default: false });
+  });
+
+  it("R2-17: el interruptor «El supervisor no recibe chats» se guarda (apagado por defecto)", async () => {
+    expect(team(SEDE_A).supervisor_skips_chats ?? false).toBe(false);
+    expect(await setTeamSupervisorSkipsChats(SEDE_A, true)).toEqual({ ok: true });
+    expect(team(SEDE_A).supervisor_skips_chats).toBe(true);
+    expect(await setTeamSupervisorSkipsChats(SEDE_A, false)).toEqual({ ok: true });
+    expect(team(SEDE_A).supervisor_skips_chats).toBe(false);
+    expect(await setTeamSupervisorSkipsChats(SEDE_A, "si" as never)).toMatchObject({ error: expect.any(String) });
+    expect(await setTeamSupervisorSkipsChats(FOREIGN_TEAM, true)).toMatchObject({ error: expect.stringContaining("No se encontró") });
+    as(ANA, "member");
+    expect(await setTeamSupervisorSkipsChats(SEDE_A, true)).toEqual({ error: ADMIN_ONLY_MESSAGE });
   });
 
   it("archivar quita el equipo por defecto y un archivado no puede serlo", async () => {
+    await setDefaultTeam(SEDE_B);
+    await setTeamArchived(SEDE_B, true);
     expect(await setTeamArchived(SEDE_A, true)).toEqual({ ok: true });
     expect(team(SEDE_A)).toMatchObject({ is_default: false });
     expect(team(SEDE_A).archived_at).toEqual(expect.any(String));
@@ -195,7 +237,7 @@ describe("acciones de equipos: miembros", () => {
   it("valida los tipos de gestión: activos, no vacíos; todos = null", async () => {
     const base = { role: "agent" as const };
     expect(await addTeamMember(SEDE_A, ANA, { ...base, caseTypeIds: [ARCHIVADO] })).toMatchObject({
-      error: expect.stringContaining("archivado"),
+      error: expect.stringContaining("al menos un tipo"),
     });
     expect(await addTeamMember(SEDE_A, ANA, { ...base, caseTypeIds: [randomUUID()] })).toMatchObject({
       error: expect.stringContaining("no existe"),
@@ -210,6 +252,26 @@ describe("acciones de equipos: miembros", () => {
     // Marcar todos los tipos activos equivale a "todos" (null).
     expect(await addTeamMember(SEDE_A, ANA, { ...base, caseTypeIds: [VENTAS, SOPORTE] })).toEqual({ ok: true });
     expect(fake.rows("team_members")[0].case_type_ids).toBeNull();
+  });
+
+  it("R2-9: se puede cambiar el rol de quien atiende un tipo que luego se archivó", async () => {
+    await addTeamMember(SEDE_A, ANA, { role: "agent", caseTypeIds: [VENTAS] });
+    // Ventas se archiva después; la persona sigue con ese id guardado.
+    fake.rows("case_types").find((t) => t.id === VENTAS)!.archived_at = "2026-10-01T00:00:00.000Z";
+    fake.rows("team_members")[0].case_type_ids = [VENTAS, SOPORTE];
+    expect(await updateTeamMember(SEDE_A, ANA, { role: "supervisor", caseTypeIds: [VENTAS, SOPORTE] })).toEqual({ ok: true });
+    // Queda solo Soporte, que es el único activo => equivale a "todos".
+    expect(fake.rows("team_members")[0]).toMatchObject({ role: "supervisor" });
+  });
+
+  it("R2-8: no se archiva un equipo que es destino fijo de un tipo de gestión", async () => {
+    const t = fake.rows("case_types").find((x) => x.id === SOPORTE)!;
+    t.routing = "fixed_team";
+    t.fixed_team_id = SEDE_B;
+    expect(await setTeamArchived(SEDE_B, true)).toEqual({ error: expect.stringContaining("«Soporte»") });
+    expect(team(SEDE_B).archived_at ?? null).toBeNull();
+    t.routing = "contact_owner";
+    expect(await setTeamArchived(SEDE_B, true)).toEqual({ ok: true });
   });
 
   it("actualiza y quita miembros; actualizar a quien no está falla", async () => {

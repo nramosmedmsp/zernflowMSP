@@ -40,7 +40,8 @@ export const SAVED_REPLY_TITLE_MAX = 200;
 export const SAVED_REPLY_BODY_MAX = 4000;
 export const SHORTCUT_MAX = 30;
 
-const EMPTY = "\u0000";
+/** Marca temporal de un valor vacío; `tidyEmptyMarks` la quita limpiando espacios y comas. */
+export const EMPTY = "\u0000";
 const VARIABLE_RE = /\{(nombre|primer_nombre|asesor|sede|empresa|saludo|hoy|campo:([a-z0-9_-]+))\}/gi;
 
 const hourFormat = new Intl.DateTimeFormat(APP_LOCALE, { timeZone: APP_TIME_ZONE, hour: "numeric", hourCycle: "h23" });
@@ -123,17 +124,24 @@ export function applyReplyVariablesDetailed(
     return value || EMPTY;
   });
 
-  if (!result.includes(EMPTY)) return { text: result, empty };
+  return { text: tidyEmptyMarks(result), empty };
+}
 
+/**
+ * Quita las marcas de valor vacío (`EMPTY`) sin dejar espacios dobles, espacio
+ * antes de la puntuación ni coma suelta: "Hola , x" -> "Hola, x".
+ */
+export function tidyEmptyMarks(text: string): string {
+  if (!text.includes(EMPTY)) return text;
   // Al inicio de una línea: "{nombre}, hola" -> "hola".
-  result = result.replace(/^[ \t]*\u0000[ \t]*[,;:]?[ \t]*/gm, "");
+  let result = text.replace(/^[ \t]*\u0000[ \t]*[,;:]?[ \t]*/gm, "");
   // Antes de puntuación: "Hola {nombre}!" -> "Hola!".
   result = result.replace(/[ \t]*\u0000(?=[,.;:!?])/g, "");
   // Entre espacios: "a {x} b" -> "a b".
   result = result.replace(/([ \t])\u0000[ \t]+/g, "$1");
   // Al final de una línea: "Hola {nombre}" -> "Hola".
   result = result.replace(/[ \t]*\u0000[ \t]*$/gm, "");
-  return { text: result.replace(/\u0000/g, ""), empty };
+  return result.replace(/\u0000/g, "");
 }
 
 /** Igual que applyReplyVariablesDetailed, solo el texto. */

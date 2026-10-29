@@ -17,6 +17,7 @@ import {
 import type { Json, OffHoursReplySettings } from "@/lib/types/database";
 import { addDays, limaDateOf } from "./dates";
 import type { Db } from "./io";
+import type { SolutionSchedules } from "./protection";
 
 /** Feriados hacia atrás que se cargan (para medir esperas largas en minutos hábiles). */
 const HOLIDAYS_LOOKBACK_DAYS = 120;
@@ -126,4 +127,28 @@ export function isOpenAt(info: HoursInfo, teamId: string | null, at: Date | stri
 export function nextOpeningFor(info: HoursInfo, teamId: string | null, at: Date | string): Date | null {
   const s = scheduleForTeam(info, teamId);
   return nextOpening(at, s.hours, s.holidays);
+}
+
+/**
+ * Horarios del espacio para contar el plazo de la solución en horas hábiles
+ * (R2-10). Serializable: la bandeja y la lista de Gestiones lo reciben tal
+ * cual. Nunca lanza: ante un fallo devuelve null (se cuenta en horas de reloj).
+ */
+export async function loadSolutionSchedules(db: Db, workspaceId: string): Promise<SolutionSchedules | null> {
+  try {
+    const [{ data: ws }, { data: teams }, holidays] = await Promise.all([
+      db.from("workspaces").select("name, settings").eq("id", workspaceId).maybeSingle(),
+      db.from("teams").select("id, name, business_hours").eq("workspace_id", workspaceId).is("archived_at", null),
+      loadHolidayRows(db, workspaceId),
+    ]);
+    const info = buildHoursInfo({ workspace: ws ?? null, teams: teams ?? [], holidays });
+    return {
+      workspaceHours: info.workspaceHours,
+      teamHours: Object.fromEntries(info.teamHours),
+      holidays: info.holidays,
+    };
+  } catch (err) {
+    console.error("[cases] solution schedules", err);
+    return null;
+  }
 }

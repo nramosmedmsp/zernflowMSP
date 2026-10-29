@@ -36,13 +36,24 @@ export function LoginForm({ next, notice }: { next: string; notice: string | nul
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+    if (!email.trim() || !password) {
+      setError("Escribe tu correo y tu contraseña.");
+      return;
+    }
+    setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    let error: { message: string } | null;
+    try {
+      ({ error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      }));
+    } catch {
+      setError("No se pudo iniciar sesión. Revisa tu conexión e inténtalo de nuevo.");
+      setLoading(false);
+      return;
+    }
 
     if (error) {
       setError(translateAuthError(error.message));
@@ -89,7 +100,7 @@ export function LoginForm({ next, notice }: { next: string; notice: string | nul
           </p>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4">
           <div>
             <label htmlFor="email" className="block text-sm font-medium mb-1.5">
               Correo

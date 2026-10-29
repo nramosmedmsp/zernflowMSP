@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, Json } from "@/lib/types/database";
+import type { Database, Json, SequenceStep } from "@/lib/types/database";
 import type {
   FlowNode,
   FlowEdge,
@@ -41,6 +41,7 @@ import { checkHttpTarget, HTTP_NODE_TIMEOUT_MS, readTextCapped } from "./http-gu
 import { seedContactVariables } from "./contact-variables";
 import { blockIfUnsubscribed, haltFlowAfterSendFailure, touchConversationAfterBotSend } from "./bot-send";
 import { zernioErrorMessage, zernioFailed, zernioThrown } from "@/lib/zernio-error";
+import { enrollInSequence } from "@/lib/sequences/enroll";
 
 /** Motivo en español de un envío fallido del bot (rechazo de Zernio o error de red). */
 function sendFailureReason(error: unknown): string {
@@ -333,6 +334,19 @@ async function traverseNodes(
   // If the node pauses execution (delay, wait for input, human takeover), stop
   if (result === "pause") return;
 
+  // Comentario → DM: solo el primer mensaje salió (como respuesta privada); lo
+  // que sigue espera a que el cliente conteste por mensaje directo. Si no hay
+  // nada después, el flujo termina aquí.
+  if (result === WAIT_FOR_REPLY) {
+    const after = selectNextEdge(edges, node.id);
+    if (!after || !nodes.some((n) => n.id === after.target)) {
+      await completeSession(supabase, sessionId);
+      return;
+    }
+    await waitForCustomerReply(supabase, sessionId, node.id, context, COMMENT_DM_WAIT_MS);
+    return;
+  }
+
   // Find next node(s)
   // Condition/split nodes specify which handle to follow ("handle:<nombre>").
   const handle =
@@ -352,6 +366,31 @@ async function traverseNodes(
 
   // Continue to next node
   await traverseNodes(supabase, sessionId, nextNode, nodes, edges, context, depth + 1);
+}
+
+/** Señal de executeSendMessage: salió el primer mensaje como respuesta privada y el resto espera al cliente. */
+const WAIT_FOR_REPLY = "wait_for_reply";
+/** Cuánto espera un flujo de comentario la respuesta del cliente al primer DM. */
+const COMMENT_DM_WAIT_MS = 24 * 60 * 60 * 1000;
+
+async function waitForCustomerReply(
+  supabase: SupabaseClient<Database>,
+  sessionId: string,
+  nodeId: string,
+  context: FlowExecutionContext,
+  waitMs: number,
+): Promise<void> {
+  await supabase
+    .from("flow_sessions")
+    .update({
+      waiting_for_input: true,
+      waiting_until: new Date(Date.now() + waitMs).toISOString(),
+      current_node_id: nodeId,
+    })
+    .eq("id", sessionId);
+  // Una sola espera por contacto y canal (M-6): la respuesta del cliente
+  // debe retomar la última pregunta, no una vieja que quedó colgada.
+  await cancelOtherWaitingSessions(supabase, { sessionId, contactId: context.contactId, channelId: context.channelId });
 }
 
 async function executeNode(
@@ -401,17 +440,13 @@ async function executeNode(
     case "smartDelay":
       // Espera la siguiente respuesta del cliente. `waiting_until` marca cuándo
       // vence: pasado ese momento, un mensaje nuevo ya no retoma esta sesión.
-      await supabase
-        .from("flow_sessions")
-        .update({
-          waiting_for_input: true,
-          waiting_until: new Date(Date.now() + smartDelayTimeoutMs(node.data as { timeout?: unknown; timeoutUnit?: unknown })).toISOString(),
-          current_node_id: node.id,
-        })
-        .eq("id", sessionId);
-      // Una sola espera por contacto y canal (M-6): la respuesta del cliente
-      // debe retomar la última pregunta, no una vieja que quedó colgada.
-      await cancelOtherWaitingSessions(supabase, { sessionId, contactId: context.contactId, channelId: context.channelId });
+      await waitForCustomerReply(
+        supabase,
+        sessionId,
+        node.id,
+        context,
+        smartDelayTimeoutMs(node.data as { timeout?: unknown; timeoutUnit?: unknown }),
+      );
       return "pause";
     case "enrollSequence":
       return executeEnrollSequence(supabase, node.data as EnrollSequenceNodeData, context);
@@ -633,7 +668,9 @@ async function executeSendMessage(
       if (zernio && context.variables?.comment_id && context.variables?.post_id && lateAccountId) {
         const sentOk = await sendFirstMessageAsPrivateReply(supabase, zernio, data, context, lateAccountId);
         if (!sentOk) return haltFlowAfterSendFailure(supabase, context, sessionId, "Instagram no aceptó la respuesta privada");
-        return;
+        // Instagram permite una sola respuesta privada por comentario: lo que sigue
+        // en el flujo sale cuando el cliente conteste (R2-B10).
+        return WAIT_FOR_REPLY;
       }
       console.error("No late_conversation_id found for conversation:", context.conversationId);
       return haltFlowAfterSendFailure(supabase, context, sessionId, "la conversación no tiene un ID de Zernio");
@@ -1254,31 +1291,18 @@ async function executeEnrollSequence(
     return;
   }
 
-  const steps = (sequence.steps as Array<{ type: string; delayMinutes?: number }>) || [];
+  const steps = (sequence.steps as unknown as SequenceStep[]) || [];
   if (steps.length === 0) return;
 
-  // Calculate next_step_at based on first step
-  let nextStepAt: string;
-  const firstStep = steps[0];
-  if (firstStep.type === "delay" && firstStep.delayMinutes) {
-    nextStepAt = new Date(
-      Date.now() + firstStep.delayMinutes * 60 * 1000
-    ).toISOString();
-  } else {
-    nextStepAt = new Date().toISOString();
-  }
-
-  // Create enrollment (ignore duplicate errors)
-  const { error } = await supabase
-    .from("sequence_enrollments")
-    .insert({
-      sequence_id: data.sequenceId,
-      contact_id: context.contactId,
-      channel_id: context.channelId,
-      next_step_at: nextStepAt,
-    });
-
-  if (error && error.code !== "23505") {
-    console.error("Failed to enroll contact in sequence:", error);
+  // Si ya está dentro, no pasa nada; si terminó o se canceló, vuelve a entrar.
+  const result = await enrollInSequence(supabase, {
+    workspaceId: context.workspaceId,
+    sequenceId: data.sequenceId,
+    steps,
+    contactId: context.contactId,
+    channelId: context.channelId,
+  });
+  if (!result.ok && result.reason === "error") {
+    console.error("Failed to enroll contact in sequence:", result.error);
   }
 }

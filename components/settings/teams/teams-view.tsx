@@ -12,6 +12,7 @@ import {
   setDefaultTeam,
   setTeamArchived,
   setTeamAssignmentMode,
+  setTeamSupervisorSkipsChats,
   updateTeamMember,
   type TeamActionResult,
 } from "@/lib/actions/teams";
@@ -41,6 +42,8 @@ export interface TeamsViewData {
     isDefault: boolean;
     archived: boolean;
     assignmentMode: AssignmentMode;
+    /** "El supervisor no recibe chats": los supervisores quedan fuera del reparto automático. */
+    supervisorSkipsChats: boolean;
     members: { userId: string; role: TeamRole; caseTypeIds: string[] | null }[];
   }[];
   workspaceMembers: { userId: string; name: string; email: string; role: string }[];
@@ -392,21 +395,10 @@ function TeamCard({
                   onClick={() => run(`team:${team.id}:default`, () => setDefaultTeam(team.id), "Equipo marcado por defecto")}
                   disabled={busyKey !== null}
                   className={buttonClass}
-                  title="Los contactos sin sede caen en el equipo por defecto"
+                  title="Los contactos sin sede caen en el equipo por defecto. Siempre tiene que haber uno."
                 >
                   <Star className="h-3.5 w-3.5" />
                   Marcar por defecto
-                </button>
-              )}
-              {team.isDefault && (
-                <button
-                  type="button"
-                  onClick={() => run(`team:${team.id}:default`, () => setDefaultTeam(null), "Equipo por defecto quitado")}
-                  disabled={busyKey !== null}
-                  className={buttonClass}
-                >
-                  <Star className="h-3.5 w-3.5" />
-                  Quitar como por defecto
                 </button>
               )}
               <button
@@ -459,6 +451,31 @@ function TeamCard({
               {mode?.description ?? assignmentModeLabel(team.assignmentMode)} Solo se reparte entre quienes están
               Disponibles y atienden ese tipo de gestión.
             </p>
+          </div>
+
+          <div className="mt-4">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={team.supervisorSkipsChats}
+                disabled={busyKey !== null}
+                onChange={(e) =>
+                  run(
+                    `team:${team.id}:supervisor`,
+                    () => setTeamSupervisorSkipsChats(team.id, e.target.checked),
+                    e.target.checked ? "Los supervisores ya no reciben chats automáticos" : "Los supervisores vuelven al reparto",
+                  )
+                }
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                El supervisor no recibe chats
+                <span className="block text-xs text-muted-foreground">
+                  Apagado (lo normal): los supervisores entran al reparto como cualquier miembro. Encendido: el reparto
+                  automático los salta; igual se les puede asignar una gestión a mano.
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="mt-5">

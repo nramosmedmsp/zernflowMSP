@@ -358,8 +358,14 @@ export async function assignTo(
     }
   }
 
-  const { error } = await db.from("cases").update({ assignee_id: params.assigneeId }).eq("id", row.id);
+  // Solo si el responsable sigue siendo el que vimos: si dos personas pulsan
+  // «Tomar» a la vez, gana la primera y la otra recibe un aviso claro.
+  const guarded = db.from("cases").update({ assignee_id: params.assigneeId }).eq("id", row.id);
+  const { data: changed, error } = await (row.assignee_id ? guarded.eq("assignee_id", row.assignee_id) : guarded.is("assignee_id", null)).select("id");
   if (error) return { error: GENERIC_ERROR };
+  if (!changed || changed.length === 0) {
+    return { error: row.assignee_id ? "La gestión ya cambió de responsable. Recarga e inténtalo de nuevo." : "Otra persona tomó la gestión." };
+  }
 
   await logActivity(db, {
     workspace_id: row.workspace_id,

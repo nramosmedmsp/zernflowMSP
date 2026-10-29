@@ -44,6 +44,7 @@ export {
   type OpenCaseInput,
   type OpenCaseSummary,
 } from "./open";
+export { allowsSameTypeParallel, sameTypeConfirmMessage } from "./parallel";
 export type { RuleEffects } from "./effects";
 // Fase 2
 export {

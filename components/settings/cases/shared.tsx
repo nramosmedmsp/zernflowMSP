@@ -506,8 +506,14 @@ export function AddForm({
     e.preventDefault();
     if (saving || name.trim() === "") return;
     setSaving(true);
-    const ok = await onAdd(name.trim());
-    setSaving(false);
+    let ok = false;
+    try {
+      ok = await onAdd(name.trim());
+    } catch {
+      // Sin conexión: el botón vuelve a quedar disponible y el texto no se pierde.
+    } finally {
+      setSaving(false);
+    }
     if (ok) setName("");
   }
 

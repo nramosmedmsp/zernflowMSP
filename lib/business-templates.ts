@@ -15,6 +15,7 @@ import type {
   StageKind,
 } from "@/lib/types/database";
 import { logActivity, type Db as SupabaseDb } from "@/lib/cases/io";
+import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 
 // ── Datos ──────────────────────────────────────────────────────────────────
 
@@ -300,7 +301,7 @@ export function normalizeName(name: string): string {
 export interface ExistingCaseType {
   id: string;
   name: string;
-  stages: { name: string; position: number }[];
+  stages: { id?: string; name: string; kind?: StageKind; position: number }[];
   categories: { name: string; position: number }[];
   reasons: { name: string; kind: OutcomeKind; position: number }[];
   rules: { trigger: CaseRuleTrigger; trigger_stage_id: string | null; action: CaseRuleAction; params: Json; position: number }[];
@@ -350,6 +351,8 @@ export interface TemplateStore {
   insertContactTypes(rows: NewContactType[]): Promise<{ id: string; name: string }[]>;
   insertCaseTypes(rows: NewCaseType[]): Promise<{ id: string; name: string }[]>;
   insertStages(rows: NewStage[]): Promise<void>;
+  /** R2-16: reordena etapas existentes para que las abiertas nuevas queden antes de las de cierre. */
+  updateStagePositions?(updates: { id: string; position: number }[]): Promise<void>;
   insertCategories(rows: NewCategory[]): Promise<void>;
   insertReasons(rows: NewReason[]): Promise<void>;
   insertRules(rows: NewRule[]): Promise<void>;
@@ -366,6 +369,8 @@ export interface TemplateApplyResult {
     reasons: number;
     rules: number;
   };
+  /** Qué se agregó (o se agregaría), por tipo de gestión, en español. */
+  details: string[];
 }
 
 function nextPosition(items: readonly { position: number }[]): number {
@@ -453,6 +458,10 @@ export async function applyTemplateWithStore(
 
   // 3. Etapas, categorías, motivos y reglas de cada tipo.
   const stages: NewStage[] = [];
+  const stagePositionUpdates: { id: string; position: number }[] = [];
+  const details: string[] = [];
+  const stagesByType = new Map<string, string[]>();
+  const rulesByType = new Map<string, number>();
   const categories: NewCategory[] = [];
   const reasons: NewReason[] = [];
   const rules: NewRule[] = [];
@@ -462,11 +471,38 @@ export async function applyTemplateWithStore(
 
     const stageNames = new Set(target.stages.map((s) => normalizeName(s.name)));
     let pos = nextPosition(target.stages);
+    const fresh: NewStage[] = [];
     for (const s of ct.stages) {
       if (stageNames.has(normalizeName(s.name))) continue;
       stageNames.add(normalizeName(s.name));
-      stages.push({ case_type_id: target.id, name: s.name, kind: s.kind, color: s.color ?? null, position: pos++ });
+      fresh.push({ case_type_id: target.id, name: s.name, kind: s.kind, color: s.color ?? null, position: pos++ });
     }
+    // R2-16: en un tipo que ya tiene etapas, las abiertas nuevas van antes de las de cierre.
+    const existingStages = [...target.stages].sort((a, b) => a.position - b.position);
+    const reorder =
+      existingStages.length > 0 &&
+      fresh.some((s) => s.kind === "open") &&
+      existingStages.every((s) => s.id && s.kind) &&
+      !!store.updateStagePositions;
+    if (reorder) {
+      const isOpen = (k: StageKind | undefined) => k === "open";
+      const ordered: ({ id: string } | NewStage)[] = [
+        ...existingStages.filter((s) => isOpen(s.kind)).map((s) => ({ id: s.id as string })),
+        ...fresh.filter((s) => s.kind === "open"),
+        ...existingStages.filter((s) => !isOpen(s.kind)).map((s) => ({ id: s.id as string })),
+        ...fresh.filter((s) => s.kind !== "open"),
+      ];
+      ordered.forEach((item, index) => {
+        if ("id" in item) {
+          const was = existingStages.find((s) => s.id === item.id)!;
+          if (was.position !== index) stagePositionUpdates.push({ id: item.id, position: index });
+        } else {
+          item.position = index;
+        }
+      });
+    }
+    stages.push(...fresh);
+    if (fresh.length > 0) stagesByType.set(ct.name, fresh.map((s) => s.name));
 
     const categoryNames = new Set(target.categories.map((c) => normalizeName(c.name)));
     pos = nextPosition(target.categories);
@@ -517,10 +553,22 @@ export async function applyTemplateWithStore(
       if (ruleKeys.has(k)) continue;
       ruleKeys.add(k);
       rules.push(rule);
+      rulesByType.set(ct.name, (rulesByType.get(ct.name) ?? 0) + 1);
       pos++;
     }
   }
 
+  for (const ct of template.caseTypes) {
+    const parts: string[] = [];
+    const isNew = !existing.caseTypes.some((e) => normalizeName(e.name) === normalizeName(ct.name));
+    const st = stagesByType.get(ct.name);
+    const rl = rulesByType.get(ct.name);
+    if (st) parts.push(`etapas ${st.join(", ")}`);
+    if (rl) parts.push(`${rl} ${rl === 1 ? "regla" : "reglas"}`);
+    if (parts.length > 0 || isNew) details.push(`${ct.name}${isNew ? " (tipo nuevo)" : ""}: ${parts.join("; ") || "sin cambios"}`);
+  }
+
+  if (stagePositionUpdates.length > 0) await store.updateStagePositions?.(stagePositionUpdates);
   if (stages.length > 0) await store.insertStages(stages);
   if (categories.length > 0) await store.insertCategories(categories);
   if (reasons.length > 0) await store.insertReasons(reasons);
@@ -538,7 +586,32 @@ export async function applyTemplateWithStore(
   }
   await store.saveSettings(workspaceId, settings);
 
-  return { template: key, added };
+  return { template: key, added, details };
+}
+
+/**
+ * Vista previa (R2-16): lo que aplicar la plantilla agregaría, sin escribir
+ * nada. Las plantillas vuelven a crear lo que el Dueño haya borrado.
+ */
+export async function previewTemplateWithStore(
+  store: TemplateStore,
+  workspaceId: string,
+  key: BusinessTemplate,
+): Promise<TemplateApplyResult> {
+  let counter = 0;
+  const fakeIds = (rows: { name: string }[]) => rows.map((r) => ({ id: `preview-${++counter}`, name: r.name }));
+  const dry: TemplateStore = {
+    load: (ws) => store.load(ws),
+    insertContactTypes: async (rows) => fakeIds(rows),
+    insertCaseTypes: async (rows) => fakeIds(rows),
+    insertStages: async () => {},
+    insertCategories: async () => {},
+    insertReasons: async () => {},
+    insertRules: async () => {},
+    updateStagePositions: async () => {},
+    saveSettings: async () => {},
+  };
+  return applyTemplateWithStore(dry, workspaceId, key);
 }
 
 // ── Supabase ───────────────────────────────────────────────────────────────
@@ -563,7 +636,7 @@ export function supabaseTemplateStore(db: SupabaseDb): TemplateStore {
       const typeIds = (types ?? []).map((t) => t.id);
       const [stages, categories, reasons, rules] = typeIds.length
         ? await Promise.all([
-            db.from("case_stages").select("case_type_id, name, position").in("case_type_id", typeIds),
+            db.from("case_stages").select("id, case_type_id, name, kind, position").in("case_type_id", typeIds),
             db.from("case_categories").select("case_type_id, name, position").in("case_type_id", typeIds),
             db.from("case_outcome_reasons").select("case_type_id, name, kind, position").in("case_type_id", typeIds),
             db
@@ -614,6 +687,11 @@ export function supabaseTemplateStore(db: SupabaseDb): TemplateStore {
     async insertStages(rows) {
       throwOn((await db.from("case_stages").insert(rows)).error, "insert case_stages");
     },
+    async updateStagePositions(updates) {
+      for (const u of updates) {
+        throwOn((await db.from("case_stages").update({ position: u.position }).eq("id", u.id)).error, "update case_stages");
+      }
+    },
     async insertCategories(rows) {
       throwOn((await db.from("case_categories").insert(rows)).error, "insert case_categories");
     },
@@ -624,10 +702,19 @@ export function supabaseTemplateStore(db: SupabaseDb): TemplateStore {
       throwOn((await db.from("case_rules").insert(rows)).error, "insert case_rules");
     },
     async saveSettings(workspaceId, settings) {
-      throwOn(
-        (await db.from("workspaces").update({ settings: settings as Json }).eq("id", workspaceId)).error,
-        "save settings",
-      );
+      // Se compara con lo que hay AHORA en la base (no con lo leído al empezar): solo se envían las claves
+      // que la plantilla cambia, así no se pisan ajustes guardados mientras tanto.
+      const { data: fresh } = await db.from("workspaces").select("settings").eq("id", workspaceId).maybeSingle();
+      const current: Record<string, unknown> =
+        fresh?.settings && typeof fresh.settings === "object" && !Array.isArray(fresh.settings)
+          ? (fresh.settings as Record<string, unknown>)
+          : {};
+      const next = { ...current };
+      for (const key of ["business_template", "key_date_label"]) {
+        if (key in settings) next[key] = settings[key];
+      }
+      const message = await mergeWorkspaceSettings(db, workspaceId, current, next);
+      if (message) throw new Error(`save settings: ${message}`);
     },
   };
 }

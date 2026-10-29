@@ -3,7 +3,7 @@
 // Botón de avisos de la bandeja (campana): cada asesor elige en su equipo.
 
 import { useEffect, useRef, useState } from "react";
-import { Bell, BellRing } from "lucide-react";
+import { MessageSquareDot, Megaphone } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ALERT_SCOPE_LABELS, type AlertScope, type AlertSettings } from "@/lib/inbox-alerts";
 
@@ -22,9 +22,12 @@ function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange
 export function AlertSettingsButton({
   settings,
   onChange,
+  scopes = ["mine", "mine_and_queue", "all"],
 }: {
   settings: AlertSettings;
   onChange: (patch: Partial<AlertSettings>) => void;
+  /** Opciones de «Avisarme de» que aplican a esta persona; con una sola no se muestra el bloque. */
+  scopes?: readonly AlertScope[];
 }) {
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -78,7 +81,7 @@ export function AlertSettingsButton({
           (open || active) && "text-foreground",
         )}
       >
-        {active ? <BellRing className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+        {active ? <MessageSquareDot className="h-3.5 w-3.5" /> : <Megaphone className="h-3.5 w-3.5" />}
       </button>
       {open && (
         <div
@@ -98,13 +101,14 @@ export function AlertSettingsButton({
             <Toggle
               checked={settings.desktop}
               onChange={(v) => void toggleDesktop(v)}
-              label="Notificación de Windows"
+              label="Notificación del escritorio"
               hint="Solo cuando estás en otra pestaña o programa."
             />
           </div>
+          {scopes.length > 1 && (
           <div className="space-y-1 border-t border-border pt-2">
             <p className="text-[11px] font-medium text-muted-foreground">Avisarme de</p>
-            {(Object.keys(ALERT_SCOPE_LABELS) as AlertScope[]).map((scope) => (
+            {scopes.map((scope) => (
               <label key={scope} className="flex cursor-pointer items-center gap-2 px-1 text-xs">
                 <input
                   type="radio"
@@ -117,6 +121,7 @@ export function AlertSettingsButton({
               </label>
             ))}
           </div>
+          )}
           {notice && <p className="text-[11px] text-amber-700 dark:text-amber-300">{notice}</p>}
           <p className="text-[11px] text-muted-foreground">Se guarda solo en este equipo.</p>
         </div>

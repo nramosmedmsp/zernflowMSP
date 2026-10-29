@@ -21,6 +21,8 @@ import {
   type InboxConversation,
   type InboxMeta,
   messageAuthor,
+  matchesSearch,
+  initialScope,
 } from "./inbox-model";
 
 const ME = "00000000-0000-0000-0000-000000000001";
@@ -281,6 +283,17 @@ describe("menciones", () => {
     ]);
     expect(mentionedIds("Revisa esto @Ana Pérez", picked)).toEqual([ME]);
   });
+  it("también reconoce el nombre escrito a mano, sin importar mayúsculas (B-27)", () => {
+    const members = [
+      { userId: ME, name: "Ana Pérez" },
+      { userId: OTHER, name: "Ana" },
+    ];
+    expect(mentionedIds("@ana pérez mira esto", new Map(), members)).toEqual([ME]);
+    expect(mentionedIds("Mira esto @Ana.", new Map(), members)).toEqual([OTHER]);
+    // "@Anabel" no menciona a «Ana».
+    expect(mentionedIds("Mira esto @Anabel", new Map(), members)).toEqual([]);
+    expect(mentionedIds("sin menciones", new Map(), members)).toEqual([]);
+  });
 });
 
 describe("filtersForScope", () => {
@@ -327,6 +340,10 @@ describe("messageAuthor", () => {
     expect(messageAuthor(msg({ sent_by_user_id: "u-x" }), members, "u-yo")).toBe("Otro asesor");
     expect(messageAuthor(msg({}), members, "u-yo")).toBeNull();
     expect(messageAuthor(msg({ direction: "inbound", sent_by_user_id: "u-ana" }), members, "u-yo")).toBeNull();
+  });
+
+  it("los mensajes de una secuencia dicen «Secuencia · nombre» (R2-B5)", () => {
+    expect(messageAuthor({ ...msg({}), sent_by_node_id: "sequence:Bienvenida" }, members, "u-yo")).toBe("Secuencia · Bienvenida");
   });
 });
 
@@ -398,5 +415,28 @@ describe("control de reclamos en la bandeja (M-22, B-31)", () => {
   it("Seguimiento hoy no incluye una Postventa que aún está en plazo", () => {
     const pv = kase({ id: "pv", contact_id: "c1", case_type_id: PV, opened_at: "2026-10-18T10:00:00Z" });
     expect(caseMatchesState(pv, "today", NOW, 24)).toBe(false);
+  });
+});
+
+describe("búsqueda de teléfono y alcance inicial (B-32, B-33)", () => {
+  const withPhone = (phone: string): InboxConversation => ({
+    ...conv("c1", "contact-1"),
+    contacts: { display_name: "Ana", email: null, phone } as InboxConversation["contacts"],
+  });
+
+  it("encuentra un teléfono escrito con espacios, guiones o +", () => {
+    expect(matchesSearch(withPhone("900000008"), "900 000 008")).toBe(true);
+    expect(matchesSearch(withPhone("+51900000008"), "900-000-008")).toBe(true);
+    expect(matchesSearch(withPhone("+51900000008"), "+51 900 000 008")).toBe(true);
+    expect(matchesSearch(withPhone("900000008"), "900 000 009")).toBe(false);
+    // Dos dígitos sueltos no coinciden con cualquier teléfono.
+    expect(matchesSearch(withPhone("900000008"), "0 0")).toBe(false);
+  });
+
+  it("un supervisor sin chats propios empieza en Equipo; con chats o asesor, en Míos", () => {
+    const supervisor = meta({ supervisedTeamIds: [TEAM] });
+    expect(initialScope(supervisor, 0)).toBe("team");
+    expect(initialScope(supervisor, 3)).toBe("mine");
+    expect(initialScope(meta(), 0)).toBe("mine");
   });
 });

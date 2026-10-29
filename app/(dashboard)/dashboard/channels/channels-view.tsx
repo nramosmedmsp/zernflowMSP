@@ -23,7 +23,7 @@ import { APP_NAME } from "@/lib/brand";
 import { formatDate } from "@/lib/format";
 import type { Database } from "@/lib/types/database";
 import {
-  PLATFORMS,
+  CONNECTABLE_PLATFORMS,
   PLATFORM_LABELS,
   platformLabel,
   type Platform,
@@ -256,7 +256,7 @@ export function ChannelsView({
               </button>
               {showPlatformPicker && (
                 <div className="animate-pop-in absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-border bg-card p-2 shadow-lg">
-                  {PLATFORMS.map((p) => (
+                  {CONNECTABLE_PLATFORMS.map((p) => (
                     <button
                       key={p}
                       onClick={() => handleConnect(p)}

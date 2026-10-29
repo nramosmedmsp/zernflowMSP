@@ -25,6 +25,11 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   reddit: "Reddit",
 };
 
+/** Canales que se ofrecen en «Conectar canal»: los que usa la tienda (X, Bluesky y Reddit no). */
+export const CONNECTABLE_PLATFORMS: readonly Platform[] = PLATFORMS.filter(
+  (p) => p !== "twitter" && p !== "bluesky" && p !== "reddit",
+);
+
 export function isSupportedPlatform(value: unknown): value is Platform {
   return (
     typeof value === "string" && (PLATFORMS as readonly string[]).includes(value)

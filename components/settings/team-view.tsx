@@ -363,7 +363,7 @@ export function TeamView({
                   : "El correo aún no está configurado: podrás copiar el enlace de activación y compartirlo por un canal privado."}
               </p>
 
-              <form onSubmit={handleCreate} className="mt-4 space-y-2">
+              <form onSubmit={handleCreate} noValidate className="mt-4 space-y-2">
                 <div className="flex flex-wrap gap-2">
                   <input
                     type="text"

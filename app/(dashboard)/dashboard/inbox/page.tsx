@@ -1,6 +1,8 @@
 import { Suspense } from "react";
 import { getWorkspace } from "@/lib/workspace";
 import { listCaseMembers } from "@/lib/actions/cases";
+import { loadSolutionSchedules } from "@/lib/cases/hours";
+import { createServiceClient } from "@/lib/supabase/server";
 import { isDemoChannel } from "@/lib/demo";
 import { agentVisibilityFromSettings, isAdminRole } from "@/lib/permissions";
 import type { InboxCase, InboxConversation, InboxMeta } from "@/components/inbox/inbox-model";
@@ -70,6 +72,11 @@ export default async function InboxPage() {
     for (const { data } of extra) conversations.push(...((data ?? []) as InboxConversation[]));
   }
 
+  // R2-10: horarios (equipo y empresa) para contar el plazo de la solución en horas hábiles.
+  const solutionSchedules = (types ?? []).some((t) => t.solution_deadline_hours)
+    ? await loadSolutionSchedules(await createServiceClient(), workspace.id)
+    : null;
+
   const members = "error" in membersResult ? [] : membersResult.members;
   const me = members.find((m) => m.userId === user.id);
   const meta: InboxMeta = {
@@ -80,6 +87,7 @@ export default async function InboxPage() {
     myTeamIds: (me?.teams ?? []).map((t) => t.teamId),
     workspaceHasTeams: (teams ?? []).length > 0,
     workspaceName: workspace.name,
+    solutionSchedules,
     caseTypes: (types ?? []).map((t) => ({
       id: t.id,
       name: t.name,

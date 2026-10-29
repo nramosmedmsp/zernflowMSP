@@ -127,7 +127,9 @@ export async function publishFlowVersion(
   },
   userId: string,
 ): Promise<{ version: number } | { error: string }> {
-  const version = flow.version + 1;
+  // La primera publicación es la v1 (el flujo nuevo ya trae version = 1 sin versiones guardadas).
+  const { count: saved } = await db.from("flow_versions").select("id", { count: "exact", head: true }).eq("flow_id", flow.id);
+  const version = (saved ?? 0) === 0 && flow.version <= 1 ? 1 : flow.version + 1;
   const { error: updateError } = await db
     .from("flows")
     .update({ status: "published", published_at: new Date().toISOString(), version })

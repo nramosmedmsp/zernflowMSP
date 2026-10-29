@@ -7,7 +7,7 @@ import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, CheckCircle2, Download, FileUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, pluralize } from "@/lib/format";
 import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -577,7 +577,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
                 className={BUTTON_PRIMARY}
               >
                 {busy && <Spinner />}
-                Importar {formatNumber(summary.create + summary.update)} contactos
+                Importar {pluralize(summary.create + summary.update, "contacto", "contactos")}
               </button>
             </div>
           </div>

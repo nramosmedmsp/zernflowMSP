@@ -34,7 +34,8 @@ interface ActorTarget {
 
 /**
  * ¿Puede `actor` quitar a `target` del espacio? Devuelve el motivo en español
- * si no puede, o null si sí. Nadie puede quitar al Dueño ni quitarse a sí mismo.
+ * si no puede, o null si sí. Nadie puede quitar al Dueño ni quitarse a sí mismo,
+ * y a un Administrador solo lo quita el Dueño (R2-13).
  */
 export function removeMemberError(params: ActorTarget): string | null {
   if (!canManageTeam(params.actorRole)) {
@@ -45,6 +46,9 @@ export function removeMemberError(params: ActorTarget): string | null {
   }
   if (params.targetRole === "owner") {
     return "No se puede quitar al Dueño del espacio de trabajo.";
+  }
+  if (params.targetRole === "admin" && params.actorRole !== "owner") {
+    return "Solo el Dueño puede quitar a un Administrador del espacio de trabajo.";
   }
   return null;
 }
@@ -186,12 +190,17 @@ export function normalizeEmail(raw: string | null | undefined): string | null {
   return email;
 }
 
+const MIN_FULL_NAME_LENGTH = 2;
+
 /** Nombre sin espacios sobrantes; error en español si falta o es muy largo. */
 export function normalizeFullName(
   raw: string | null | undefined,
 ): { name: string; error: null } | { name: null; error: string } {
   const name = typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
   if (!name) return { name: null, error: "Escribe el nombre de la persona." };
+  if (name.length < MIN_FULL_NAME_LENGTH) {
+    return { name: null, error: "El nombre es muy corto. Escribe al menos 2 letras." };
+  }
   if (name.length > MAX_FULL_NAME_LENGTH) {
     return {
       name: null,

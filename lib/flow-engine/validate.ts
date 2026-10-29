@@ -38,7 +38,10 @@ export interface FlowIssue {
     | "unreachable_node"
     | "unknown_variable"
     | "go_to_self"
-    | "keyword_collision";
+    | "keyword_collision"
+    | "case_trigger_no_type"
+    | "case_trigger_no_stage"
+    | "comment_multi_message";
   message: string;
   nodeId?: string;
 }
@@ -195,6 +198,26 @@ export function validateFlowGraph(
         message: "El disparador de botón no indica qué botón lo activa.",
       });
     }
+    if (type === "case_opened" || type === "case_stage_changed" || type === "case_closed" || type === "client_no_reply") {
+      // Sin tipo (o etapa) el disparador se activa con cualquier gestión: una plantilla instalada
+      // en un espacio sin ese tipo lo deja así y el aviso del editor se pierde al cambiar de equipo (R2-B22).
+      if (!text(d.caseTypeId) && !text(rec(d.config).case_type_id)) {
+        add({
+          severity: "warning",
+          code: "case_trigger_no_type",
+          nodeId: t.id,
+          message: "El disparador de gestión no tiene un tipo de gestión elegido: se activaría con cualquier gestión.",
+        });
+      }
+      if (type === "case_stage_changed" && !text(d.stageId) && !text(rec(d.config).stage_id)) {
+        add({
+          severity: "warning",
+          code: "case_trigger_no_stage",
+          nodeId: t.id,
+          message: "El disparador de cambio de etapa no tiene una etapa elegida: se activaría con cualquier cambio de etapa.",
+        });
+      }
+    }
     if (!edges.some((e) => e.source === t.id)) {
       add({
         severity: "error",
@@ -233,6 +256,21 @@ export function validateFlowGraph(
       add({ severity: "error", code: "incomplete_node", nodeId: n.id, message: `«${labelOf(n)}» no tiene el nombre de la etiqueta.` });
     } else if (kind === "httpRequest" && !text(d.url)) {
       add({ severity: "error", code: "incomplete_node", nodeId: n.id, message: "«Solicitud HTTP» no tiene dirección." });
+    }
+  }
+
+  // Comentario → mensaje directo: Instagram permite una sola respuesta privada por comentario.
+  if (triggers.some((t) => text(rec(t.data).triggerType) === "comment_keyword")) {
+    const messageCount = nodes
+      .filter((n) => nodeKind(n) === "sendMessage")
+      .reduce((total, n) => total + (Array.isArray(rec(n.data).messages) ? (rec(n.data).messages as unknown[]).length : 0), 0);
+    if (messageCount > 1) {
+      add({
+        severity: "warning",
+        code: "comment_multi_message",
+        message:
+          "Este flujo se activa con un comentario: solo el primer mensaje sale como respuesta privada. Lo que sigue se envía cuando el cliente conteste por mensaje directo; si no contesta, no se envía.",
+      });
     }
   }
 

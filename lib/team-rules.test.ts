@@ -52,7 +52,7 @@ describe("removeMemberError", () => {
     expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "member" })).toBeNull();
     expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "admin" })).toBeNull();
     expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "member" })).toBeNull();
-    expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "admin" })).toBeNull();
+    expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "admin" })).toMatch(/Solo el Dueño puede quitar a un Administrador/);
   });
 
   it("nadie puede quitar al Dueño", () => {
@@ -226,6 +226,8 @@ describe("normalizeEmail y normalizeFullName", () => {
 
   it("exige nombre y limita su largo", () => {
     expect(normalizeFullName("  Ana   Pérez ")).toEqual({ name: "Ana Pérez", error: null });
+    expect(normalizeFullName(" Q ")).toMatchObject({ name: null, error: expect.stringContaining("muy corto") });
+    expect(normalizeFullName("Li")).toEqual({ name: "Li", error: null });
     expect(normalizeFullName("   ").error).toMatch(/nombre/);
     expect(normalizeFullName("x".repeat(101)).error).toMatch(/100/);
   });

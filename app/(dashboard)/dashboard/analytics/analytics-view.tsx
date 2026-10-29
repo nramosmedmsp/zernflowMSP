@@ -444,6 +444,7 @@ export function AnalyticsView({
               <input
                 type="date"
                 value={customStart}
+                max={customEnd || undefined}
                 onChange={(e) => setCustomStart(e.target.value)}
                 className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
@@ -452,12 +453,14 @@ export function AnalyticsView({
             <input
               type="date"
               value={customEnd}
+              min={customStart || undefined}
               onChange={(e) => setCustomEnd(e.target.value)}
               className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <button
               onClick={fetchAnalytics}
-              disabled={!customStart || !customEnd}
+              disabled={!customStart || !customEnd || customStart > customEnd}
+              title={customStart && customEnd && customStart > customEnd ? "La fecha inicial es posterior a la final." : undefined}
               className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               Aplicar

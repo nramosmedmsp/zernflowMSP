@@ -122,7 +122,7 @@ export function settledIds(items: OutboxItem[], conversationId: string, serverMe
 }
 
 /** Lo que el chat muestra de la bandeja de salida, como mensajes. */
-export function outboxMessages(items: OutboxItem[], conversationId: string): InboxMessage[] {
+export function outboxMessages(items: OutboxItem[], conversationId: string, authorId: string | null = null): InboxMessage[] {
   return items
     .filter((i) => i.conversationId === conversationId)
     .map((i) => ({
@@ -137,7 +137,8 @@ export function outboxMessages(items: OutboxItem[], conversationId: string): Inb
       platform_message_id: i.confirmedId,
       sent_by_flow_id: null,
       sent_by_node_id: null,
-      sent_by_user_id: null,
+      // El autor actual: la burbuja nueva dice «Tú» sin esperar a recargar.
+      sent_by_user_id: authorId,
       status: i.status === "sending" ? "pending" : i.status === "failed" ? "failed" : "sent",
       error: i.error,
       story: null,

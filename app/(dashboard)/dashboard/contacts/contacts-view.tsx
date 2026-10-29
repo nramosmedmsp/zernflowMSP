@@ -15,10 +15,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Upload,
+  UserPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import { Spinner } from "@/components/ui/spinner";
+import { NewContactDialog } from "@/components/contacts/new-contact-dialog";
 import { formatNumber, formatRelative } from "@/lib/format";
 import { NO_VALUE_FILTER } from "@/components/contacts/contact-filters";
 import {
@@ -29,6 +31,7 @@ import {
   contactPageCount,
   defaultDirFor,
   hasContactFilters,
+  orderedRange,
   type ContactListParams,
   type ContactSort,
 } from "@/components/contacts/contact-list-query";
@@ -72,6 +75,7 @@ export function ContactsView({
   contactTypes,
   teams,
   members,
+  ownerOptions,
   workspaceId,
   canImport,
 }: {
@@ -83,10 +87,13 @@ export function ContactsView({
   contactTypes: ContactTypeOption[];
   teams: { id: string; name: string }[];
   members: { userId: string; name: string }[];
+  /** Personas que se ofrecen en el filtro «Responsable» (un asesor solo se ve a sí mismo). */
+  ownerOptions?: { userId: string; name: string }[];
   workspaceId: string;
   canImport: boolean;
 }) {
   const router = useRouter();
+  const [creating, setCreating] = useState(false);
   const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState(params.search);
   const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
@@ -140,6 +147,15 @@ export function ContactsView({
                 : `${formatNumber(total)} ${total === 1 ? "contacto" : "contactos"} en tu espacio de trabajo`}
             </p>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              <UserPlus className="h-4 w-4" />
+              Crear contacto
+            </button>
           {canImport && (
             <Link
               href="/dashboard/contacts/import"
@@ -149,7 +165,18 @@ export function ContactsView({
               Importar
             </Link>
           )}
+          </div>
         </div>
+        {creating && (
+          <NewContactDialog
+            onClose={() => setCreating(false)}
+            onCreated={({ contactId }) => {
+              setCreating(false);
+              startRouteProgress();
+              router.push(`/dashboard/contacts/${contactId}`);
+            }}
+          />
+        )}
 
         {/* Search and filters */}
         <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -189,7 +216,7 @@ export function ContactsView({
           >
             <option value="">Todos los responsables</option>
             <option value={NO_VALUE_FILTER}>Sin responsable</option>
-            {members.map((m) => (
+            {(ownerOptions ?? members).map((m) => (
               <option key={m.userId} value={m.userId}>
                 {m.name}
               </option>
@@ -217,7 +244,7 @@ export function ContactsView({
               type="date"
               aria-label="Fecha clave desde"
               value={params.keyFrom}
-              onChange={(e) => go({ keyFrom: e.target.value })}
+              onChange={(e) => go(orderedRange(e.target.value, params.keyTo))}
               className={FILTER_SELECT_CLASS}
             />
             <span>a</span>
@@ -225,7 +252,7 @@ export function ContactsView({
               type="date"
               aria-label="Fecha clave hasta"
               value={params.keyTo}
-              onChange={(e) => go({ keyTo: e.target.value })}
+              onChange={(e) => go(orderedRange(params.keyFrom, e.target.value))}
               className={FILTER_SELECT_CLASS}
             />
           </label>
@@ -331,7 +358,9 @@ export function ContactsView({
               No se encontraron contactos
             </p>
             <p className="mt-1 text-xs text-muted-foreground/70">
-              Los contactos se crean automáticamente cuando alguien escribe a tus canales
+              {filtersActive
+                ? "Prueba quitando algún filtro."
+                : "Los contactos se crean automáticamente cuando alguien escribe a tus canales"}
             </p>
           </div>
         ) : (

@@ -44,7 +44,6 @@ import {
   type ContactCasesView,
 } from "@/lib/actions/cases";
 import { limaDateOf } from "@/lib/cases/dates";
-import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { formatDate, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
@@ -55,6 +54,8 @@ import {
   closeMenuItems,
   closeOptions,
   closeRequestLine,
+  rejectionLine,
+  closedHeadline,
   nextContactChip,
   nextContactOptions,
   solutionBanner,
@@ -63,7 +64,7 @@ import {
   type CloseOption,
   type SolutionTone,
 } from "./case-card-model";
-import { SolutionForm } from "./solution-form";
+import { SolutionForm, clearSolutionDraft } from "./solution-form";
 import { memberName, type InboxMember } from "./inbox-model";
 import { Popover, inputClass, primaryButtonClass, secondaryButtonClass, selectClass } from "./ui";
 import { useNow } from "./use-now";
@@ -284,7 +285,7 @@ export function CaseCard({
       "next",
       async () => {
         const r = await postponeCase(active!.id, at);
-        if ("ok" in r && r.assignedToMe) toast.success("Te asignamos la gestión: volverá a tu lista «Para hoy».");
+        if ("ok" in r && r.assignedToMe) toast.success("Te asignamos la gestión: volverá a tu lista «Seguimiento hoy».");
         return r;
       },
       `Próximo contacto: ${when}.`,
@@ -325,7 +326,7 @@ export function CaseCard({
             <span className="text-xs text-muted-foreground">
               {active.status === "cancelled"
                 ? "Cancelada"
-                : `Cerrada como ${OUTCOME_LABELS[active.status as keyof typeof OUTCOME_LABELS]?.toLowerCase() ?? active.status}`}
+                : closedHeadline(active.status, caseType?.stages.find((st) => st.id === active.stageId)?.name ?? null)}
               {active.closedAt ? ` el ${formatDate(active.closedAt)}` : ""}
             </span>
             <div className="ml-auto flex items-center gap-1.5">
@@ -598,7 +599,7 @@ export function CaseCard({
                     </div>
                   )}
                   <p className="border-t border-border px-2 pt-1.5 text-[11px] leading-snug text-muted-foreground">
-                    El chat vuelve a <span className="font-medium text-foreground">Para hoy</span> a esa hora.
+                    El chat vuelve a <span className="font-medium text-foreground">Seguimiento hoy</span> a esa hora.
                   </p>
                 </div>
               )}
@@ -774,6 +775,7 @@ export function CaseCard({
               }
             >
               <SolutionForm
+                caseId={active.id}
                 initialNote={active.solutionNote}
                 initialCommitment={active.solutionStatus === "in_progress" ? active.nextActionAt : null}
                 now={now}
@@ -784,11 +786,21 @@ export function CaseCard({
                     () => registerSolutionInProgress(active.id, note, commitmentAt),
                     "Solución registrada.",
                   );
-                  if (ok) setSolutionOpen(false);
+                  if (ok) {
+                    clearSolutionDraft(active.id);
+                    setSolutionOpen(false);
+                  }
                 }}
               />
             </Popover>
           )}
+        </div>
+      )}
+
+      {/* El supervisor rechazó el pedido de cierre: el asesor ve por qué */}
+      {!request && !isClosed && active.lastRejection && (
+        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-900 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
+          <span className="min-w-0 flex-1 break-words font-medium">{rejectionLine(active.lastRejection.comment)}</span>
         </div>
       )}
 

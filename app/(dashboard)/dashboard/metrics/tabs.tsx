@@ -49,7 +49,7 @@ export function SummaryTab({ report, mode }: TabProps) {
         <StatCard
           label="Primera respuesta (mediana)"
           value={dur(first.median)}
-          hint={first.count ? `${formatNumber(first.count)} gestiones · p90 ${dur(first.p90)}` : "Sin respuestas en el periodo"}
+          hint={first.count ? `${n(first.count, "gestión", "gestiones")} · p90 ${dur(first.p90)}` : "Sin respuestas en el periodo"}
         />
         <StatCard
           label="Tiempo de respuesta (mediana)"
@@ -446,7 +446,7 @@ export function VolumeTab({ report, showMessages }: { report: MetricsReport; sho
         </EmptyState>
       ) : (
         <>
-          <Card title="Por día de la semana y hora" subtitle={`${formatNumber(total)} ${unit} en el periodo`}>
+          <Card title="Por día de la semana y hora" subtitle={`${metric === "messages" ? n(total, "mensaje", "mensajes") : n(total, "gestión", "gestiones")} en el periodo`}>
             <Heatmap matrix={matrix} max={max} unit={unit} />
           </Card>
           <Card title="Por día" subtitle={metric === "messages" ? "Mensajes entrantes" : "Gestiones nuevas"}>

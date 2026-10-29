@@ -87,7 +87,9 @@ describe("settledIds y outboxMessages", () => {
   it("nunca muestra un envío en otro chat", () => {
     const items = [item(), item({ clientId: "k2", conversationId: "conv-b" })];
     expect(outboxMessages(items, "conv-a").map((m) => m.id)).toEqual(["outbox-k1"]);
-    expect(outboxMessages(items, "conv-a")[0]).toMatchObject({ direction: "outbound", status: "pending" });
+    expect(outboxMessages(items, "conv-a")[0]).toMatchObject({ direction: "outbound", status: "pending", sent_by_user_id: null });
+    // Con el usuario actual, la burbuja nueva dice «Tú» sin recargar (B-36).
+    expect(outboxMessages(items, "conv-a", "user-1")[0].sent_by_user_id).toBe("user-1");
   });
 
   it("marca en la lista los chats con un envío fallido", () => {

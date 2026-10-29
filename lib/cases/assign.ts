@@ -52,7 +52,8 @@ export async function loadAssignmentContext(
       db.from("workspaces").select("name, settings").eq("id", workspaceId).maybeSingle(),
       db
         .from("teams")
-        .select("id, name, is_default, assignment_mode, business_hours")
+        // "*": así sigue funcionando aunque la columna supervisor_skips_chats (00034) aún no exista.
+        .select("*")
         .eq("workspace_id", workspaceId)
         .is("archived_at", null),
       db
@@ -72,6 +73,7 @@ export async function loadAssignmentContext(
         id: t.id,
         isDefault: t.is_default,
         assignmentMode: normalizeAssignmentMode(t.assignment_mode),
+        supervisorsSkipChats: t.supervisor_skips_chats === true,
       })),
       teamMembers: (teamMembers ?? []).map((m) => ({
         teamId: m.team_id,
@@ -123,6 +125,28 @@ function rpcStatus(data: Json | null): { status: string; assigneeId: string | nu
   return { status: "error", assigneeId: null };
 }
 
+/** Cuánto tiempo no se le devuelve la gestión a quien la devolvió a la cola a mano. */
+export const RETURNED_TO_QUEUE_HOURS = 12;
+
+/** Quien devolvió la gestión a la cola a mano en las últimas horas (null si nadie). */
+async function recentlyReturnedBy(db: Db, caseId: string, at: Date): Promise<string | null> {
+  const since = new Date(at.getTime() - RETURNED_TO_QUEUE_HOURS * 3_600_000).toISOString();
+  const { data } = await db
+    .from("activity")
+    .select("from_value, meta, created_at")
+    .eq("case_id", caseId)
+    .eq("type", "unassigned")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  // Solo las devoluciones a mano (no un cambio de equipo ni un reparto nuevo).
+  const manual = (data ?? []).find((r) => {
+    const meta = r.meta && typeof r.meta === "object" && !Array.isArray(r.meta) ? (r.meta as Record<string, unknown>) : {};
+    return meta.via === "manual";
+  });
+  return manual?.from_value ?? null;
+}
+
 /**
  * Aplica el reparto a una gestión abierta sin responsable. Guarda el equipo
  * de destino en `cases.team_id`, asigna (responsable fijo o modo del equipo),
@@ -154,6 +178,11 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
   ]);
   if (!contact) return { status: "skipped", reason: "not_found" };
 
+  // M-5: quien devolvió la gestión a la cola a mano no la recibe de vuelta enseguida.
+  const exclude = [...(opts.exclude ?? [])];
+  const returnedBy = await recentlyReturnedBy(db, row.id, opts.at ?? new Date());
+  if (returnedBy && !exclude.includes(returnedBy)) exclude.push(returnedBy);
+
   const routing = caseType?.routing ?? "contact_owner";
   const decision = decideAssignment({
     caseTypeId: caseType?.id ?? null,
@@ -166,7 +195,7 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
     teamMembers: ctx.teamMembers,
     members: ctx.members,
     workspaceMode: ctx.workspaceMode,
-    excludeUserIds: opts.exclude,
+    excludeUserIds: exclude.length > 0 ? exclude : undefined,
   });
 
   if (decision.teamId !== row.team_id) {
@@ -191,9 +220,10 @@ export async function assignCase(db: Db, caseId: string, opts: AssignOptions = {
   const link = caseLink(row.contact_id, row.id);
 
   // Fuera de horario no se reparte (ni se avisa): el cron lo hace al abrir.
-  // El modo manual y "sin elegibles" siguen su curso: no dependen de la hora.
+  // El modo manual sigue su curso (no depende de la hora). R2-12: con todos "Ausentes" tampoco se
+  // avisa "sin asignar" de madrugada: el cron reparte (y avisa si hace falta) al abrir.
   if (
-    (decision.kind === "owner" || decision.kind === "pick") &&
+    (decision.kind === "owner" || decision.kind === "pick" || decision.kind === "none") &&
     !isOpenAt(ctx.hours, decision.teamId, opts.at ?? new Date())
   ) {
     return { status: "unassigned", reason: "off_hours", teamId: decision.teamId };

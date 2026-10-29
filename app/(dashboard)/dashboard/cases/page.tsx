@@ -1,5 +1,7 @@
 import { getWorkspace } from "@/lib/workspace";
 import { listCaseMembers } from "@/lib/actions/cases";
+import { loadSolutionSchedules } from "@/lib/cases/hours";
+import { createServiceClient } from "@/lib/supabase/server";
 import { isAdminRole } from "@/lib/permissions";
 import { parseCaseListParams } from "@/components/cases/case-filters";
 import { CasesView } from "@/components/cases/cases-view";
@@ -37,6 +39,9 @@ export default async function CasesPage({
   ]);
 
   const caseTypes = typesRes.data ?? [];
+  const solutionSchedules = caseTypes.some((t) => t.solution_deadline_hours)
+    ? await loadSolutionSchedules(await createServiceClient(), workspace.id)
+    : null;
   const teams = teamsRes.data ?? [];
   const members = "members" in membersRes ? membersRes.members : [];
 
@@ -70,6 +75,7 @@ export default async function CasesPage({
       page={result.page}
       params={{ ...params, page: result.page }}
       nowIso={now.toISOString()}
+      solutionSchedules={solutionSchedules}
       caseTypes={caseTypes.map((t) => ({
         id: t.id,
         name: t.name,

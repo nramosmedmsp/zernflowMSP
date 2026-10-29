@@ -19,7 +19,15 @@ import {
   type CasePermissions,
 } from "@/lib/cases/access";
 import { isDateString } from "@/lib/cases/dates";
-import { claimPriority, isCaseSupervisor, parseCloseRequest } from "@/lib/cases/protection";
+import {
+  claimPriority,
+  isCaseSupervisor,
+  parseCloseRequest,
+  solutionScheduleFor,
+  type SolutionSchedule,
+  type SolutionSchedules,
+} from "@/lib/cases/protection";
+import { loadSolutionSchedules } from "@/lib/cases/hours";
 import { GENERIC_ERROR, type CaseRow, type Db } from "@/lib/cases/io";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor, type WorkspaceActor } from "@/lib/cases/visibility";
 import { isOutcomeKind } from "@/lib/cases/rules";
@@ -28,6 +36,8 @@ import type { ClosePreview } from "@/lib/cases/close";
 import {
   BUSINESS_TEMPLATES,
   applyBusinessTemplate as applyTemplate,
+  previewTemplateWithStore,
+  supabaseTemplateStore,
   isBusinessTemplateKey,
   type TemplateApplyResult,
 } from "@/lib/business-templates";
@@ -81,8 +91,12 @@ export interface CaseView {
   solutionBy: string | null;
   /** Desde cuándo corre el plazo de la solución (null = desde que se abrió). */
   solutionClockAt: string | null;
+  /** Horario con el que se cuentan las horas hábiles del plazo (null = horas de reloj). */
+  solutionSchedule: SolutionSchedule | null;
   /** Pedido de cierre «sin solución» esperando a un supervisor. */
   closeRequest: CloseRequestView | null;
+  /** Último pedido de cierre que un supervisor rechazó (con su comentario), mientras no haya otro pedido. */
+  lastRejection: { comment: string | null; at: string } | null;
   /** ¿Puede actuar como supervisor de esta gestión? (administrador o supervisor de su equipo) */
   canSupervise: boolean;
 }
@@ -288,7 +302,13 @@ function toCloseRequestView(value: unknown): CloseRequestView | null {
     : null;
 }
 
-function toCaseView(row: CaseRow, permissions: CasePermissions, canSupervise: boolean): CaseView {
+function toCaseView(
+  row: CaseRow,
+  permissions: CasePermissions,
+  canSupervise: boolean,
+  lastRejection: CaseView["lastRejection"] = null,
+  schedules: SolutionSchedules | null = null,
+): CaseView {
   return {
     id: row.id,
     contactId: row.contact_id,
@@ -320,7 +340,9 @@ function toCaseView(row: CaseRow, permissions: CasePermissions, canSupervise: bo
     solutionAt: row.solution_at ?? null,
     solutionBy: row.solution_by ?? null,
     solutionClockAt: row.solution_clock_at ?? null,
+    solutionSchedule: solutionScheduleFor(schedules, row.team_id),
     closeRequest: toCloseRequestView(row.close_request),
+    lastRejection: row.close_request ? null : lastRejection,
     canSupervise,
   };
 }
@@ -446,7 +468,33 @@ export async function getContactCases(
   }));
 
   const supervisesOf = (row: CaseRow) => isCaseSupervisor(s.actor, row.team_id);
-  const views = activeCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row)));
+  // Último rechazo de un pedido de cierre de cada gestión abierta: el asesor ve por qué.
+  const rejections = new Map<string, NonNullable<CaseView["lastRejection"]>>();
+  const openIds = activeCases.filter((c) => c.status === "open").map((c) => c.id);
+  if (openIds.length > 0) {
+    const { data: rejected } = await s.db
+      .from("activity")
+      .select("case_id, meta, created_at")
+      .in("case_id", openIds)
+      .eq("type", "close_request_rejected")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    for (const r of rejected ?? []) {
+      if (!r.case_id || rejections.has(r.case_id)) continue;
+      const meta = r.meta && typeof r.meta === "object" && !Array.isArray(r.meta) ? (r.meta as Record<string, unknown>) : {};
+      rejections.set(r.case_id, {
+        comment: typeof meta.comment === "string" && meta.comment.trim() ? meta.comment : null,
+        at: r.created_at,
+      });
+    }
+  }
+  // R2-10: el plazo de la solución cuenta horas hábiles; solo se leen los horarios si algún tipo tiene plazo.
+  const schedules = caseTypes.some((t) => t.solutionDeadlineHours)
+    ? await loadSolutionSchedules(s.db, s.workspaceId)
+    : null;
+  const views = activeCases.map((row) =>
+    toCaseView(row, permsOf(row), supervisesOf(row), rejections.get(row.id) ?? null, schedules),
+  );
   let activeCaseId: string | null = null;
   if (caseId && [...activeCases, ...closedCases].some((c) => c.id === caseId)) {
     activeCaseId = caseId;
@@ -463,6 +511,7 @@ export async function getContactCases(
           solutionStatus: c.solution_status,
           solutionNote: c.solution_note,
           nextActionAt: c.next_action_at,
+          solutionSchedule: solutionScheduleFor(schedules, c.team_id),
         },
         c.case_type_id ? (caseTypes.find((t) => t.id === c.case_type_id)?.solutionDeadlineHours ?? null) : null,
         nowDate,
@@ -489,7 +538,7 @@ export async function getContactCases(
       },
       activeCaseId,
       cases: views,
-      recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row))),
+      recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row), null, schedules)),
       caseTypes,
       contactTypes: (contactTypes ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color, isDefault: t.is_default })),
       teams: s.actor.teams,
@@ -986,7 +1035,8 @@ export async function openManualCase(
   // Una gestión abierta por contacto por defecto: otra igual se bloquea y una
   // de otro tipo exige confirmación (en el servidor, no solo en el diálogo).
   const existing = await engine.listActiveCases(s.db, s.workspaceId, contact.id);
-  const duplicate = engine.parallelOpeningError(existing, input.caseTypeId ?? null, input.confirmParallel === true);
+  const sameType = await sameTypeRule(s.db, s.workspaceId, input.caseTypeId ?? null);
+  const duplicate = engine.parallelOpeningError(existing, input.caseTypeId ?? null, input.confirmParallel === true, sameType);
   if (duplicate) return { error: duplicate };
 
   const result = await engine.openCase(s.db, {
@@ -1001,10 +1051,35 @@ export async function openManualCase(
   return { ok: true, caseId: result.caseId, status: result.status };
 }
 
+/** ¿El tipo admite dos gestiones iguales abiertas a la vez (con confirmación)? Ver `allowsSameTypeParallel`. */
+async function sameTypeRule(
+  db: Db,
+  workspaceId: string,
+  caseTypeId: string | null,
+): Promise<{ allowed: boolean; typeName?: string }> {
+  if (!caseTypeId) return { allowed: false };
+  const { data: type } = await db
+    .from("case_types")
+    .select("id, name, protected")
+    .eq("id", caseTypeId)
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
+  if (!type) return { allowed: false };
+  const { data: stages } = await db
+    .from("case_stages")
+    .select("kind, archived_at")
+    .eq("case_type_id", caseTypeId);
+  const allowed = engine.allowsSameTypeParallel({
+    protected: type.protected ?? false,
+    stages: (stages ?? []).map((x) => ({ kind: x.kind, archived: x.archived_at !== null })),
+  });
+  return { allowed, typeName: type.name };
+}
+
 /** Gestiones abiertas o programadas de un contacto (para «Nueva gestión»). */
 export async function listContactActiveCases(
   contactId: string,
-): Promise<CaseActionResult<{ cases: ActiveCaseSummary[] }>> {
+): Promise<CaseActionResult<{ cases: ActiveCaseSummary[]; parallelTypeIds: string[] }>> {
   if (!isId(contactId)) return { error: INVALID };
   const s = await session();
   if ("error" in s) return s;
@@ -1024,8 +1099,24 @@ export async function listContactActiveCases(
     ? await s.db.from("case_types").select("id, name").in("id", typeIds)
     : { data: [] as { id: string; name: string }[] };
   const names = new Map((types ?? []).map((t) => [t.id, t.name]));
+  // Tipos que admiten otra gestión igual con confirmación (los demás se bloquean).
+  const { data: allTypes } = await s.db.from("case_types").select("id, protected").eq("workspace_id", s.workspaceId);
+  const { data: allStages } = allTypes?.length
+    ? await s.db.from("case_stages").select("case_type_id, kind, archived_at").in("case_type_id", allTypes.map((t) => t.id))
+    : { data: [] as { case_type_id: string; kind: string; archived_at: string | null }[] };
+  const parallelTypeIds = (allTypes ?? [])
+    .filter((t) =>
+      engine.allowsSameTypeParallel({
+        protected: t.protected ?? false,
+        stages: (allStages ?? [])
+          .filter((x) => x.case_type_id === t.id)
+          .map((x) => ({ kind: x.kind, archived: x.archived_at !== null })),
+      }),
+    )
+    .map((t) => t.id);
   return {
     ok: true,
+    parallelTypeIds,
     cases: active.map((c) => ({
       id: c.id,
       caseTypeId: c.caseTypeId,
@@ -1078,6 +1169,23 @@ export async function applyBusinessTemplate(
   } catch (err) {
     console.error("[cases] applyBusinessTemplate", err);
     return { error: `No se pudo aplicar la plantilla ${BUSINESS_TEMPLATES[key].name}. Inténtalo de nuevo.` };
+  }
+}
+
+/** R2-16: lo que agregaría una plantilla, sin escribir nada (solo Dueño o Administrador). */
+export async function previewBusinessTemplate(
+  key: string,
+): Promise<CaseActionResult<{ result: TemplateApplyResult }>> {
+  if (!isBusinessTemplateKey(key)) return { error: "Plantilla de negocio desconocida." };
+  const s = await session();
+  if ("error" in s) return s;
+  if (!isAdminRole(s.actor.role)) return { error: ADMIN_ONLY_MESSAGE };
+  try {
+    const result = await previewTemplateWithStore(supabaseTemplateStore(s.db), s.workspaceId, key);
+    return { ok: true, result };
+  } catch (err) {
+    console.error("[cases] previewBusinessTemplate", err);
+    return { error: "No se pudo revisar la plantilla. Inténtalo de nuevo." };
   }
 }
 

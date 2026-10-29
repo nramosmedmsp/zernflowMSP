@@ -1,3 +1,4 @@
+import { isCronAuthorized } from "@/lib/cron-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { MEDIA_RETENTION_DAYS, retentionCutoff } from "@/lib/chat-media";
@@ -9,17 +10,14 @@ const BATCH = 500;
 const MAX_BATCHES = 10;
 
 /**
- * GET /api/cron/media-cleanup?key=CRON_SECRET (una vez al día)
+ * GET /api/cron/media-cleanupcon la cabecera Authorization: Bearer CRON_SECRET (una vez al día)
  *
  * Borra las fotos, PDF y audios de los chats que cumplieron 2 meses y los marca
  * como vencidos: el chat muestra "Archivo vencido". Los archivos de las
  * respuestas guardadas no vencen.
  */
 export async function GET(request: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const providedSecret =
-    request.nextUrl.searchParams.get("key") || request.headers.get("authorization")?.replace("Bearer ", "");
-  if (!cronSecret || providedSecret !== cronSecret) {
+  if (!isCronAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

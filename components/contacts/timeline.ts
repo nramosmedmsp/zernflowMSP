@@ -423,7 +423,9 @@ function activityPiece(
             ? "No hay un canal de WhatsApp conectado"
             : reason === "no_phone"
               ? "El contacto no tiene teléfono"
-              : null,
+              : reason === "unsubscribed"
+                ? "El contacto pidió la baja"
+                : null,
       };
     }
     case "contacts_imported": {

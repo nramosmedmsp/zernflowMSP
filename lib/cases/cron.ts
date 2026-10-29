@@ -7,7 +7,7 @@ import type { CaseRouting } from "@/lib/types/database";
 import { assignCase, loadAssignmentContext, type AssignmentContextCache } from "./assign";
 import { sendAutoTemplate } from "./auto-template";
 import { planActivation } from "./decisions";
-import { businessMinutesBetween } from "@/lib/business-hours";
+import { businessMinutesBetween, hasSchedule } from "@/lib/business-hours";
 import { isOpenAt, nextOpeningFor, scheduleForTeam } from "./hours";
 import {
   caseLink,
@@ -477,12 +477,14 @@ const SOLUTION_MAX_SCAN = 1000;
  * Control de reclamos, plazo de la solución: las gestiones abiertas de un tipo
  * con `solution_deadline_hours` que pasaron el plazo sin cerrarse ni registrar
  * una solución en proceso avisan una sola vez a los supervisores
- * (`deadline_alerted_at`).
+ * (`deadline_alerted_at`). R2-10: el plazo cuenta horas hábiles del horario
+ * de la gestión (equipo o empresa, con feriados); sin horario, horas de reloj.
  */
 export async function notifySolutionDeadlines(
   db: Db,
-  opts: { deadline: number; now?: Date },
+  opts: { deadline: number; now?: Date; cache?: AssignmentContextCache },
 ): Promise<{ alerted: number; stoppedEarly: boolean }> {
+  const cache: AssignmentContextCache = opts.cache ?? new Map();
   const now = opts.now ?? new Date();
   const nowIso = now.toISOString();
   let alerted = 0;
@@ -500,6 +502,7 @@ export async function notifySolutionDeadlines(
   for (const type of types ?? []) {
     const hours = type.solution_deadline_hours;
     if (!hours || hours <= 0) continue;
+    // Las horas hábiles nunca superan a las de reloj: la base filtra por reloj y el horario afina.
     const cutoff = new Date(now.getTime() - hours * 3_600_000).toISOString();
     let lastId: string | null = null;
 
@@ -528,8 +531,15 @@ export async function notifySolutionDeadlines(
       for (const row of rows) {
         scanned++;
         // La reapertura reinicia el reloj: la base filtra por opened_at, aquí se afina.
-        const due = solutionDueAt({ openedAt: row.opened_at, solutionClockAt: row.solution_clock_at }, hours);
+        const ctx = await loadAssignmentContext(db, row.workspace_id, cache);
+        const schedule = scheduleForTeam(ctx.hours, row.team_id);
+        const due = solutionDueAt(
+          { openedAt: row.opened_at, solutionClockAt: row.solution_clock_at },
+          hours,
+          { hours: schedule.hours, holidays: [...schedule.holidays] },
+        );
         if (!due || due.getTime() > now.getTime()) continue;
+        const businessHours = hasSchedule(schedule.hours);
 
         // Reclamo condicional: solo avisa quien selló la fila.
         const { data: claimed } = await db
@@ -548,7 +558,7 @@ export async function notifySolutionDeadlines(
           type: "solution_overdue",
           case_id: row.id,
           contact_id: row.contact_id,
-          meta: { kind: "deadline", hours },
+          meta: { kind: "deadline", hours, business_hours: businessHours },
         });
         const contacts = await names(db, [row.contact_id]);
         const recipients = await supervisorsOrAdmins(db, row.workspace_id, row.team_id);
@@ -559,7 +569,7 @@ export async function notifySolutionDeadlines(
             user_id: userId,
             type: "solution_overdue" as const,
             title: `${type.name} sin solución registrada: ${contacts.get(row.contact_id) ?? "Contacto sin nombre"}`,
-            body: `Pasaron más de ${hours} h y nadie registró la solución ni la cerró.`,
+            body: `Pasaron más de ${hours} ${businessHours ? "horas hábiles" : "h"} y nadie registró la solución ni la cerró.`,
             link: caseLink(row.contact_id, row.id),
           })),
         );
@@ -728,7 +738,7 @@ export async function runCaseTasks(
     [
       "solution_deadline",
       async () => {
-        const r = await notifySolutionDeadlines(db, { deadline: opts.deadline, now: opts.now });
+        const r = await notifySolutionDeadlines(db, { deadline: opts.deadline, now: opts.now, cache });
         stats.solutionAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },

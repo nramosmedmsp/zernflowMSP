@@ -49,7 +49,7 @@ interface TriggerConfig {
 
 export function GrowthView({
   workspaceId,
-  channels,
+  channels: allChannels,
   triggers: initialTriggers,
   flows,
   stats,
@@ -66,6 +66,8 @@ export function GrowthView({
   };
   recentLogs: CommentLog[];
 }) {
+  // Las reglas de comentarios son de redes sociales: WhatsApp no tiene comentarios (R2-B14).
+  const channels = allChannels.filter((c) => c.platform !== "whatsapp");
   const [triggers, setTriggers] = useState(initialTriggers);
   const [showCreate, setShowCreate] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -586,7 +588,7 @@ export function GrowthView({
             <div className="mt-4 space-y-3">
               {triggers.map((trigger) => {
                 const config = trigger.config as unknown as TriggerConfig;
-                const channel = channels.find(
+                const channel = allChannels.find(
                   (c) => c.id === trigger.channel_id
                 );
                 return (

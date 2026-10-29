@@ -197,27 +197,43 @@ describe("acciones de gestiones: permisos", () => {
     expect(await openManualCase({ contactId, assignee: BETO, caseTypeId: typeId("Postventa"), confirmParallel: true })).toMatchObject({ ok: true });
   });
 
-  it("nueva gestión: bloquea el mismo tipo y pide confirmar uno distinto (M-32)", async () => {
+  it("nueva gestión: Venta admite otra igual con confirmación; Postventa y Consulta no (M-32)", async () => {
     as(ANA);
     const typeId = (name: string) => fake.rows("case_types").find((t) => t.name === name)!.id as string;
-    // María ya tiene una Venta abierta: otra Venta se rechaza siempre, aun confirmando.
+    // María ya tiene una Venta abierta (tipo comercial con etapas Pagado / No compró).
     const before = fake.rows("cases").length;
-    const sameType = {
-      error: "Este contacto ya tiene una gestión abierta de ese tipo. Ve a esa gestión en vez de abrir otra igual.",
-    };
-    expect(await openManualCase({ contactId, caseTypeId: typeId("Venta") })).toEqual(sameType);
-    expect(await openManualCase({ contactId, caseTypeId: typeId("Venta"), confirmParallel: true })).toEqual(sameType);
+    fake.rows("case_types").find((t) => t.name === "Postventa")!.protected = true;
+    const ask = { error: "Este cliente ya tiene una venta abierta. ¿Abrir otra?" };
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Venta") })).toEqual(ask);
+    expect(fake.rows("cases")).toHaveLength(before);
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Venta"), confirmParallel: true })).toMatchObject({ ok: true });
+    expect(fake.rows("cases")).toHaveLength(before + 1);
     // De otro tipo: sin confirmar, error y no se crea nada.
     expect(await openManualCase({ contactId, caseTypeId: typeId("Postventa") })).toEqual({
       error: "Este contacto ya tiene otra gestión abierta. Confirma que quieres abrir una en paralelo.",
     });
-    expect(fake.rows("cases")).toHaveLength(before);
+    expect(fake.rows("cases")).toHaveLength(before + 1);
     // Confirmada: se abre.
     expect(await openManualCase({ contactId, caseTypeId: typeId("Postventa"), confirmParallel: true })).toMatchObject({ ok: true });
-    expect(fake.rows("cases")).toHaveLength(before + 1);
-    // La lista para el diálogo trae las abiertas con el nombre del tipo.
+    // Postventa (protegida): otra igual se rechaza siempre, aun confirmando.
+    const sameType = {
+      error: "Este contacto ya tiene una gestión abierta de ese tipo. Ve a esa gestión en vez de abrir otra igual.",
+    };
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Postventa"), confirmParallel: true })).toEqual(sameType);
+    // Consulta solo se «resuelve» (sin etapas ganada/perdida): una sola abierta.
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Consulta"), confirmParallel: true })).toMatchObject({ ok: true });
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Consulta"), confirmParallel: true })).toEqual(sameType);
+    // La lista para el diálogo trae las abiertas con el nombre del tipo y los tipos que admiten paralelas.
     const listed = await listContactActiveCases(contactId);
-    expect("cases" in listed && listed.cases.map((c) => c.caseTypeName).sort()).toEqual(["Postventa", "Venta"]);
+    expect("cases" in listed && listed.cases.map((c) => c.caseTypeName).sort()).toEqual([
+      "Consulta",
+      "Postventa",
+      "Venta",
+      "Venta",
+    ]);
+    expect("parallelTypeIds" in listed && listed.parallelTypeIds.sort()).toEqual(
+      [typeId("Venta"), typeId("Recompra")].sort(),
+    );
   });
 
   it("un contacto sin gestiones abiertas no pide confirmación", async () => {

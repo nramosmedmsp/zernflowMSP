@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
+import { sameTypeConfirmMessage } from "@/lib/cases/parallel";
 
 export interface ParallelCase {
   id: string;
@@ -10,15 +11,24 @@ export interface ParallelCase {
   status: "open" | "scheduled";
 }
 
-/** ¿Hay una gestión del mismo tipo (o ambas sin clasificar)? Entonces se bloquea. */
-export function hasSameTypeOpen(existing: readonly ParallelCase[], caseTypeId: string | null): boolean {
+/**
+ * ¿Hay una gestión del mismo tipo (o ambas sin clasificar) que impide abrir otra?
+ * Si el tipo admite paralelas (`sameTypeAllowed`: Venta, Recompra) no se bloquea:
+ * se pide confirmar.
+ */
+export function hasSameTypeOpen(
+  existing: readonly ParallelCase[],
+  caseTypeId: string | null,
+  sameTypeAllowed = false,
+): boolean {
+  if (sameTypeAllowed && caseTypeId) return false;
   return existing.some((c) => c.caseTypeId === caseTypeId);
 }
 
 /**
  * Aviso de «Nueva gestión» cuando el contacto ya tiene gestiones abiertas:
- * las lista con «Ir a la gestión» y, si el tipo es distinto, pide confirmar.
- * Del mismo tipo no deja continuar.
+ * las lista con «Ir a la gestión» y pide confirmar. Del mismo tipo solo deja
+ * continuar si el tipo admite paralelas (`sameTypeAllowed`).
  */
 export function ParallelCaseWarning({
   contactId,
@@ -26,15 +36,19 @@ export function ParallelCaseWarning({
   caseTypeId,
   confirmed,
   onConfirmedChange,
+  sameTypeAllowed = false,
 }: {
   contactId: string;
   existing: readonly ParallelCase[];
   caseTypeId: string | null;
   confirmed: boolean;
   onConfirmedChange: (value: boolean) => void;
+  /** El tipo elegido admite otra gestión igual con confirmación. */
+  sameTypeAllowed?: boolean;
 }) {
   if (existing.length === 0) return null;
-  const blocked = hasSameTypeOpen(existing, caseTypeId);
+  const blocked = hasSameTypeOpen(existing, caseTypeId, sameTypeAllowed);
+  const sameType = caseTypeId ? existing.find((c) => c.caseTypeId === caseTypeId) : undefined;
 
   return (
     <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm" role="alert">
@@ -69,7 +83,9 @@ export function ParallelCaseWarning({
             onChange={(e) => onConfirmedChange(e.target.checked)}
             className="mt-0.5"
           />
-          <span>Quiero abrir otra gestión en paralelo, aunque ya tenga una abierta.</span>
+          <span>
+            {sameType ? sameTypeConfirmMessage(sameType.caseTypeName) : "Quiero abrir otra gestión en paralelo, aunque ya tenga una abierta."}
+          </span>
         </label>
       )}
     </div>

@@ -9,7 +9,7 @@ export function buildTemplateCsv(customSlugs: string[] = []): string {
   const extra = customSlugs.map(() => "");
   return toCsv([
     header,
-    ["Ana Torres", "987654321", "ana@ejemplo.com", "Socio", "Sede Centro", "asesor@tuempresa.com", "15/03/2026", "Verano|Referido", ...extra],
+    ["Ana Torres", "987654321", "ana@ejemplo.com", "Cliente", "Tienda Lima", "asesor@tuempresa.com", "15/03/2026", "Verano|Referido", ...extra],
     ["Luis Pérez", "+57 300 123 4567", "", "Prospecto", "", "", "2026-04-02", "", ...extra],
   ]);
 }

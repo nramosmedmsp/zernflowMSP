@@ -6,6 +6,7 @@ import {
   contactListSelect,
   contactPageCount,
   contactPageRange,
+  orderedRange,
   parseContactListParams,
   type ContactListParams,
   type ContactQueryBuilder,
@@ -168,5 +169,19 @@ describe("paginación", () => {
     expect(contactPageCount(50)).toBe(1);
     expect(contactPageCount(51)).toBe(2);
     expect(contactPageCount(1234)).toBe(25);
+  });
+});
+
+describe("rango de fechas clave (B-42)", () => {
+  it("un rango invertido se ordena", () => {
+    expect(orderedRange("2026-12-01", "2026-01-01")).toEqual({ keyFrom: "2026-01-01", keyTo: "2026-12-01" });
+    expect(orderedRange("2026-01-01", "2026-12-01")).toEqual({ keyFrom: "2026-01-01", keyTo: "2026-12-01" });
+    expect(orderedRange("2026-01-01", "")).toEqual({ keyFrom: "2026-01-01", keyTo: "" });
+  });
+  it("la dirección con fechas invertidas también se ordena", () => {
+    expect(parseContactListParams({ from: "2026-12-01", to: "2026-01-01" })).toMatchObject({
+      keyFrom: "2026-01-01",
+      keyTo: "2026-12-01",
+    });
   });
 });

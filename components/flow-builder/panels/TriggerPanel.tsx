@@ -239,6 +239,16 @@ const matchTypes: Array<{ value: "exact" | "contains" | "startsWith"; label: str
   { value: "startsWith", label: "Empieza con" },
 ];
 
+/** ¿Ya existe esa palabra clave (sin importar mayúsculas ni espacios) con el mismo tipo de coincidencia? */
+export function hasKeyword(
+  keywords: readonly { value: string; matchType: string }[],
+  value: string,
+  matchType: string,
+): boolean {
+  const wanted = value.trim().toLowerCase();
+  return keywords.some((k) => k.value.trim().toLowerCase() === wanted && k.matchType === matchType);
+}
+
 export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
   const data = rawData as TriggerPanelData;
   const triggerType = data.triggerType || "keyword";
@@ -253,9 +263,17 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
     [data, onChange]
   );
 
+  const [keywordNotice, setKeywordNotice] = useState<string | null>(null);
+
   const addKeyword = useCallback(() => {
     const trimmed = newKeyword.trim();
     if (!trimmed) return;
+    // La misma palabra con el mismo tipo de coincidencia no se agrega dos veces.
+    if (hasKeyword(keywords, trimmed, newMatchType)) {
+      setKeywordNotice(`«${trimmed}» ya está en la lista.`);
+      return;
+    }
+    setKeywordNotice(null);
     const updated: Keyword[] = [...keywords, { value: trimmed, matchType: newMatchType }];
     onChange({ ...data, keywords: updated });
     setNewKeyword("");
@@ -367,7 +385,10 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
             <input
               type="text"
               value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
+              onChange={(e) => {
+                setNewKeyword(e.target.value);
+                setKeywordNotice(null);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
@@ -399,6 +420,8 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
               <Plus className="h-4 w-4" />
             </button>
           </div>
+
+          {keywordNotice && <p className="mt-1.5 text-xs text-amber-700">{keywordNotice}</p>}
 
           {keywords.length === 0 && (
             <p className="mt-2 text-xs text-muted-foreground">

@@ -259,6 +259,8 @@ export interface LocalMeta {
   platform_message_id: string | null;
   sent_by_user_id: string | null;
   sent_by_flow_id: string | null;
+  /** "sequence:<nombre>" cuando lo envió una secuencia. */
+  sent_by_node_id?: string | null;
   status: MessageStatus;
   error_text: string | null;
 }
@@ -296,6 +298,7 @@ export function attachLocalMeta(
       ...m,
       sent_by_user_id: m.sent_by_user_id ?? row.sent_by_user_id,
       sent_by_flow_id: flowId,
+      sent_by_node_id: m.sent_by_node_id ?? row.sent_by_node_id ?? null,
       flow_name: flowId ? (flowNames[flowId] ?? m.flow_name ?? null) : (m.flow_name ?? null),
       status,
       error: status === "failed" ? (m.error ?? row.error_text ?? null) : null,
