@@ -4,6 +4,7 @@
 // de React para probarlo con vitest.
 
 import { isAdminRole } from "@/lib/permissions";
+import { canManageMailSettings } from "@/lib/team-rules";
 
 export type SettingsLinkKey =
   | "general"
@@ -26,6 +27,8 @@ export interface SettingsLink {
   description: string;
   href: string;
   adminOnly: boolean;
+  /** Solo el Dueño la ve (el correo SMTP es de toda la instalación). */
+  ownerOnly?: boolean;
 }
 
 export const SETTINGS_LINKS: readonly SettingsLink[] = [
@@ -49,6 +52,7 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     description: "Servidor SMTP para invitaciones y restablecer contraseñas.",
     href: "/dashboard/settings/correo",
     adminOnly: true,
+    ownerOnly: true,
   },
   {
     key: "cases",
@@ -125,5 +129,7 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
 /** Enlaces que ve un rol. Un rol desconocido o ausente se trata como Miembro. */
 export function settingsLinksFor(role: string | null | undefined): SettingsLink[] {
   const admin = isAdminRole(role);
-  return SETTINGS_LINKS.filter((link) => admin || !link.adminOnly);
+  return SETTINGS_LINKS.filter(
+    (link) => (admin || !link.adminOnly) && (!link.ownerOnly || canManageMailSettings(role)),
+  );
 }

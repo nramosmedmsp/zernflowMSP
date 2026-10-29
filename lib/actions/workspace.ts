@@ -1,6 +1,7 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { CREATE_WORKSPACE_DENIED_MESSAGE, canCreateWorkspace } from "@/lib/team-rules";
 import { rpcCreateWorkspace } from "@/lib/supabase/extra-rpc";
 import { setWorkspaceCookie } from "@/lib/workspace-cookie";
 
@@ -41,7 +42,25 @@ export async function createWorkspace(name: string) {
     return { error: "El nombre no puede tener más de 100 caracteres." };
   }
 
-  // La función de la base (00017) crea el espacio, genera un slug único y
+  // Solo el Dueño de algún espacio, o cualquiera si aún no hay espacios
+  // (instalación nueva). La función de la base (00030) vuelve a comprobarlo.
+  const { data: mine } = await supabase
+    .from("workspace_members")
+    .select("role")
+    .eq("user_id", user.id);
+  const roles = (mine ?? []).map((m) => m.role);
+  let anyWorkspaceExists = true;
+  if (!roles.includes("owner")) {
+    const { count } = await (await createServiceClient())
+      .from("workspaces")
+      .select("id", { count: "exact", head: true });
+    anyWorkspaceExists = (count ?? 1) > 0;
+  }
+  if (!canCreateWorkspace({ roles, anyWorkspaceExists })) {
+    return { error: CREATE_WORKSPACE_DENIED_MESSAGE };
+  }
+
+  // La función de la base (00017, con la regla de 00030) crea el espacio, genera un slug único y
   // agrega al usuario como dueño en una sola transacción, sin depender de
   // políticas INSERT en `workspaces` ni en `workspace_members`.
   const { id, error } = await rpcCreateWorkspace(supabase, trimmed);

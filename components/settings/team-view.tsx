@@ -37,6 +37,7 @@ import {
   MAIL_NOT_CONFIGURED_MESSAGE,
   MEMBER_STATUS_LABELS,
   canManageTeam,
+  canManageMailSettings,
   copyAccessLinkError,
   removeMemberError,
   sendAccessEmailError,
@@ -249,9 +250,7 @@ export function TeamView({
         setFullName("");
         setEmail("");
         setRole("member");
-        if (result.outcome === "existing") {
-          setCreated({ userId: result.member.userId, notice: { kind: "ok", text: result.message } });
-        } else if (result.delivery.sent) {
+        if (result.delivery.sent) {
           setCreated({
             userId: result.member.userId,
             notice: { kind: "ok", text: result.delivery.message },
@@ -591,10 +590,14 @@ export function TeamView({
               <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
                 <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>
-                  {MAIL_NOT_CONFIGURED_MESSAGE}{" "}
-                  <Link href="/dashboard/settings/correo" className="font-medium text-foreground hover:underline">
-                    Ir a Correo
-                  </Link>
+                  {canManageMailSettings(currentUserRole)
+                    ? MAIL_NOT_CONFIGURED_MESSAGE
+                    : "El correo aún no está configurado. Pide al Dueño que lo configure."}{" "}
+                  {canManageMailSettings(currentUserRole) && (
+                    <Link href="/dashboard/settings/correo" className="font-medium text-foreground hover:underline">
+                      Ir a Correo
+                    </Link>
+                  )}
                 </span>
               </p>
             )}

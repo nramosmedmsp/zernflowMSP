@@ -65,31 +65,90 @@ export function sendAccessEmailError(params: ActorTarget): string | null {
 }
 
 export const COPY_ACTIVE_LINK_DENIED_MESSAGE =
-  "Por seguridad, el enlace de una cuenta activa solo se envía por correo. Configura el correo en Configuración → Correo o pide al Dueño que lo genere.";
+  "Por seguridad, el enlace de una cuenta activa solo se envía por correo. Envíale el acceso por correo o pídele que use «¿Olvidaste tu contraseña?».";
+
+export const COPY_PRIVILEGED_LINK_DENIED_MESSAGE =
+  "No se puede copiar un enlace de acceso de un Dueño o Administrador. Envíaselo por correo.";
+
+export const CROSS_WORKSPACE_DENIED_MESSAGE =
+  "Esta persona también pertenece a otro espacio de trabajo que no administras, así que no puedes enviarle ni copiarle un acceso.";
+
+export const OWNER_ONLY_MAIL_MESSAGE = "Solo el Dueño puede ver y cambiar la configuración de correo.";
+
+export const CREATE_WORKSPACE_DENIED_MESSAGE =
+  "Solo el Dueño de un espacio de trabajo puede crear otros espacios.";
+
+export const EXISTING_ACCOUNT_MESSAGE =
+  "Esa persona ya tiene una cuenta. Envíale una invitación para que la acepte.";
+
+/** Solo el Dueño ve y cambia el SMTP de la instalación (los Administradores no). */
+export function canManageMailSettings(role: string | null | undefined): boolean {
+  return role === "owner";
+}
+
+/**
+ * ¿Se puede crear un espacio nuevo? Solo quien ya es Dueño de alguno, o
+ * cualquiera si todavía no existe ningún espacio (instalación nueva). La base
+ * (create_workspace, migración 00030) aplica la misma regla.
+ */
+export function canCreateWorkspace(params: {
+  roles: ReadonlyArray<string | null | undefined>;
+  anyWorkspaceExists: boolean;
+}): boolean {
+  return !params.anyWorkspaceExists || params.roles.some((r) => r === "owner");
+}
+
+export interface RoleMembership {
+  workspaceId: string;
+  role: string | null | undefined;
+}
+
+const ROLE_RANK: Record<string, number> = { owner: 3, admin: 2, member: 1 };
+
+function rank(role: string | null | undefined): number {
+  return (role && ROLE_RANK[role]) || 0;
+}
+
+/**
+ * Autoridad del actor sobre el objetivo en TODOS los espacios del objetivo:
+ * en cada uno el actor debe ser Dueño o Administrador y tener un rol
+ * estrictamente superior al del objetivo (nadie supera a un Dueño). Devuelve el
+ * motivo en español o null. Un objetivo sin espacios se rechaza.
+ */
+export function crossWorkspaceAuthorityError(params: {
+  actorMemberships: readonly RoleMembership[];
+  targetMemberships: readonly RoleMembership[];
+}): string | null {
+  if (params.targetMemberships.length === 0) return CROSS_WORKSPACE_DENIED_MESSAGE;
+  const actorRoles = new Map(params.actorMemberships.map((m) => [m.workspaceId, m.role]));
+  for (const target of params.targetMemberships) {
+    const actorRole = actorRoles.get(target.workspaceId);
+    if (!canManageTeam(actorRole) || rank(actorRole) <= rank(target.role)) {
+      return CROSS_WORKSPACE_DENIED_MESSAGE;
+    }
+  }
+  return null;
+}
 
 interface CopyLinkParams extends ActorTarget {
   /** ¿La cuenta objetivo ya inició sesión alguna vez (estado Activo)? */
   targetActive: boolean;
+  /** Roles del objetivo en todos sus espacios (además de targetRole). */
+  targetMemberships?: readonly RoleMembership[];
 }
 
 /**
  * ¿Puede `actor` copiar un enlace de acceso de `target`? Quien tiene el enlace
- * entra como esa persona, así que:
- * - nunca se permite para el Dueño ni para uno mismo;
- * - si la cuenta aún está Pendiente de activar, lo pueden copiar el Dueño y los
- *   Administradores;
- * - si la cuenta ya está Activa, solo el Dueño (un Administrador podría
- *   suplantar a otro miembro). Para ellos queda el envío por correo.
+ * entra como esa persona, así que solo se permite para cuentas Pendientes de
+ * activar (nunca iniciaron sesión) que no sean Dueño ni Administrador en
+ * ningún espacio. Para las cuentas activas queda el envío por correo.
  */
 export function copyAccessLinkError(params: CopyLinkParams): string | null {
   const base = sendAccessEmailError(params);
   if (base) return base;
-  if (params.targetRole === "owner") {
-    return "No se puede copiar un enlace de acceso del Dueño. Envíaselo por correo.";
-  }
-  if (params.targetActive && params.actorRole !== "owner") {
-    return COPY_ACTIVE_LINK_DENIED_MESSAGE;
-  }
+  const roles = [params.targetRole, ...(params.targetMemberships ?? []).map((m) => m.role)];
+  if (roles.some((r) => canManageTeam(r))) return COPY_PRIVILEGED_LINK_DENIED_MESSAGE;
+  if (params.targetActive) return COPY_ACTIVE_LINK_DENIED_MESSAGE;
   return null;
 }
 

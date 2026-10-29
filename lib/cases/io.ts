@@ -81,7 +81,9 @@ export type NotificationType =
   | "close_request_rejected"
   | "solution_overdue"
   | "commitment_overdue"
-  | "complaint_unclassified";
+  | "complaint_unclassified"
+  // Seguridad: cambio del servidor de correo (00030)
+  | "mail_settings_changed";
 
 export interface NotificationInput {
   workspace_id: string;

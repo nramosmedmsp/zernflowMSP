@@ -9,6 +9,9 @@ import { isMailConfigured } from "@/lib/mail/settings";
 import { inviteEmail, resetPasswordEmail } from "@/lib/mail/templates";
 import {
   APP_URL_MISSING_MESSAGE,
+  EXISTING_ACCOUNT_MESSAGE,
+  crossWorkspaceAuthorityError,
+  type RoleMembership,
   MAIL_NOT_CONFIGURED_MESSAGE,
   accessLinkTypeFor,
   appBaseUrl,
@@ -45,7 +48,6 @@ export type AccessDelivery =
 
 export type CreateTeamUserResult =
   | { error: string }
-  | { ok: true; outcome: "existing"; message: string; member: TeamMemberView }
   | { ok: true; outcome: "created"; member: TeamMemberView; delivery: AccessDelivery };
 
 async function managerContext(workspaceId: string) {
@@ -116,10 +118,20 @@ function inviterNameOf(user: { email?: string | null; user_metadata?: Record<str
   return displayName({ id: "", email: user.email, user_metadata: user.user_metadata });
 }
 
+/** Roles de una persona en todos los espacios en que es miembro. */
+async function membershipsOf(service: ServiceClient, userId: string): Promise<RoleMembership[]> {
+  const { data } = await service
+    .from("workspace_members")
+    .select("workspace_id, role")
+    .eq("user_id", userId);
+  return (data ?? []).map((m) => ({ workspaceId: m.workspace_id, role: m.role }));
+}
+
 /**
- * Crea un usuario para el espacio actual. Si el correo ya tiene cuenta, solo
- * agrega la membresía. Si no, crea la cuenta con un enlace de activación y lo
- * envía con el correo de la app (si está configurado).
+ * Crea un usuario nuevo para el espacio actual: crea la cuenta con un enlace de
+ * activación y lo envía con el correo de la app (si está configurado). Si el
+ * correo ya tiene cuenta NO se agrega en silencio al espacio: se rechaza y hay
+ * que invitarla para que ella acepte.
  */
 export async function createTeamUser(
   workspaceId: string,
@@ -150,12 +162,13 @@ export async function createTeamUser(
     return { error: "No se pudo comprobar el correo. Inténtalo de nuevo." };
   }
 
-  const existingUser = exists ? await findAuthUserByEmail(service, email) : null;
-  if (exists && !existingUser) {
-    return { error: "No se pudo comprobar el correo. Inténtalo de nuevo." };
-  }
-  if (existingUser && (await getMembership(service, workspaceId, existingUser.id))) {
-    return { error: "Esta persona ya es miembro del espacio de trabajo." };
+  if (exists) {
+    const existingUser = await findAuthUserByEmail(service, email);
+    if (existingUser && (await getMembership(service, workspaceId, existingUser.id))) {
+      return { error: "Esta persona ya es miembro del espacio de trabajo." };
+    }
+    // Nunca se une a una cuenta existente sin que la persona acepte.
+    return { error: EXISTING_ACCOUNT_MESSAGE };
   }
 
   // Invitación pendiente: el trigger handle_new_user (00017) la ve y no crea un
@@ -187,24 +200,6 @@ export async function createTeamUser(
       .eq("status", "pending");
 
   const joinedAt = new Date().toISOString();
-
-  if (existingUser) {
-    const { error: memberError } = await service
-      .from("workspace_members")
-      .insert({ workspace_id: workspaceId, user_id: existingUser.id, role });
-    if (memberError) {
-      console.error("[createTeamUser] membership", memberError.message);
-      await deleteInvite();
-      return { error: "No se pudo dar acceso a esta persona. Inténtalo de nuevo." };
-    }
-    await markAccepted();
-    return {
-      ok: true,
-      outcome: "existing",
-      message: "Esta persona ya tenía cuenta; ya tiene acceso.",
-      member: memberViewFromUser(existingUser, { userId: existingUser.id, role, joinedAt }),
-    };
-  }
 
   const link = await generateAccessLink(service, { email, type: "invite", baseUrl, fullName });
   if (!link.ok) {
@@ -254,6 +249,12 @@ export async function sendAccessEmail(
 
   const denied = sendAccessEmailError({ actorId: ctx.user.id, actorRole: ctx.role, targetId: userId });
   if (denied) return { error: denied };
+
+  const authority = crossWorkspaceAuthorityError({
+    actorMemberships: await membershipsOf(service, ctx.user.id),
+    targetMemberships: await membershipsOf(service, userId),
+  });
+  if (authority) return { error: authority };
 
   const {
     data: { user: target },
@@ -315,14 +316,22 @@ export async function copyAccessLink(
   } = await service.auth.admin.getUserById(userId);
   if (!target) return { error: "No encontramos la cuenta de esta persona." };
 
+  const targetMemberships = await membershipsOf(service, userId);
   const denied = copyAccessLinkError({
     actorId: ctx.user.id,
     actorRole: ctx.role,
     targetId: userId,
     targetRole: membership.role,
     targetActive: memberStatus(target.last_sign_in_at) === "active",
+    targetMemberships,
   });
   if (denied) return { error: denied };
+
+  const authority = crossWorkspaceAuthorityError({
+    actorMemberships: await membershipsOf(service, ctx.user.id),
+    targetMemberships,
+  });
+  if (authority) return { error: authority };
 
   const baseUrl = appBaseUrl(process.env.NEXT_PUBLIC_APP_URL);
   if (!baseUrl) return { error: APP_URL_MISSING_MESSAGE };

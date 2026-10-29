@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { settingsLinksFor } from "./settings-nav";
 
 describe("settingsLinksFor", () => {
-  it("Dueño y Administrador ven todos los enlaces", () => {
+  it("Dueño y Administrador ven todos los enlaces, y Correo solo el Dueño", () => {
+    expect(settingsLinksFor("admin").map((l) => l.title)).not.toContain("Correo");
+    expect(settingsLinksFor("owner").map((l) => l.title)).toContain("Correo");
     for (const role of ["owner", "admin"]) {
-      expect(settingsLinksFor(role).map((l) => l.title)).toEqual([
+      expect(settingsLinksFor(role).map((l) => l.title).filter((t) => t !== "Correo")).toEqual([
         "General",
         "Equipo",
-        "Correo",
         "Gestiones",
         "Tipos de contacto",
         "Equipos",
