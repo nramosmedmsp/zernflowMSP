@@ -8,12 +8,15 @@ import {
   alertUnhandledComplaints,
   approveCloseRequest,
   classifyCase,
+  closeCase,
   closeOrRequestClose,
   dismissComplaint,
   flagComplaint,
   handleInbound,
   notifyCommitmentsOverdue,
+  notifyOverdueNextActions,
   notifySolutionDeadlines,
+  openCase,
   openComplaintCase,
   registerSolutionInProgress,
   rejectCloseRequest,
@@ -416,8 +419,12 @@ describe("cron: compromiso vencido", () => {
 
     expect((await notifyCommitmentsOverdue(db(), { deadline: deadline(), now: NOW })).alerted).toBe(0);
 
-    // Un compromiso nuevo vuelve a poder avisar.
-    await setNextAction(db(), { caseId: c.id as string, at: hoursAgo(-1), actorId: ANA });
+    // Un compromiso nuevo (Actualizar solución) vuelve a poder avisar.
+    await registerSolutionInProgress(
+      db(),
+      { caseId: c.id as string, note: "Reenvío", commitmentAt: hoursAgo(-1), actorId: ANA },
+      NOW,
+    );
     expect(row("cases", c.id).commitment_alerted_at).toBeNull();
     const later = new Date(NOW.getTime() + 2 * 3_600_000);
     expect((await notifyCommitmentsOverdue(db(), { deadline: deadline(), now: later })).alerted).toBe(1);
@@ -620,5 +627,316 @@ describe("detector de reclamos", () => {
       await dismissComplaint(db(), { workspaceId: WS, conversationId, actorId: ANA }, NOW);
       expect(await alertUnhandledComplaints(db(), { deadline: deadline(), now: NOW })).toMatchObject({ alerted: 0 });
     });
+  });
+});
+
+// ── Tanda 2: control de reclamos y Postventa ───────────────────────────────
+
+describe("A-6: la marca de reclamo no tapa los reclamos futuros", () => {
+  const flag = (text: string, when: string) =>
+    flagComplaint(db(), { workspaceId: WS, contactId, conversationId, text, at: when });
+
+  it("si la Postventa ya se atendió y se cerró, un reclamo nuevo vuelve a marcar con la fecha nueva", async () => {
+    expect(await flag("llegó roto", hoursAgo(48))).toBe("flagged");
+    // El asesor abrió la Postventa por la tarjeta (no limpió la marca) y la cerró.
+    openPostventa({ status: "resolved", created_at: hoursAgo(40), closed_at: hoursAgo(30) });
+    expect(await flag("otra vez llegó dañado", NOW.toISOString())).toBe("flagged");
+    expect(fake.rows("conversations")[0]).toMatchObject({
+      complaint_flagged_at: NOW.toISOString(),
+      complaint_excerpt: "llegó dañado",
+      complaint_alerted_at: null,
+    });
+  });
+
+  it("una marca que sigue pendiente no se pisa", async () => {
+    await flag("llegó roto", hoursAgo(2));
+    expect(await flag("otra vez llegó dañado", NOW.toISOString())).toBe("already_flagged");
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBe(hoursAgo(2));
+  });
+
+  it("una marca vieja con una Postventa abierta se borra y no se vuelve a marcar", async () => {
+    await flag("llegó roto", hoursAgo(5));
+    openPostventa({ created_at: hoursAgo(4) });
+    expect(await flag("llegó roto de nuevo", NOW.toISOString())).toBe("has_protected_case");
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBeNull();
+  });
+
+  it("clasificar la gestión como Postventa por la tarjeta borra la marca", async () => {
+    await flag("llegó roto", hoursAgo(1));
+    const [open] = fake.seed("cases", [
+      { workspace_id: WS, contact_id: contactId, case_type_id: venta.id, stage_id: stageId(venta.id, "Nuevo"), status: "open", opened_at: hoursAgo(1) },
+    ]);
+    await classifyCase(db(), { caseId: open.id as string, caseTypeId: postventa.id as string, actorId: SUP, actorIsSupervisor: true }, NOW);
+    expect(fake.rows("conversations")[0]).toMatchObject({ complaint_flagged_at: null, complaint_excerpt: null });
+  });
+
+  it("abrir una Postventa a mano borra la marca", async () => {
+    await flag("llegó roto", hoursAgo(1));
+    await openCase(db(), { workspaceId: WS, contactId, caseTypeId: postventa.id as string, actorId: ANA }, NOW);
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBeNull();
+  });
+
+  it("reabrir una Postventa borra la marca", async () => {
+    await flag("llegó roto", hoursAgo(1));
+    openPostventa({ status: "resolved", closed_at: hoursAgo(3), closed_by: ANA });
+    await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at: NOW.toISOString(), text: "no funciona" });
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBeNull();
+  });
+
+  it("el cron borra la marca de un reclamo ya atendido en vez de avisar", async () => {
+    await flag("llegó roto", hoursAgo(3));
+    openPostventa({ status: "resolved", created_at: hoursAgo(2), closed_at: hoursAgo(1) });
+    expect(await alertUnhandledComplaints(db(), { deadline: deadline(), now: NOW })).toMatchObject({ alerted: 0 });
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBeNull();
+    expect(notes("complaint_unclassified")).toHaveLength(0);
+  });
+});
+
+describe("A-7: la fecha compromiso no se quita ni se mueve con «Próximo contacto»", () => {
+  it("con una solución en proceso setNextAction rechaza quitar o cambiar la fecha", async () => {
+    const commitment = new Date(NOW.getTime() + 86_400_000).toISOString();
+    const c = openPostventa({ solution_status: "in_progress", solution_note: "Reenvío", next_action_at: commitment });
+    const removed = await setNextAction(db(), { caseId: c.id as string, at: null, actorId: ANA });
+    expect(removed).toMatchObject({ error: expect.stringContaining("Actualizar solución") });
+    const moved = await setNextAction(db(), { caseId: c.id as string, at: "2026-12-01", actorId: ANA });
+    expect("error" in moved).toBe(true);
+    expect(row("cases", c.id).next_action_at).toBe(commitment);
+    expect(activity("next_action_set", c.id as string)).toHaveLength(0);
+  });
+
+  it("sin solución en proceso «Próximo contacto» funciona como siempre", async () => {
+    const c = openPostventa();
+    const r = await setNextAction(db(), { caseId: c.id as string, at: "2026-12-01", actorId: ANA });
+    expect(r).toMatchObject({ ok: true });
+    expect(await setNextAction(db(), { caseId: c.id as string, at: null, actorId: ANA })).toMatchObject({ ok: true });
+  });
+
+  it("«Actualizar solución» mueve el compromiso, lo anota y avisa a los supervisores (no a quien lo hizo)", async () => {
+    const first = new Date(NOW.getTime() + 86_400_000).toISOString();
+    const c = openPostventa({ solution_status: "in_progress", solution_note: "Reenvío", next_action_at: first });
+    const later = new Date(NOW.getTime() + 3 * 86_400_000).toISOString();
+    const r = await registerSolutionInProgress(db(), { caseId: c.id as string, note: "Cambio de lote", commitmentAt: later, actorId: ANA }, NOW);
+    expect(r).toMatchObject({ ok: true });
+    expect(row("cases", c.id).next_action_at).toBe(later);
+    expect(activity("solution_registered", c.id as string)[0].meta).toMatchObject({
+      commitment_at: later,
+      previous_commitment_at: first,
+      previous_note: "Reenvío",
+    });
+    expect(usersOf("commitment_changed")).toEqual([SUP, SUP2]);
+  });
+
+  it("registrar la primera vez no manda aviso de cambio", async () => {
+    const c = openPostventa();
+    const when = new Date(NOW.getTime() + 86_400_000).toISOString();
+    await registerSolutionInProgress(db(), { caseId: c.id as string, note: "Reenvío", commitmentAt: when, actorId: ANA }, NOW);
+    expect(notes("commitment_changed")).toHaveLength(0);
+  });
+});
+
+describe("M-4: cambiar el tipo de la gestión reinicia o limpia el control de la solución", () => {
+  it("una Venta de hace 3 días que pasa a Postventa cuenta el plazo desde el cambio", async () => {
+    const [sale] = fake.seed("cases", [
+      { workspace_id: WS, contact_id: contactId, case_type_id: venta.id, stage_id: stageId(venta.id, "Nuevo"), status: "open", opened_at: daysAgo(3) },
+    ]);
+    await classifyCase(db(), { caseId: sale.id as string, caseTypeId: postventa.id as string, actorId: SUP, actorIsSupervisor: true }, NOW);
+    expect(row("cases", sale.id)).toMatchObject({ case_type_id: postventa.id, solution_clock_at: NOW.toISOString(), deadline_alerted_at: null });
+    // No hay alerta falsa al supervisor.
+    expect(await notifySolutionDeadlines(db(), { deadline: deadline(), now: NOW })).toMatchObject({ alerted: 0 });
+    expect(notes("solution_overdue")).toHaveLength(0);
+    // Y sí avisa cuando pasan las 24 h desde el cambio.
+    const later = new Date(NOW.getTime() + 25 * 3_600_000);
+    expect(await notifySolutionDeadlines(db(), { deadline: deadline(), now: later })).toMatchObject({ alerted: 1 });
+  });
+
+  it("al sacar la gestión de Postventa se limpian la solución, el pedido de cierre y las alertas", async () => {
+    const c = openPostventa({
+      solution_status: "in_progress",
+      solution_note: "Reenvío",
+      solution_at: hoursAgo(5),
+      solution_by: ANA,
+      solution_clock_at: hoursAgo(30),
+      deadline_alerted_at: hoursAgo(6),
+      commitment_alerted_at: hoursAgo(1),
+      close_request: { stage_id: stageId(postventa.id, "Sin solución"), reason_id: null, note: null, category_id: null, requested_by: ANA, requested_at: hoursAgo(2) },
+    });
+    const r = await classifyCase(db(), { caseId: c.id as string, caseTypeId: venta.id as string, actorId: SUP, actorIsSupervisor: true }, NOW);
+    expect(r).toMatchObject({ ok: true });
+    expect(row("cases", c.id)).toMatchObject({
+      case_type_id: venta.id,
+      solution_status: null,
+      solution_note: null,
+      solution_at: null,
+      solution_by: null,
+      solution_clock_at: null,
+      deadline_alerted_at: null,
+      commitment_alerted_at: null,
+      close_request: null,
+    });
+    expect(activity("case_classified", c.id as string).pop()?.meta).toMatchObject({ solution_reset: true });
+    // Ya no manda «Compromiso vencido» ni hay nada que aprobar.
+    expect((await notifyCommitmentsOverdue(db(), { deadline: deadline(), now: NOW })).alerted).toBe(0);
+    expect(await approveCloseRequest(db(), { caseId: c.id as string, actorId: SUP })).toMatchObject({ error: "No hay un pedido de cierre pendiente." });
+  });
+
+  it("entre dos tipos sin plazo no toca nada", async () => {
+    const [other] = fake.seed("case_types", [{ workspace_id: WS, name: "Consulta", position: 3 }]);
+    stage(other.id, "Nueva", "open", 0);
+    const [sale] = fake.seed("cases", [
+      { workspace_id: WS, contact_id: contactId, case_type_id: venta.id, stage_id: stageId(venta.id, "Nuevo"), status: "open", opened_at: daysAgo(3) },
+    ]);
+    await classifyCase(db(), { caseId: sale.id as string, caseTypeId: other.id as string, actorId: SUP }, NOW);
+    expect(row("cases", sale.id).solution_clock_at).toBeNull();
+    expect(activity("case_classified", sale.id as string)[0].meta ?? {}).not.toHaveProperty("solution_reset");
+  });
+});
+
+describe("M-3: la ventana de 7 días de Postventa no reabre con cualquier mensaje", () => {
+  const at = NOW.toISOString();
+
+  it("un mensaje normal pasadas 24 h abre una gestión nueva y no reabre la Postventa", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(3), closed_by: ANA });
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "gracias, quiero otra proteína" });
+    expect(r).toMatchObject({ opened: true, reopened: false });
+    expect(r!.caseId).not.toBe(closed.id);
+    expect(row("cases", closed.id).status).toBe("resolved");
+    expect(notes("protected_reopened")).toHaveLength(0);
+  });
+
+  it("un mensaje que parece reclamo dentro de la ventana la reabre", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(3), closed_by: ANA });
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "otra vez llegó dañado" });
+    expect(r).toMatchObject({ caseId: closed.id, reopened: true });
+  });
+
+  it("dentro de las 24 h siguientes al cierre cualquier mensaje la reabre", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: hoursAgo(5), closed_by: ANA });
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "gracias" });
+    expect(r).toMatchObject({ caseId: closed.id, reopened: true });
+  });
+
+  it("sin texto (por ejemplo una foto del producto) la reabre", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(3), closed_by: ANA });
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: null });
+    expect(r).toMatchObject({ caseId: closed.id, reopened: true });
+  });
+
+  it("la ventana se cuenta desde el primer cierre: reabrir y cerrar de nuevo no la renueva", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(3), closed_by: ANA });
+    fake.seed("activity", [
+      { workspace_id: WS, type: "case_closed", case_id: closed.id, contact_id: contactId, created_at: daysAgo(9) },
+      { workspace_id: WS, type: "case_closed", case_id: closed.id, contact_id: contactId, created_at: daysAgo(3) },
+    ]);
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "llegó roto otra vez" });
+    expect(r).toMatchObject({ reopened: false, opened: true });
+    expect(r!.caseId).not.toBe(closed.id);
+  });
+});
+
+describe("B-14: un solo aviso cuando vence el compromiso", () => {
+  it("«Próximo contacto vencido» no se manda si hay una solución en proceso (sí «Compromiso vencido»)", async () => {
+    openPostventa({ solution_status: "in_progress", solution_note: "Reenvío", next_action_at: hoursAgo(1) });
+    expect((await notifyOverdueNextActions(db(), { deadline: deadline(), now: NOW })).notified).toBe(0);
+    expect(notes("next_action_due")).toHaveLength(0);
+    expect((await notifyCommitmentsOverdue(db(), { deadline: deadline(), now: NOW })).alerted).toBe(1);
+    expect(notes("commitment_overdue").length).toBeGreaterThan(0);
+  });
+
+  it("un próximo contacto normal sigue avisando", async () => {
+    openPostventa({ next_action_at: hoursAgo(1) });
+    expect((await notifyOverdueNextActions(db(), { deadline: deadline(), now: NOW })).notified).toBe(1);
+    expect(notes("next_action_due")).toHaveLength(1);
+  });
+});
+
+describe("B-11: aprobar y rechazar a la vez", () => {
+  function pendingRequest() {
+    return openPostventa({
+      close_request: {
+        stage_id: stageId(postventa.id, "Sin solución"),
+        reason_id: reasonId("Cliente no responde"),
+        note: "No contesta",
+        category_id: null,
+        requested_by: ANA,
+        requested_at: hoursAgo(1),
+      },
+    });
+  }
+
+  it("si otro supervisor rechazó mientras tanto, aprobar no cierra la gestión", async () => {
+    const c = pendingRequest();
+    // El rechazo llega después de que approve leyó el pedido: el cierre exige que siga pendiente.
+    await rejectCloseRequest(db(), { caseId: c.id as string, actorId: SUP2 });
+    const r = await closeCase(
+      db(),
+      {
+        caseId: c.id as string,
+        stageId: stageId(postventa.id, "Sin solución"),
+        outcomeReasonId: reasonId("Cliente no responde"),
+        note: "No contesta",
+        actorId: SUP,
+        requireCloseRequest: true,
+      },
+      NOW,
+    );
+    expect(r).toEqual({ error: "El pedido de cierre ya fue resuelto." });
+    expect(row("cases", c.id).status).toBe("open");
+    expect(activity("case_closed", c.id as string)).toHaveLength(0);
+  });
+
+  it("aprobar con el pedido pendiente cierra, y rechazar después responde que ya se resolvió", async () => {
+    const c = pendingRequest();
+    expect(await approveCloseRequest(db(), { caseId: c.id as string, actorId: SUP }, NOW)).toMatchObject({ ok: true });
+    expect(row("cases", c.id).status).toBe("lost");
+    expect(await rejectCloseRequest(db(), { caseId: c.id as string, actorId: SUP2 })).toMatchObject({ error: expect.any(String) });
+    expect(activity("close_request_rejected", c.id as string)).toHaveLength(0);
+  });
+
+  it("dos aprobaciones simultáneas cierran una sola vez", async () => {
+    const c = pendingRequest();
+    const [a, b] = await Promise.all([
+      approveCloseRequest(db(), { caseId: c.id as string, actorId: SUP }, NOW),
+      approveCloseRequest(db(), { caseId: c.id as string, actorId: SUP2 }, NOW),
+    ]);
+    expect([a, b].filter((r) => "ok" in r)).toHaveLength(1);
+    expect(activity("case_closed", c.id as string)).toHaveLength(1);
+  });
+});
+
+describe("B-12: «Abrir Postventa» desde el aviso", () => {
+  const flag = () => flagComplaint(db(), { workspaceId: WS, contactId, conversationId, text: "llegó roto", at: hoursAgo(1) });
+
+  it("quien no es del equipo de Postventa no queda como responsable: se reparte solo", async () => {
+    await flag();
+    const r = await openComplaintCase(db(), { workspaceId: WS, conversationId, actorId: OUT, canClassify: () => false }, NOW);
+    expect(r).toMatchObject({ ok: true, classified: false });
+    const created = fake.rows("cases").find((c) => c.case_type_id === postventa.id)!;
+    expect(created.assignee_id).not.toBe(OUT);
+    expect(created.team_id).toBe(TEAM);
+  });
+
+  it("quien es del equipo queda como responsable", async () => {
+    await flag();
+    await openComplaintCase(db(), { workspaceId: WS, conversationId, actorId: ANA, canClassify: () => false }, NOW);
+    expect(fake.rows("cases").find((c) => c.case_type_id === postventa.id)!.assignee_id).toBe(ANA);
+  });
+
+  it("dos clics a la vez abren una sola Postventa", async () => {
+    await flag();
+    const results = await Promise.all([
+      openComplaintCase(db(), { workspaceId: WS, conversationId, actorId: ANA, canClassify: () => false }, NOW),
+      openComplaintCase(db(), { workspaceId: WS, conversationId, actorId: SUP, canClassify: () => false }, NOW),
+    ]);
+    expect(fake.rows("cases").filter((c) => c.case_type_id === postventa.id)).toHaveLength(1);
+    expect(results.filter((r) => "ok" in r).length).toBeGreaterThanOrEqual(1);
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBeNull();
+  });
+
+  it("sin un tipo protegido activo no abre nada y el aviso se conserva", async () => {
+    await flag();
+    row("case_types", postventa.id).archived_at = NOW.toISOString();
+    const r = await openComplaintCase(db(), { workspaceId: WS, conversationId, actorId: ANA, canClassify: () => false }, NOW);
+    expect("error" in r).toBe(true);
+    expect(fake.rows("conversations")[0].complaint_flagged_at).toBe(hoursAgo(1));
   });
 });

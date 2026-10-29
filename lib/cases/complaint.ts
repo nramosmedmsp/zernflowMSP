@@ -7,6 +7,7 @@ import { detectComplaint } from "@/lib/complaint-detect";
 import { classifyCase } from "./changes";
 import {
   GENERIC_ERROR,
+  clearComplaintFlag,
   contactLink,
   caseLink,
   contactName,
@@ -87,7 +88,21 @@ export async function flagComplaint(
     .eq("workspace_id", params.workspaceId)
     .maybeSingle();
   if (!conversation) return "no_match";
-  if (conversation.complaint_flagged_at) return "already_flagged";
+  if (conversation.complaint_flagged_at) {
+    // Una marca vieja no puede tapar un reclamo nuevo: si el reclamo anterior
+    // ya se atendió (hubo una gestión protegida después de la marca), se
+    // descarta y se sigue con el mensaje de ahora.
+    const staleTypes = await protectedTypes(db, params.workspaceId);
+    const staleCases = await protectedCasesOf(db, params.contactId, staleTypes.map((t) => t.id));
+    if (complaintStillPending(conversation.complaint_flagged_at, staleCases)) return "already_flagged";
+    const { data: freed } = await db
+      .from("conversations")
+      .update({ complaint_flagged_at: null, complaint_excerpt: null })
+      .eq("id", conversation.id)
+      .eq("complaint_flagged_at", conversation.complaint_flagged_at)
+      .select("id");
+    if (!freed || freed.length === 0) return "already_flagged";
+  }
   if (conversation.complaint_dismissed_at) {
     const since = new Date(at).getTime() - new Date(conversation.complaint_dismissed_at).getTime();
     if (since < COMPLAINT_DISMISS_DAYS * DAY_MS) return "dismissed_recently";
@@ -154,6 +169,10 @@ export async function dismissComplaint(
  * como el primer tipo protegido; si no, abre una gestión nueva de ese tipo
  * para el contacto. Después quita la marca. `canClassify` dice si quien actúa
  * puede editar esa gestión.
+ *
+ * La marca se reclama antes de abrir (un solo clic gana): dos personas que
+ * pulsan a la vez no abren dos Postventas. La gestión nueva queda asignada a
+ * quien pulsa solo si es del equipo de la Postventa; si no, se reparte sola.
  */
 export async function openComplaintCase(
   db: Db,
@@ -167,7 +186,7 @@ export async function openComplaintCase(
 ): Promise<EngineResult<{ caseId: string; classified: boolean }>> {
   const { data: conversation } = await db
     .from("conversations")
-    .select("id, contact_id")
+    .select("id, contact_id, complaint_flagged_at, complaint_excerpt")
     .eq("id", params.conversationId)
     .eq("workspace_id", params.workspaceId)
     .maybeSingle();
@@ -177,26 +196,48 @@ export async function openComplaintCase(
   if (types.length === 0) return { error: "No hay un tipo de gestión protegido para los reclamos." };
   const target = types[0];
 
-  const clear = async () => {
-    await db
-      .from("conversations")
-      .update({ complaint_flagged_at: null, complaint_excerpt: null })
+  const findOpenProtected = async () => {
+    const { data } = await db
+      .from("cases")
+      .select("id")
       .eq("contact_id", conversation.contact_id)
-      .eq("workspace_id", params.workspaceId);
+      .eq("status", "open")
+      .in("case_type_id", types.map((t) => t.id))
+      .limit(1);
+    return data?.[0] ?? null;
   };
 
   // Ya hay una gestión protegida abierta: solo se quita el aviso.
-  const { data: openProtected } = await db
-    .from("cases")
-    .select("id")
-    .eq("contact_id", conversation.contact_id)
-    .eq("status", "open")
-    .in("case_type_id", types.map((t) => t.id))
-    .limit(1);
-  if (openProtected && openProtected.length > 0) {
-    await clear();
-    return { ok: true, caseId: openProtected[0].id, classified: false };
+  const existing = await findOpenProtected();
+  if (existing) {
+    await clearComplaintFlag(db, params.workspaceId, conversation.contact_id);
+    return { ok: true, caseId: existing.id, classified: false };
   }
+
+  // Reclama el aviso: solo uno de los clics simultáneos sigue adelante.
+  const flaggedAt = conversation.complaint_flagged_at;
+  if (flaggedAt) {
+    const { data: won } = await db
+      .from("conversations")
+      .update({ complaint_flagged_at: null, complaint_excerpt: null })
+      .eq("id", conversation.id)
+      .eq("complaint_flagged_at", flaggedAt)
+      .select("id");
+    if (!won || won.length === 0) {
+      const other = await findOpenProtected();
+      if (other) return { ok: true, caseId: other.id, classified: false };
+      return { error: "Otra persona ya está atendiendo este aviso. Actualiza la pantalla." };
+    }
+  }
+  const restoreFlag = async () => {
+    if (!flaggedAt) return;
+    await db
+      .from("conversations")
+      .update({ complaint_flagged_at: flaggedAt, complaint_excerpt: conversation.complaint_excerpt })
+      .eq("id", conversation.id)
+      .is("complaint_flagged_at", null);
+  };
+  const clear = () => clearComplaintFlag(db, params.workspaceId, conversation.contact_id);
 
   const { data: unclassified } = await db
     .from("cases")
@@ -209,13 +250,20 @@ export async function openComplaintCase(
   const candidate = unclassified?.[0] ?? null;
 
   if (candidate && params.canClassify(candidate)) {
-    const result = await classifyCase(db, {
-      caseId: candidate.id,
-      caseTypeId: target.id,
-      actorId: params.actorId,
-      actorIsSupervisor: true, // la gestión no tiene tipo: no hay bloqueo que aplicar
-    });
-    if ("error" in result) return result;
+    const result = await classifyCase(
+      db,
+      {
+        caseId: candidate.id,
+        caseTypeId: target.id,
+        actorId: params.actorId,
+        actorIsSupervisor: true, // la gestión no tiene tipo: no hay bloqueo que aplicar
+      },
+      now,
+    );
+    if ("error" in result) {
+      await restoreFlag();
+      return result;
+    }
     await clear();
     return { ok: true, caseId: candidate.id, classified: true };
   }
@@ -228,10 +276,14 @@ export async function openComplaintCase(
       caseTypeId: target.id,
       actorId: params.actorId,
       assignee: params.actorId,
+      assigneeOnlyIfInTeam: true,
     },
     now,
   );
-  if ("error" in opened) return opened;
+  if ("error" in opened) {
+    await restoreFlag();
+    return opened;
+  }
   await clear();
   return { ok: true, caseId: opened.caseId, classified: false };
 }
@@ -286,7 +338,17 @@ export async function alertUnhandledComplaints(
       }
       const typeIds = (typesByWorkspace.get(conv.workspace_id) ?? []).map((t) => t.id);
       const cases = await protectedCasesOf(db, conv.contact_id, typeIds);
-      if (!complaintStillPending(conv.complaint_flagged_at, cases)) continue;
+      if (!complaintStillPending(conv.complaint_flagged_at, cases)) {
+        // Ya se atendió: la marca vieja se borra para que no tape reclamos futuros.
+        if (conv.complaint_flagged_at) {
+          await db
+            .from("conversations")
+            .update({ complaint_flagged_at: null, complaint_excerpt: null })
+            .eq("id", conv.id)
+            .eq("complaint_flagged_at", conv.complaint_flagged_at);
+        }
+        continue;
+      }
 
       const contact = await loadContact(db, conv.workspace_id, conv.contact_id);
       if (!contact) continue;

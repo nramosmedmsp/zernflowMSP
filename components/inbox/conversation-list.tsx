@@ -430,6 +430,26 @@ export function ConversationList({
                     </div>
                   ) : null}
 
+                  {row.claim && (
+                    <p
+                      className={cn(
+                        "mt-1 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                        row.claim.kind === "approval"
+                          ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                          : "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+                      )}
+                    >
+                      <AlertCircle className="h-3 w-3" />
+                      {row.claim.kind === "late" ? "Plazo vencido" : row.claim.label}
+                    </p>
+                  )}
+                  {row.otherProtected && (
+                    <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                      <AlertCircle className="h-3 w-3" />
+                      {row.otherProtected} abierta
+                    </p>
+                  )}
+
                   {waiting && now !== null && (
                     <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
                       <Clock className="h-3 w-3" />

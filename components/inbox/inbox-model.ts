@@ -3,6 +3,7 @@
 // probarla con vitest (inbox-model.test.ts).
 
 import { limaDateOf } from "@/lib/cases/dates";
+import { claimBadge, claimPriority, type ClaimBadge, type SolutionCaseInput } from "@/lib/cases/protection";
 import type { Database, MemberAvailability, Platform, StageKind, TeamRole } from "@/lib/types/database";
 
 export type ContactRow = Database["public"]["Tables"]["contacts"]["Row"];
@@ -24,6 +25,10 @@ export interface InboxCaseType {
   name: string;
   color: string | null;
   archived: boolean;
+  /** Control de reclamos (Postventa): gestión protegida. */
+  protected?: boolean;
+  /** Horas para registrar la solución; null/ausente = sin plazo. */
+  solutionDeadlineHours?: number | null;
   stages: { id: string; name: string; color: string | null; kind: StageKind; archived: boolean }[];
 }
 
@@ -123,6 +128,19 @@ function sameLimaDay(iso: string | null, today: string): boolean {
   return !!iso && limaDateOf(new Date(iso)) === today;
 }
 
+/** Lo que el control de reclamos necesita de una gestión de la bandeja. */
+function solutionInput(c: InboxCase): SolutionCaseInput & { hasCloseRequest: boolean } {
+  return {
+    status: c.status,
+    openedAt: c.opened_at,
+    solutionClockAt: c.solution_clock_at,
+    solutionStatus: c.solution_status,
+    solutionNote: c.solution_note,
+    nextActionAt: c.next_action_at,
+    hasCloseRequest: c.close_request !== null && c.close_request !== undefined,
+  };
+}
+
 /** ¿La gestión entra en el alcance? (la RLS ya filtró lo que el usuario puede ver) */
 export function caseMatchesScope(
   c: InboxCase,
@@ -149,7 +167,13 @@ export function caseMatchesScope(
  * ¿La gestión entra en el estado? Por responder = el cliente escribió y nadie
  * contestó; Seguimiento hoy = próximo contacto vencido o de hoy, o activada hoy.
  */
-export function caseMatchesState(c: InboxCase, state: InboxState, now: Date): boolean {
+export function caseMatchesState(
+  c: InboxCase,
+  state: InboxState,
+  now: Date,
+  /** Plazo de solución del tipo de la gestión (control de reclamos). */
+  deadlineHours?: number | null,
+): boolean {
   switch (state) {
     case "waiting":
       return !!c.waiting_since;
@@ -158,7 +182,9 @@ export function caseMatchesState(c: InboxCase, state: InboxState, now: Date): bo
       const today = limaDateOf(now);
       const due = !!c.next_action_at && limaDateOf(new Date(c.next_action_at)) <= today;
       const activatedToday = c.scheduled_for !== null && sameLimaDay(c.opened_at, today);
-      return due || activatedToday;
+      // Postventa: el plazo para registrar la solución vencido también es seguimiento de hoy.
+      const claimOverdue = claimPriority(solutionInput(c), deadlineHours, now) === 2;
+      return due || activatedToday || claimOverdue;
     }
     case "all":
       return true;
@@ -267,10 +293,21 @@ function time(iso: string | null | undefined): number {
 
 /**
  * Orden de las gestiones de un contacto para elegir la que representa al
- * chat: abiertas antes que programadas, las mías primero y la que más espera.
+ * chat: abiertas antes que programadas, primero la Postventa (tipo protegido)
+ * con plazo o compromiso vencido y luego la que corre contra el plazo, las
+ * mías primero y la que más espera.
  */
-export function compareCases(a: InboxCase, b: InboxCase, userId: string): number {
+export function compareCases(
+  a: InboxCase,
+  b: InboxCase,
+  userId: string,
+  /** Urgencia por control de reclamos (claimPriority); mayor = primero. */
+  urgency: (c: InboxCase) => number = () => 0,
+): number {
   if (a.status !== b.status) return a.status === "open" ? -1 : 1;
+  const au = urgency(a);
+  const bu = urgency(b);
+  if (au !== bu) return bu - au;
   const aMine = a.assignee_id === userId;
   const bMine = b.assignee_id === userId;
   if (aMine !== bMine) return aMine ? -1 : 1;
@@ -301,6 +338,10 @@ export interface InboxRow {
   case: InboxCase | null;
   /** Gestiones activas del contacto. */
   caseCount: number;
+  /** Marca de control de reclamos de la gestión mostrada (plazo o compromiso vencido, cierre por aprobar). */
+  claim?: ClaimBadge | null;
+  /** Nombre del tipo protegido (Postventa) cuando el contacto tiene una abierta que no es la mostrada. */
+  otherProtected?: string | null;
 }
 
 function normalize(text: string): string {
@@ -333,16 +374,31 @@ export function buildRows(
   now: Date,
 ): InboxRow[] {
   const rows: InboxRow[] = [];
+  const typeOf = new Map(meta.caseTypes.map((t) => [t.id, t]));
+  const deadlineOf = (c: InboxCase) => (c.case_type_id ? (typeOf.get(c.case_type_id)?.solutionDeadlineHours ?? null) : null);
+  const urgency = (c: InboxCase) => (c.status === "open" ? claimPriority(solutionInput(c), deadlineOf(c), now) : 0);
+  const claimOf = (c: InboxCase | null): ClaimBadge | null =>
+    c && c.status === "open" ? claimBadge(solutionInput(c), deadlineOf(c), now) : null;
+  const otherProtectedOf = (shown: InboxCase | null, all: readonly InboxCase[]): string | null => {
+    for (const c of all) {
+      if (c === shown || c.id === shown?.id || c.status !== "open" || !c.case_type_id) continue;
+      const t = typeOf.get(c.case_type_id);
+      if (t?.protected) return t.name;
+    }
+    return null;
+  };
   for (const conversation of conversations) {
     if (filters.platform && conversation.platform !== filters.platform) continue;
     if (!matchesSearch(conversation, filters.search)) continue;
 
     const all = [...(casesByContact.get(conversation.contact_id) ?? [])].sort((a, b) =>
-      compareCases(a, b, meta.userId),
+      compareCases(a, b, meta.userId, urgency),
     );
     const contactTeamId = conversation.contacts?.team_id ?? null;
     const matching = all.filter(
-      (c) => caseMatchesScope(c, scope, meta, contactTeamId) && caseMatchesState(c, state, now) && caseMatchesFilters(c, filters),
+      (c) => caseMatchesScope(c, scope, meta, contactTeamId) &&
+        caseMatchesState(c, state, now, deadlineOf(c)) &&
+        caseMatchesFilters(c, filters),
     );
 
     if (filters.status === "none") {
@@ -354,9 +410,23 @@ export function buildRows(
     }
 
     if (matching.length > 0) {
-      rows.push({ conversation, case: matching[0], caseCount: all.length });
+      const shown = matching[0];
+      rows.push({
+        conversation,
+        case: shown,
+        caseCount: all.length,
+        claim: claimOf(shown),
+        otherProtected: otherProtectedOf(shown, all),
+      });
     } else if (scope === "all" && state === "all" && !hasCaseFilters(filters)) {
-      rows.push({ conversation, case: all[0] ?? null, caseCount: all.length });
+      const shown = all[0] ?? null;
+      rows.push({
+        conversation,
+        case: shown,
+        caseCount: all.length,
+        claim: claimOf(shown),
+        otherProtected: otherProtectedOf(shown, all),
+      });
     }
   }
   return sortRows(rows);

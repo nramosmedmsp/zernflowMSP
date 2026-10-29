@@ -46,6 +46,7 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
       contactId,
       conversationId: conversation.id,
       at: input.at ?? new Date().toISOString(),
+      text: msg.text,
     });
   } catch (err) {
     console.error("Case engine (handleInbound) error:", err);

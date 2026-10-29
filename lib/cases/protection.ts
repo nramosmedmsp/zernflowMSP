@@ -111,6 +111,24 @@ export function claimBadge(
 }
 
 /**
+ * Qué tan urgente es una gestión para el asesor por el control de reclamos:
+ * 2 = el plazo de la solución o la fecha compromiso ya venció; 1 = corre
+ * contra el plazo (falta registrar la solución) o hay una solución en proceso;
+ * 0 = nada de eso. La bandeja lo usa para elegir qué gestión representa al chat.
+ */
+export function claimPriority(
+  c: SolutionCaseInput,
+  deadlineHours: number | null | undefined,
+  now: Date,
+): 0 | 1 | 2 {
+  const state = solutionState(c, deadlineHours, now);
+  if (state.kind === "overdue") return 2;
+  if (state.kind === "in_progress") return state.commitmentOverdue ? 2 : 1;
+  if (state.kind === "pending") return 1;
+  return 0;
+}
+
+/**
  * "40 min", "2 h 30 min", "5 h", "3 días". Con `round: "up"` (lo que queda)
  * redondea hacia arriba: 4 h 59 min se lee "5 h", no "4 h".
  */
