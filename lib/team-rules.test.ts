@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   COPY_ACTIVE_LINK_DENIED_MESSAGE,
+  COPY_PRIVILEGED_LINK_DENIED_MESSAGE,
+  CROSS_WORKSPACE_DENIED_MESSAGE,
+  canCreateWorkspace,
+  canManageMailSettings,
+  crossWorkspaceAuthorityError,
   accessLinkTypeFor,
   accessLinkUrl,
   appBaseUrl,
@@ -104,39 +109,56 @@ describe("copyAccessLinkError", () => {
     }
   });
 
-  it("nadie puede copiar el enlace del Dueño, esté activo o pendiente", () => {
+  it("nadie puede copiar el enlace de un Dueño o Administrador, esté activo o pendiente", () => {
     for (const actorRole of ["owner", "admin"]) {
-      for (const targetActive of [true, false]) {
-        expect(
-          copyAccessLinkError({ ...base, actorRole, targetRole: "owner", targetActive }),
-        ).toMatch(/del Dueño/);
+      for (const targetRole of ["owner", "admin"]) {
+        for (const targetActive of [true, false]) {
+          expect(copyAccessLinkError({ ...base, actorRole, targetRole, targetActive })).toBe(
+            COPY_PRIVILEGED_LINK_DENIED_MESSAGE,
+          );
+        }
       }
     }
   });
 
-  it("el Dueño puede copiar el enlace de cualquier miembro, activo o pendiente", () => {
-    for (const targetRole of ["admin", "member"]) {
-      for (const targetActive of [true, false]) {
-        expect(copyAccessLinkError({ ...base, actorRole: "owner", targetRole, targetActive })).toBeNull();
-      }
-    }
-  });
-
-  it("un Administrador puede copiar el enlace de un miembro pendiente", () => {
-    for (const targetRole of ["admin", "member"]) {
+  it("tampoco si el objetivo es Dueño o Administrador en otro espacio", () => {
+    for (const other of ["owner", "admin"]) {
       expect(
-        copyAccessLinkError({ ...base, actorRole: "admin", targetRole, targetActive: false }),
+        copyAccessLinkError({
+          ...base,
+          actorRole: "owner",
+          targetRole: "member",
+          targetActive: false,
+          targetMemberships: [
+            { workspaceId: "w1", role: "member" },
+            { workspaceId: "w2", role: other },
+          ],
+        }),
+      ).toBe(COPY_PRIVILEGED_LINK_DENIED_MESSAGE);
+    }
+  });
+
+  it("Dueño y Administrador pueden copiar el enlace de un Miembro pendiente", () => {
+    for (const actorRole of ["owner", "admin"]) {
+      expect(
+        copyAccessLinkError({
+          ...base,
+          actorRole,
+          targetRole: "member",
+          targetActive: false,
+          targetMemberships: [{ workspaceId: "w1", role: "member" }],
+        }),
       ).toBeNull();
     }
   });
 
-  it("un Administrador no puede copiar el enlace de una cuenta activa", () => {
-    for (const targetRole of ["admin", "member"]) {
+  it("nadie, ni el Dueño, puede copiar el enlace de una cuenta activa", () => {
+    for (const actorRole of ["owner", "admin"]) {
       expect(
-        copyAccessLinkError({ ...base, actorRole: "admin", targetRole, targetActive: true }),
+        copyAccessLinkError({ ...base, actorRole, targetRole: "member", targetActive: true }),
       ).toBe(COPY_ACTIVE_LINK_DENIED_MESSAGE);
     }
-    expect(COPY_ACTIVE_LINK_DENIED_MESSAGE).toMatch(/solo se envía por correo/);
+    expect(COPY_ACTIVE_LINK_DENIED_MESSAGE).toMatch(/por correo/);
   });
 
   it("un Miembro no puede copiar ningún enlace", () => {
@@ -238,5 +260,89 @@ describe("translateGenerateLinkError", () => {
     expect(translateGenerateLinkError("Database error saving new user")).toMatch(/00017/);
     expect(translateGenerateLinkError("User not found", "user_not_found")).toMatch(/No encontramos/);
     expect(translateGenerateLinkError(null)).toMatch(/No se pudo generar/);
+  });
+});
+
+describe("canManageMailSettings", () => {
+  it("solo el Dueño", () => {
+    expect(canManageMailSettings("owner")).toBe(true);
+    for (const role of ["admin", "member", null, undefined, ""]) {
+      expect(canManageMailSettings(role)).toBe(false);
+    }
+  });
+});
+
+describe("canCreateWorkspace", () => {
+  it("el Dueño de algún espacio puede", () => {
+    expect(canCreateWorkspace({ roles: ["member", "owner"], anyWorkspaceExists: true })).toBe(true);
+  });
+  it("Administrador, Miembro o sin espacios no pueden si ya existen espacios", () => {
+    expect(canCreateWorkspace({ roles: ["admin"], anyWorkspaceExists: true })).toBe(false);
+    expect(canCreateWorkspace({ roles: ["member"], anyWorkspaceExists: true })).toBe(false);
+    expect(canCreateWorkspace({ roles: [], anyWorkspaceExists: true })).toBe(false);
+  });
+  it("en una instalación nueva (sin espacios) cualquiera puede", () => {
+    expect(canCreateWorkspace({ roles: [], anyWorkspaceExists: false })).toBe(true);
+  });
+});
+
+describe("crossWorkspaceAuthorityError", () => {
+  const m = (workspaceId: string, role: string) => ({ workspaceId, role });
+
+  it("permite si el actor supera al objetivo en todos sus espacios", () => {
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [m("w1", "admin"), m("w2", "owner")],
+        targetMemberships: [m("w1", "member"), m("w2", "admin")],
+      }),
+    ).toBeNull();
+  });
+
+  it("rechaza si el objetivo está en un espacio donde el actor no es miembro", () => {
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [m("w1", "owner")],
+        targetMemberships: [m("w1", "member"), m("w2", "member")],
+      }),
+    ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
+  });
+
+  it("rechaza si en otro espacio el actor es Miembro o no supera al objetivo", () => {
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [m("w1", "owner"), m("w2", "member")],
+        targetMemberships: [m("w1", "member"), m("w2", "member")],
+      }),
+    ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [m("w1", "admin")],
+        targetMemberships: [m("w1", "admin")],
+      }),
+    ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
+  });
+
+  it("nadie supera a un Dueño, ni otro Dueño", () => {
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [m("w1", "owner")],
+        targetMemberships: [m("w1", "owner")],
+      }),
+    ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
+  });
+
+  it("el escenario del ataque: Dueño de su espacio propio, asesor en la tienda", () => {
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [m("tienda", "member"), m("propio", "owner")],
+        targetMemberships: [m("tienda", "owner"), m("propio", "member")],
+      }),
+    ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
+  });
+
+  it("rechaza un objetivo sin espacios", () => {
+    expect(
+      crossWorkspaceAuthorityError({ actorMemberships: [m("w1", "owner")], targetMemberships: [] }),
+    ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
   });
 });

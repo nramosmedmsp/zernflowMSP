@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { getWorkspace } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
-import { canManageTeam } from "@/lib/team-rules";
+import { OWNER_ONLY_MAIL_MESSAGE, canManageMailSettings } from "@/lib/team-rules";
 import { getMailStatus } from "@/lib/mail/settings";
 import { isMailSecurity } from "@/lib/mail/config";
 import { MailSettingsView } from "@/components/settings/mail-settings-view";
@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "Correo" };
 export default async function MailSettingsPage() {
   const { role, user } = await getWorkspace();
 
-  if (!canManageTeam(role)) {
+  if (!canManageMailSettings(role)) {
     return (
       <div className="flex h-full flex-col">
         <div className="border-b border-border px-8 py-6">
@@ -29,7 +29,7 @@ export default async function MailSettingsPage() {
           </div>
         </div>
         <p className="mx-auto mt-10 max-w-md px-8 text-center text-sm text-muted-foreground">
-          Solo el Dueño o un Administrador pueden ver y cambiar la configuración de correo.
+          {OWNER_ONLY_MAIL_MESSAGE}
         </p>
       </div>
     );

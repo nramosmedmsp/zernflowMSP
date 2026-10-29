@@ -126,8 +126,10 @@ export async function POST(request: NextRequest) {
         .eq("workspace_id", workspaceId)
         .eq("is_active", true);
 
+      // Cliente de servicio: desde 00031 los usuarios no crean contactos,
+      // conversaciones ni eventos por la base (el rol de admin ya se validó).
       await backfillInboxConversations({
-        supabase,
+        supabase: service,
         zernio: createZernioClient(apiKey.trim()),
         workspaceId,
         channels: activeChannels ?? [],

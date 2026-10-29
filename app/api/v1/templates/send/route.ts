@@ -194,7 +194,8 @@ export async function POST(request: NextRequest) {
       console.error("[templates/send] no se pudo leer la plantilla para la vista previa:", err);
     }
 
-    await supabase
+    // Con el cliente de servicio: desde 00031 el usuario solo edita unread_count.
+    await service
       .from("conversations")
       .update({ last_message_at: sentAt, last_message_preview: messagePreview(text) })
       .eq("id", conversationId);

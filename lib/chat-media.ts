@@ -234,6 +234,16 @@ export function parseMediaPath(path: unknown): MediaPath | null {
   return null;
 }
 
+/**
+ * ¿Es la ruta del archivo de una respuesta guardada de ESTE espacio
+ * ({espacio}/replies/{uuid}.{ext})? Úsala antes de entregar o borrar el archivo
+ * de una respuesta: la columna attachment_url no se debe tomar por buena.
+ */
+export function isReplyFilePath(path: unknown, workspaceId: string): boolean {
+  const parsed = parseMediaPath(path);
+  return !!parsed && parsed.kind === "replies" && parsed.workspaceId === workspaceId;
+}
+
 // ── Lo que llega ───────────────────────────────────────────────────────────
 
 export interface InboundAttachment {

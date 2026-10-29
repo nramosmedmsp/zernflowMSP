@@ -187,3 +187,35 @@ export async function resolveWebhookSecret(
   const { webhookSecret } = await getWorkspaceSecrets(channel.workspace_id, supabase);
   return webhookSecret || channel.webhook_secret || null;
 }
+
+/** Resultado de elegir el canal de un webhook entre los que comparten cuenta de Zernio. */
+export type ChannelPick<T> =
+  | { ok: true; channel: T }
+  | { ok: false; reason: "no_channel" | "no_secret" | "bad_signature" };
+
+/**
+ * Elige, entre los canales activos con el mismo identificador de cuenta de
+ * Zernio, el que corresponde a la firma del mensaje: el único cuyo secreto
+ * (del espacio, o el heredado del canal) verifica el HMAC. Así un canal
+ * repetido en otro espacio no puede cortar ni desviar la recepción.
+ *
+ * Nunca acepta un mensaje sin verificar: si ningún candidato tiene secreto
+ * configurado devuelve `no_secret`, y si hay secreto pero la firma falta o no
+ * coincide, `bad_signature`. `supabase` debe ser el cliente de servicio.
+ */
+export async function pickChannelBySignature<T extends ChannelSecretRef>(
+  supabase: SupabaseClient,
+  candidates: T[],
+  body: string,
+  signature: string | null,
+): Promise<ChannelPick<T>> {
+  if (candidates.length === 0) return { ok: false, reason: "no_channel" };
+  let anySecret = false;
+  for (const channel of candidates) {
+    const secret = await resolveWebhookSecret(supabase, channel);
+    if (!secret) continue;
+    anySecret = true;
+    if (verifyWebhookSignature(secret, body, signature)) return { ok: true, channel };
+  }
+  return { ok: false, reason: anySecret ? "bad_signature" : "no_secret" };
+}

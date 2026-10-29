@@ -10,6 +10,7 @@ import {
   imageMaxBytes,
   validateReplyAttachment,
   inboundFetchPlan,
+  isReplyFilePath,
   parseMediaPath,
   replyMediaPath,
   retentionCutoff,
@@ -84,6 +85,19 @@ describe("rutas del bucket", () => {
     expect(parseMediaPath(`otro/replies/${ID}.pdf`)).toBeNull();
     expect(parseMediaPath(`${WS}/replies/archivo.pdf`)).toBeNull();
     expect(parseMediaPath(42)).toBeNull();
+  });
+});
+
+describe("isReplyFilePath (A-2)", () => {
+  it("acepta solo archivos de respuestas del mismo espacio", () => {
+    expect(isReplyFilePath(replyMediaPath(WS, "image/png", ID), WS)).toBe(true);
+  });
+
+  it("rechaza archivos de un chat, de otro espacio y rutas raras", () => {
+    expect(isReplyFilePath(conversationMediaPath(WS, CONV, "in", "image/png", ID), WS)).toBe(false);
+    expect(isReplyFilePath(replyMediaPath(WS, "image/png", ID), "44444444-4444-4444-8444-444444444444")).toBe(false);
+    expect(isReplyFilePath(`${WS}/replies/../conv/${CONV}/in/${ID}.png`, WS)).toBe(false);
+    expect(isReplyFilePath(null, WS)).toBe(false);
   });
 });
 

@@ -275,8 +275,10 @@ export async function POST(request: NextRequest) {
       at: new Date().toISOString(),
     });
 
-    // Update conversation's last message info (ZernFlow-specific metadata)
-    await supabase
+    // Update conversation's last message info (ZernFlow-specific metadata).
+    // Con el cliente de servicio: desde 00031 el usuario solo puede editar
+    // conversations.unread_count. El acceso ya se comprobó al leer la conversación.
+    await (await createServiceClient())
       .from("conversations")
       .update({
         last_message_at: new Date().toISOString(),

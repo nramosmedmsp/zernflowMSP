@@ -6,6 +6,7 @@ import { ChevronDown, Plus, Loader2, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { switchWorkspace, createWorkspace } from "@/lib/actions/workspace";
 import { roleLabel } from "@/lib/auth-helpers";
+import { canCreateWorkspace } from "@/lib/team-rules";
 
 interface WorkspaceItem {
   id: string;
@@ -26,6 +27,11 @@ export function WorkspaceSwitcher({
   workspaces: WorkspaceItem[];
 }) {
   const router = useRouter();
+  // Crear espacios es solo del Dueño de algún espacio (la base lo exige igual).
+  const canCreate = canCreateWorkspace({
+    roles: workspaces.map((w) => w.role),
+    anyWorkspaceExists: workspaces.length > 0,
+  });
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -156,10 +162,10 @@ export function WorkspaceSwitcher({
           )}
 
           {/* Divider */}
-          <div className="my-1 border-t border-border" />
+          {canCreate && <div className="my-1 border-t border-border" />}
 
           {/* Create workspace */}
-          {creating ? (
+          {!canCreate ? null : creating ? (
             <form onSubmit={handleCreate} className="p-1">
               <input
                 ref={inputRef}
