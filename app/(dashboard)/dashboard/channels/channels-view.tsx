@@ -14,7 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
+import { apiErrorMessage } from "@/lib/api-errors";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PlatformIcon } from "@/components/platform-icon";
 import { DemoBadge } from "@/components/inbox/demo-badge";
@@ -166,24 +166,30 @@ export function ChannelsView({
 
   async function handleToggleActive(channel: Channel) {
     setTogglingId(channel.id);
-    const supabase = createClient();
+    const next = !channel.is_active;
 
-    const { error } = await supabase
-      .from("channels")
-      .update({ is_active: !channel.is_active })
-      .eq("id", channel.id);
+    try {
+      // Por la API: revisa el rol y responde error si no cambió ninguna fila
+      // (antes la base bloqueaba el cambio en silencio y se mostraba un éxito falso).
+      const res = await fetch(`/api/v1/channels/${channel.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: next }),
+      });
 
-    if (error) {
-      toast.error("No se pudo cambiar el estado del canal.");
-    } else {
-      setChannels((prev) =>
-        prev.map((c) =>
-          c.id === channel.id ? { ...c, is_active: !c.is_active } : c
-        )
-      );
-      toast.success(channel.is_active ? "Canal desactivado" : "Canal activado");
+      if (!res.ok) {
+        toast.error(await apiErrorMessage(res, "cambiar el estado de los canales"));
+      } else {
+        setChannels((prev) =>
+          prev.map((c) => (c.id === channel.id ? { ...c, is_active: next } : c))
+        );
+        toast.success(next ? "Canal activado" : "Canal desactivado");
+      }
+    } catch {
+      toast.error("No se pudo cambiar el estado del canal. Revisa tu conexión.");
+    } finally {
+      setTogglingId(null);
     }
-    setTogglingId(null);
   }
 
   async function handleDelete() {

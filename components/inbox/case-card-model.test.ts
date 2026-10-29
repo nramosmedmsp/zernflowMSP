@@ -278,3 +278,32 @@ describe("commitmentOptions", () => {
     expect(commitmentOptions(late).map((o) => o.label)).toEqual(["Mañana", "En 2 días"]);
   });
 });
+
+describe("próximo contacto: año y horario (M-20, M-21)", () => {
+  it("muestra el año cuando no es el actual", () => {
+    expect(nextContactChip("2020-01-01T15:00:00Z", NOW)).toEqual({ label: "Atrasado: 1 ene 2020 10:00", tone: "overdue" });
+    expect(nextContactChip("2027-01-15T15:00:00Z", NOW).label).toBe("15 ene 2027 10:00");
+  });
+
+  it("no muestra el año si es el actual", () => {
+    expect(nextContactChip("2026-12-20T15:00:00Z", NOW).label).toBe("20 dic 10:00");
+  });
+
+  it("después de las 21:00 (Lima) no ofrece «Hoy en 3 h»", () => {
+    // 22:30 en Lima = 03:30 UTC del día siguiente.
+    const late = new Date("2026-10-29T03:30:00Z");
+    const keys = nextContactOptions(late).map((o) => o.key);
+    expect(keys).not.toContain("three-hours");
+    expect(keys).toContain("tomorrow");
+  });
+
+  it("a las 18:30 (Lima) cae a las 21:30 del mismo día: se ofrece; a las 19:00 (22:00) no", () => {
+    expect(nextContactOptions(new Date("2026-10-28T23:30:00Z")).map((o) => o.key)).toContain("three-hours");
+    expect(nextContactOptions(new Date("2026-10-29T00:00:00Z")).map((o) => o.key)).not.toContain("three-hours");
+  });
+
+  it("de madrugada tampoco ofrece una hora de madrugada", () => {
+    // 01:00 en Lima -> 04:00.
+    expect(nextContactOptions(new Date("2026-10-28T06:00:00Z")).map((o) => o.key)).not.toContain("three-hours");
+  });
+});

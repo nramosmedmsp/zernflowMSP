@@ -9,7 +9,7 @@ import type { Db } from "@/lib/cases/io";
 import { zernioMessenger, type CaseMessenger } from "@/lib/cases/messaging";
 import type { TemplateMessageContent } from "@/lib/types/database";
 import { phoneDigits } from "@/lib/whatsapp-templates";
-import { buildContactTemplateParams, needsCustomFields } from "./variables";
+import { buildContactTemplateParams, needsCustomFields, renderContactText } from "./variables";
 import { CLOSED_WINDOW_MESSAGE, isWindowOpen, type WindowState } from "./window";
 
 export interface DeliveryContext {
@@ -27,7 +27,7 @@ export interface DeliveryContext {
 }
 
 export type DeliveryResult =
-  | { ok: true; messageId: string | null; params?: string[] }
+  | { ok: true; messageId: string | null; params?: string[]; /** Texto enviado, con las variables ya puestas. */ text?: string }
   | { ok: false; error: string };
 
 export async function loadDeliveryContext(
@@ -72,15 +72,24 @@ export async function sendTextToContact(
   if (options.checkWindow && !isWindowOpen(ctx.lastInboundAt, options.now ?? Date.now())) {
     return { ok: false, error: CLOSED_WINDOW_MESSAGE };
   }
+  // Variables del contacto ({nombre}...). Nunca sale un texto vacío ni con llaves sin reemplazar.
+  const rendered = renderContactText(text, {
+    displayName: ctx.contact?.display_name,
+    keyDate: ctx.contact?.key_date,
+    workspaceName: ctx.workspaceName,
+    customFields: needsCustomFields([text]) ? await customFieldsOf(db, ctx.workspaceId, ctx.contactId) : undefined,
+  });
+  if (!rendered.ok) return { ok: false, error: rendered.error };
+
   const sent = await (options.messenger ?? zernioMessenger(db)).sendText({
     workspaceId: ctx.workspaceId,
     lateConversationId: ctx.conversation.late_conversation_id,
     lateAccountId: ctx.channel.late_account_id,
-    text,
+    text: rendered.text,
   });
   if (!sent.ok) return { ok: false, error: sent.error };
   await stampBotOutbound(db, { contactId: ctx.contactId });
-  return { ok: true, messageId: sent.messageId };
+  return { ok: true, messageId: sent.messageId, text: rendered.text };
 }
 
 async function customFieldsOf(db: Db, workspaceId: string, contactId: string): Promise<Record<string, string>> {

@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ArrowLeft,
   AlertCircle,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -27,6 +28,10 @@ import {
   type SegmentFilter,
 } from "@/components/segment-builder";
 import { TemplateContentEditor } from "@/components/sequences/template-content-editor";
+import { SegmentSummary } from "@/components/broadcasts/segment-summary";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { deleteBroadcast, updateBroadcastFilter } from "@/lib/actions/broadcasts";
+import { incompleteFilterProblem } from "@/lib/broadcasts/segment";
 import type {
   Database,
   BroadcastStatus,
@@ -88,6 +93,12 @@ export function BroadcastsView({
 
   async function handleCreate() {
     if (!newName.trim() || creating) return;
+    // Un filtro con reglas sin completar no coincide con nadie: se corrige antes de guardar.
+    const filterProblem = showSegmentFilter ? incompleteFilterProblem(segmentFilter) : null;
+    if (filterProblem) {
+      toast.error(filterProblem);
+      return;
+    }
     setCreating(true);
 
     try {
@@ -141,6 +152,10 @@ export function BroadcastsView({
           setItems((prev) =>
             prev.map((b) => (b.id === updated.id ? updated : b))
           );
+        }}
+        onDeleted={(id) => {
+          setItems((prev) => prev.filter((b) => b.id !== id));
+          setSelectedId(null);
         }}
       />
     );
@@ -368,6 +383,21 @@ interface FailedRecipient {
   contacts: { display_name: string | null } | null;
 }
 
+/** Filtro guardado -> filtro del editor (con los ids que usa para las listas). */
+function filterWithIds(raw: Json | null): SegmentFilter {
+  const stored = raw as { combinator?: "and" | "or"; groups?: { combinator?: "and" | "or"; rules?: { field: string; operator: string; value: string }[] }[] } | null;
+  if (!stored || !Array.isArray(stored.groups) || stored.groups.length === 0) return createEmptyFilter();
+  const id = () => Math.random().toString(36).slice(2, 10);
+  return {
+    combinator: stored.combinator === "or" ? "or" : "and",
+    groups: stored.groups.map((g) => ({
+      id: id(),
+      combinator: g.combinator === "or" ? "or" : "and",
+      rules: (g.rules ?? []).map((r) => ({ id: id(), field: r.field, operator: r.operator, value: r.value ?? "" })),
+    })),
+  } as SegmentFilter;
+}
+
 function KindToggle({
   value,
   onChange,
@@ -408,11 +438,13 @@ function BroadcastDetail({
   workspaceId,
   onBack,
   onUpdate,
+  onDeleted,
 }: {
   broadcast: Broadcast;
   workspaceId: string;
   onBack: () => void;
   onUpdate: (updated: Broadcast) => void;
+  onDeleted: (id: string) => void;
 }) {
   const stored = broadcast.message_content as
     | { kind?: string; text?: string; template_name?: string; language?: string; params?: string[] }
@@ -437,6 +469,11 @@ function BroadcastDetail({
   const [failedRecipients, setFailedRecipients] = useState<FailedRecipient[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [editingFilter, setEditingFilter] = useState(false);
+  const [filterDraft, setFilterDraft] = useState<SegmentFilter>(() => filterWithIds(broadcast.segment_filter));
+  const [savingFilter, setSavingFilter] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const isDraft = broadcast.status === "draft" || broadcast.status === "scheduled";
   const status = statusConfig[broadcast.status];
@@ -493,7 +530,8 @@ function BroadcastDetail({
       if (data) onUpdate(data);
       toast.success("Borrador guardado");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "No se pudo guardar";
+      console.error("Failed to save broadcast:", err);
+      const message = "No se pudo guardar el borrador. Inténtalo de nuevo.";
       setError(message);
       toast.error(message);
     } finally {
@@ -520,13 +558,57 @@ function BroadcastDetail({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageContent: content }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "No se pudo calcular quién recibirá la difusión");
       setPreview(data as PreviewResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo calcular quién recibirá la difusión");
     } finally {
       setPreviewing(false);
+    }
+  }
+
+  async function handleSaveFilter(next: SegmentFilter | null) {
+    setSavingFilter(true);
+    setError(null);
+    try {
+      const result = await updateBroadcastFilter(broadcast.id, next);
+      if ("error" in result) {
+        setError(result.error);
+        toast.error(result.error);
+        return;
+      }
+      onUpdate({ ...broadcast, segment_filter: result.segment_filter });
+      setFilterDraft(filterWithIds(result.segment_filter));
+      setEditingFilter(false);
+      setPreview(null);
+      toast.success(next ? "Filtro guardado" : "Filtro quitado");
+    } catch {
+      const message = "No se pudo guardar el filtro. Inténtalo de nuevo.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setSavingFilter(false);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      const result = await deleteBroadcast(broadcast.id);
+      if ("error" in result) {
+        setError(result.error);
+        toast.error(result.error);
+        return;
+      }
+      toast.success("Borrador eliminado");
+      onDeleted(broadcast.id);
+    } catch {
+      const message = "No se pudo eliminar el borrador. Inténtalo de nuevo.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -542,7 +624,7 @@ function BroadcastDetail({
         body: JSON.stringify({ messageContent: content }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         throw new Error(data.error || "No se pudo enviar la difusión");
@@ -601,6 +683,30 @@ function BroadcastDetail({
               Creada el {formatDateTime(broadcast.created_at)}
             </p>
           </div>
+          {isDraft && (
+            <>
+              <button
+                onClick={() => setConfirmDelete(true)}
+                disabled={deleting || sending}
+                className="inline-flex items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+              >
+                <Trash2 className="h-4 w-4" />
+                Eliminar borrador
+              </button>
+              <ConfirmDialog
+                open={confirmDelete}
+                title="Eliminar borrador"
+                message="¿Seguro que quieres eliminar este borrador? No se puede deshacer."
+                confirmLabel="Eliminar"
+                destructive
+                onConfirm={() => {
+                  setConfirmDelete(false);
+                  handleDelete();
+                }}
+                onCancel={() => setConfirmDelete(false)}
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -702,25 +808,82 @@ function BroadcastDetail({
             )}
           </div>
 
-          {/* Información del segmento */}
-          {broadcast.segment_filter && (
+          {/* Filtro de segmento: en palabras, y editable mientras es borrador */}
+          {(broadcast.segment_filter || editingFilter) && (
             <div className="rounded-lg border border-border bg-card p-4">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Filter className="h-4 w-4 text-muted-foreground" />
-                Filtro de segmento aplicado
-              </div>
-              <pre className="mt-2 overflow-auto rounded bg-muted p-3 text-xs text-muted-foreground">
-                {JSON.stringify(broadcast.segment_filter, null, 2)}
-              </pre>
+              {editingFilter ? (
+                <div className="space-y-3">
+                  <SegmentBuilder value={filterDraft} onChange={setFilterDraft} workspaceId={workspaceId} />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleSaveFilter(filterDraft)}
+                      disabled={savingFilter}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                    >
+                      {savingFilter && <Spinner />}
+                      Guardar filtro
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingFilter(false);
+                        setFilterDraft(filterWithIds(broadcast.segment_filter));
+                      }}
+                      disabled={savingFilter}
+                      className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent"
+                    >
+                      Cancelar
+                    </button>
+                    {broadcast.segment_filter && (
+                      <button
+                        onClick={() => handleSaveFilter(null)}
+                        disabled={savingFilter}
+                        className="ml-auto rounded-lg px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        Quitar filtro (enviar a todos)
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <SegmentSummary filter={filterWithIds(broadcast.segment_filter)} workspaceId={workspaceId} />
+                  {incompleteFilterProblem(broadcast.segment_filter as unknown as SegmentFilter) && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      Este filtro tiene reglas sin completar y no se podrá enviar así. Edítalo.
+                    </p>
+                  )}
+                  {isDraft && (
+                    <button
+                      onClick={() => setEditingFilter(true)}
+                      className="rounded-lg border border-input px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                    >
+                      Editar filtro
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
+          )}
+          {isDraft && !broadcast.segment_filter && !editingFilter && (
+            <button
+              onClick={() => {
+                setFilterDraft(createEmptyFilter());
+                setEditingFilter(true);
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-input px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Filter className="h-3.5 w-3.5" />
+              Dirigir a contactos específicos
+            </button>
           )}
 
           {/* Resultado de la selección antes de enviar */}
           {preview && isDraft && (
             <div className="rounded-lg border border-border bg-card p-4 space-y-2">
               <p className="text-sm font-medium">
-                Recibirán la difusión {formatNumber(preview.willReceive)}{" "}
-                {preview.willReceive === 1 ? "contacto" : "contactos"}
+                {preview.segmentTotal === 0
+                  ? "Ningún contacto cumple el filtro."
+                  : `Recibirán la difusión ${formatNumber(preview.willReceive)} ${preview.willReceive === 1 ? "contacto" : "contactos"}`}
               </p>
               {preview.excludedTotal > 0 && (
                 <p className="text-sm text-amber-700 dark:text-amber-400">

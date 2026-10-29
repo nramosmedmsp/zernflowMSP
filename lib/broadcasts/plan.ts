@@ -13,7 +13,7 @@ import {
 } from "./recipients";
 import { resolveSegmentContacts, type SegmentContactRow } from "./resolve";
 import type { SegmentFilter } from "./segment";
-import { buildContactTemplateParams, needsCustomFields } from "./variables";
+import { buildContactTemplateParams, needsCustomFields, renderContactText } from "./variables";
 
 export interface BroadcastPlan {
   kind: "text" | "template";
@@ -27,7 +27,7 @@ export interface BroadcastPlan {
     closedWindow: number;
     /** Plantilla: sin teléfono de WhatsApp (o sin canal de WhatsApp). */
     noPhone: number;
-    /** Plantilla: una variable queda vacía para ese contacto. */
+    /** Una variable queda vacía (o desconocida) para ese contacto. */
     emptyVariable: number;
   };
 }
@@ -112,7 +112,27 @@ export async function planBroadcast(
     const plan = planTextRecipients(candidates, channels, now);
     excluded.noConversation = plan.excluded.noConversation;
     excluded.closedWindow = plan.excluded.closedWindow;
-    return { kind: "text", segmentTotal: contacts.length, recipients: plan.recipients, excluded };
+
+    // Contactos para los que el texto no se puede armar (variable vacía): no se les envía.
+    const byContact = new Map(contacts.map((c) => [c.id, c]));
+    let customFields = new Map<string, Record<string, string>>();
+    if (needsCustomFields([content.text]) && plan.recipients.length > 0) {
+      customFields = await loadCustomFields(db, workspaceId, plan.recipients.map((r) => r.contactId));
+    }
+    const { data: workspace } = await db.from("workspaces").select("name").eq("id", workspaceId).maybeSingle();
+    const recipients: BroadcastPlan["recipients"] = [];
+    for (const r of plan.recipients) {
+      const contact = byContact.get(r.contactId);
+      const rendered = renderContactText(content.text, {
+        displayName: contact?.display_name,
+        keyDate: contact?.key_date,
+        workspaceName: workspace?.name,
+        customFields: customFields.get(r.contactId),
+      });
+      if (rendered.ok) recipients.push(r);
+      else excluded.emptyVariable++;
+    }
+    return { kind: "text", segmentTotal: contacts.length, recipients, excluded };
   }
 
   const plan = planTemplateRecipients(candidates, channels);

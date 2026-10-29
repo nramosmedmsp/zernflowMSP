@@ -261,14 +261,15 @@ describe("motor de gestiones (E-commerce)", () => {
 
   it("próximo contacto vencido: avisa una sola vez por fecha", async () => {
     const { caseId } = (await handleInbound(db(), { workspaceId: WS, contactId }))!;
-    await setNextAction(db(), { caseId, at: "2026-01-02T10:00:00.000Z", note: "Llamar", actorId: ANA });
+    const longAgo = new Date("2025-12-01T00:00:00Z");
+    await setNextAction(db(), { caseId, at: "2026-01-02T10:00:00.000Z", note: "Llamar", actorId: ANA }, longAgo);
     expect((await notifyOverdueNextActions(db(), { deadline: Date.now() + 5000 })).notified).toBe(1);
     expect((await notifyOverdueNextActions(db(), { deadline: Date.now() + 5000 })).notified).toBe(0);
     const due = fake.rows("notifications").filter((x) => x.type === "next_action_due");
     expect(due).toMatchObject([{ user_id: ANA, body: "Llamar", title: "Próximo contacto vencido: María" }]);
 
     // Una fecha nueva vuelve a avisar.
-    await setNextAction(db(), { caseId, at: "2026-01-03T10:00:00.000Z", actorId: ANA });
+    await setNextAction(db(), { caseId, at: "2026-01-03T10:00:00.000Z", actorId: ANA }, longAgo);
     expect((await notifyOverdueNextActions(db(), { deadline: Date.now() + 5000 })).notified).toBe(1);
   });
 
@@ -306,5 +307,54 @@ describe("motor de gestiones (Gimnasio)", () => {
       case_type_id: byName("case_types", "Renovación").id,
       scheduled_for: "2026-11-23T14:00:00.000Z",
     });
+  });
+});
+
+describe("próximo contacto y apertura manual con fechas (M-20, M-23)", () => {
+  const NOW = new Date("2026-10-28T15:00:00Z"); // 10:00 en Lima
+
+  it("rechaza un próximo contacto en el pasado y no cambia la gestión", async () => {
+    const { contactId } = await setup();
+    const { caseId } = (await handleInbound(db(), { workspaceId: WS, contactId }))!;
+    const result = await setNextAction(db(), { caseId, at: "2020-01-01T15:00:00.000Z", actorId: ANA }, NOW);
+    expect(result).toEqual({ error: "Esa fecha y hora ya pasaron. Elige una fecha y hora futuras para el próximo contacto." });
+    expect(caseById(caseId).next_action_at).toBeNull();
+    expect(activity("next_action_set", caseId)).toHaveLength(0);
+  });
+
+  it("una fecha sin hora de hoy (09:00 ya pasó) también se rechaza", async () => {
+    const { contactId } = await setup();
+    const { caseId } = (await handleInbound(db(), { workspaceId: WS, contactId }))!;
+    const result = await setNextAction(db(), { caseId, at: "2026-10-28", actorId: ANA }, NOW);
+    expect(result).toMatchObject({ error: expect.stringContaining("ya pasaron") });
+  });
+
+  it("acepta una fecha futura y quitar el próximo contacto", async () => {
+    const { contactId } = await setup();
+    const { caseId } = (await handleInbound(db(), { workspaceId: WS, contactId }))!;
+    expect(await setNextAction(db(), { caseId, at: "2026-10-29T14:00:00.000Z", actorId: ANA }, NOW)).toMatchObject({ ok: true });
+    expect(await setNextAction(db(), { caseId, at: null, actorId: ANA }, NOW)).toMatchObject({ ok: true, nextActionAt: null });
+  });
+
+  it("repetir la fecha que ya está atrasada permite editar la nota", async () => {
+    const { contactId } = await setup();
+    const { caseId } = (await handleInbound(db(), { workspaceId: WS, contactId }))!;
+    const longAgo = new Date("2025-12-01T00:00:00Z");
+    await setNextAction(db(), { caseId, at: "2026-01-02T10:00:00.000Z", actorId: ANA }, longAgo);
+    const again = await setNextAction(db(), { caseId, at: "2026-01-02T10:00:00.000Z", note: "Nota nueva", actorId: ANA }, NOW);
+    expect(again).toMatchObject({ ok: true });
+    expect(caseById(caseId).next_action_note).toBe("Nota nueva");
+  });
+
+  it("abrir con una fecha programada que ya pasó devuelve error y no crea la gestión", async () => {
+    const { contactId } = await setup();
+    const ventaId = byName("case_types", "Venta").id as string;
+    const before = fake.rows("cases").length;
+    const past = await openCase(db(), { workspaceId: WS, contactId, caseTypeId: ventaId, actorId: ANA, scheduledFor: "2026-10-28" }, NOW);
+    expect(past).toMatchObject({ error: expect.stringContaining("ya pasó") });
+    expect(fake.rows("cases")).toHaveLength(before);
+
+    const future = await openCase(db(), { workspaceId: WS, contactId, caseTypeId: ventaId, actorId: ANA, scheduledFor: "2026-10-29" }, NOW);
+    expect(future).toMatchObject({ ok: true, status: "scheduled" });
   });
 });

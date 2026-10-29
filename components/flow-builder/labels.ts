@@ -24,6 +24,15 @@ export function flowStatusLabel(status: string): string {
   return FLOW_STATUS_LABELS[status] ?? status;
 }
 
+/** Texto del diálogo de "Restaurar" una versión: dice qué pasa con el estado del flujo. */
+export function restoreConfirmMessage(status: string): string {
+  if (status === "published") {
+    return "El flujo seguirá publicado: el bot usará esta versión de inmediato y quedará guardada como una versión nueva del historial. Los cambios sin publicar del borrador se perderán.";
+  }
+  const state = flowStatusLabel(status).toLowerCase();
+  return `El borrador actual se reemplazará por los nodos y conexiones de esta versión. El flujo seguirá en estado ${state}: no se publica solo.`;
+}
+
 const SEQUENCE_STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
   active: "Activa",

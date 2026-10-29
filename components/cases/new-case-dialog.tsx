@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { addDays, limaDateOf } from "@/lib/cases/dates";
-import { openManualCase } from "@/lib/actions/cases";
+import { listContactActiveCases, openManualCase } from "@/lib/actions/cases";
+import { ParallelCaseWarning, hasSameTypeOpen, type ParallelCase } from "./parallel-case-warning";
 import { searchContacts, type ContactSearchResult } from "@/lib/actions/contacts";
 
 type AssignMode = "me" | "auto" | "person";
@@ -37,6 +38,10 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
   const [date, setDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Gestiones abiertas del contacto elegido (M-32): se avisa antes de duplicar.
+  const [active, setActive] = useState<{ contactId: string; cases: ParallelCase[] } | null>(null);
+  // Confirmación ligada al contacto: al cambiar de contacto deja de valer.
+  const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
   const searchSeq = useRef(0);
 
   useEffect(() => {
@@ -59,6 +64,21 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
     return () => clearTimeout(timer);
   }, [query, contact]);
 
+  useEffect(() => {
+    if (!contact) return;
+    let cancelled = false;
+    void listContactActiveCases(contact.id).then((res) => {
+      if (!cancelled) setActive({ contactId: contact.id, cases: "error" in res ? [] : res.cases });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [contact]);
+
+  const confirmParallel = !!contact && confirmedFor === contact.id;
+  const existing = contact && active?.contactId === contact.id ? active.cases : [];
+  const loadingExisting = !!contact && active?.contactId !== contact.id;
+
   const results = loaded?.list ?? [];
   const searching = loaded?.query !== query;
 
@@ -71,12 +91,15 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
     if (scheduling && !caseTypeId) return setError("Elige el tipo de la gestión que vas a programar.");
     if (scheduling && date < tomorrow) return setError("La fecha programada debe ser a partir de mañana.");
     if (!scheduling && mode === "person" && !personId) return setError("Elige a quién asignarla.");
+    if (hasSameTypeOpen(existing, caseTypeId || null)) return setError("Este contacto ya tiene una gestión abierta de ese tipo.");
+    if (existing.length > 0 && !confirmParallel) return setError("Confirma que quieres abrir otra gestión en paralelo.");
     setSaving(true);
     const res = await openManualCase({
       contactId: contact.id,
       caseTypeId: caseTypeId || null,
       assignee: mode === "person" ? personId : mode,
       scheduledFor: scheduling ? date : null,
+      confirmParallel,
     });
     setSaving(false);
     if ("error" in res) return setError(res.error);
@@ -161,6 +184,16 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
               </>
             )}
           </div>
+
+          {contact && (
+            <ParallelCaseWarning
+              contactId={contact.id}
+              existing={existing}
+              caseTypeId={caseTypeId || null}
+              confirmed={confirmParallel}
+              onConfirmedChange={(value) => setConfirmedFor(value && contact ? contact.id : null)}
+            />
+          )}
 
           {/* Tipo */}
           <div>
@@ -259,7 +292,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
           </button>
           <button
             onClick={submit}
-            disabled={saving}
+            disabled={saving || loadingExisting || hasSameTypeOpen(existing, caseTypeId || null)}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

@@ -5,7 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/types/database";
 import { parseBroadcastContent, type ParsedBroadcastContent } from "./content";
-import type { SegmentFilter } from "./segment";
+import { incompleteFilterProblem, type SegmentFilter } from "./segment";
 
 type BroadcastRow = Database["public"]["Tables"]["broadcasts"]["Row"];
 
@@ -52,6 +52,10 @@ export async function loadBroadcastForPlan(
     };
   }
 
+  // Un filtro con reglas sin completar no coincide con nadie: se pide corregirlo en vez de enviar a 0 contactos.
+  const filterProblem = incompleteFilterProblem(broadcast.segment_filter as unknown as SegmentFilter | null);
+  if (filterProblem) return { ok: false, status: 400, error: filterProblem };
+
   const override =
     body && typeof body === "object" && (body as { messageContent?: unknown }).messageContent
       ? ((body as { messageContent: unknown }).messageContent as Record<string, unknown>)
@@ -90,6 +94,6 @@ export function describeExclusions(excluded: {
   if (excluded.closedWindow > 0) parts.push(`${excluded.closedWindow} con la ventana de 24 horas cerrada`);
   if (excluded.noConversation > 0) parts.push(`${excluded.noConversation} sin conversación en un canal activo`);
   if (excluded.noPhone > 0) parts.push(`${excluded.noPhone} sin teléfono de WhatsApp`);
-  if (excluded.emptyVariable > 0) parts.push(`${excluded.emptyVariable} con una variable vacía`);
+  if (excluded.emptyVariable > 0) parts.push(`${excluded.emptyVariable} con una variable vacía o desconocida`);
   return parts;
 }

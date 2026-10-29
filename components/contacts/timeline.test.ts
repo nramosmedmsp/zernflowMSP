@@ -7,6 +7,7 @@ import {
   type TimelineLookups,
   type TimelineNote,
 } from "./timeline";
+import type { ActivityType } from "@/lib/types/database";
 
 const lookups: TimelineLookups = {
   users: { "u-ana": "Ana Torres", "u-beto": "Beto Ruiz" },
@@ -264,5 +265,66 @@ describe("formatDuration", () => {
     expect(formatDuration(4500)).toBe("1 h 15 min");
     expect(formatDuration(3 * 86400 + 100)).toBe("3 d");
     expect(formatDuration(-1)).toBe("");
+  });
+});
+
+describe("textos en español para todos los tipos de actividad (M-30)", () => {
+  // Con Record, agregar un ActivityType nuevo sin ponerlo aquí rompe tsc.
+  const ALL_TYPES: Record<ActivityType, true> = {
+    case_opened: true,
+    case_scheduled: true,
+    case_activated: true,
+    case_classified: true,
+    stage_changed: true,
+    assigned: true,
+    unassigned: true,
+    transferred: true,
+    case_closed: true,
+    case_reopened: true,
+    contact_type_changed: true,
+    owner_changed: true,
+    team_changed: true,
+    note_added: true,
+    first_response: true,
+    next_action_set: true,
+    automation_paused: true,
+    automation_resumed: true,
+    config_changed: true,
+    off_hours_reply_sent: true,
+    auto_template_sent: true,
+    auto_template_failed: true,
+    auto_template_skipped: true,
+    contacts_imported: true,
+    sequence_step_failed: true,
+    human_reply: true,
+    sla_breached: true,
+    solution_registered: true,
+    solution_overdue: true,
+    close_requested: true,
+    close_request_approved: true,
+    close_request_rejected: true,
+    complaint_dismissed: true,
+  };
+
+  it.each(Object.keys(ALL_TYPES))("%s tiene texto en español", (type) => {
+    const items = build([act({ type, case_id: "g-1", created_at: "2026-10-28T15:00:00Z" })]);
+    // note_added sin nota asociada igual muestra el aviso.
+    expect(items).toHaveLength(1);
+    expect(items[0].title).not.toMatch(/Actividad:/);
+    expect(items[0].title).not.toMatch(/[a-z]+_[a-z_]+/);
+    expect(items[0].title.length).toBeGreaterThan(8);
+  });
+
+  it("el control de reclamos se lee en claro", () => {
+    const [requested] = build([
+      act({ type: "close_requested", case_id: "g-1", created_at: "2026-10-28T15:00:00Z", meta: { note: "Cliente molesto", stage_id: "s-ganada" } }),
+    ]);
+    expect(requested.title).toBe("Se pidió cerrar la gestión sin solución");
+    expect(requested.detail).toContain("Nota: Cliente molesto");
+    expect(requested.detail).toContain("Etapa final: Venta cerrada");
+
+    const [overdue] = build([act({ type: "solution_overdue", case_id: "g-1", created_at: "2026-10-28T15:00:00Z", meta: { kind: "deadline", hours: 24 } })]);
+    expect(overdue.title).toBe("Venció el plazo para registrar la solución");
+    expect(overdue.detail).toBe("Plazo: 24 h");
   });
 });

@@ -193,9 +193,10 @@ export function CaseCard({
           caseType={caseType}
           initialStageId={closing.stageId}
           onCancel={() => setClosing(null)}
-          onClosed={async (message) => {
+          onClosed={async (message, problem) => {
             setClosing(null);
-            toast.success(message);
+            if (problem) toast.error(message);
+            else toast.success(message);
             await onChanged();
           }}
         />
@@ -943,6 +944,9 @@ function NextActionForm({
   const [time, setTime] = useState(current ? formatTime(current) : "");
   const [note, setNote] = useState(caseView.nextActionNote ?? "");
 
+  // No se puede programar en el pasado: el mínimo es hoy (hora de Lima). El servidor también lo revisa.
+  const todayLima = limaDateOf(new Date());
+
   function submit() {
     if (!date) return;
     // Hora de Lima (UTC-5, sin horario de verano); sin hora, el servidor usa las 09:00.
@@ -957,6 +961,7 @@ function NextActionForm({
         <input
           type="date"
           value={date}
+          min={todayLima}
           onChange={(e) => setDate(e.target.value)}
           className={cn(inputClass, "py-1 text-xs")}
           aria-label="Fecha"

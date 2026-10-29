@@ -371,6 +371,153 @@ function activityPiece(
             : "Se cambió la configuración",
       };
     }
+    case "automation_paused":
+      return {
+        kind: "system",
+        tone: "muted",
+        title: "Se pausó el bot en la conversación",
+        detail: str(meta.source) === "inbox" ? "Desde la bandeja" : null,
+      };
+    case "automation_resumed": {
+      const source = str(meta.source);
+      return {
+        kind: "system",
+        tone: "muted",
+        title: "El bot volvió a responder en la conversación",
+        detail:
+          source === "cron_24h"
+            ? "Automático: pasaron 24 h sin que una persona respondiera"
+            : source === "inbox"
+              ? "Desde la bandeja"
+              : null,
+      };
+    }
+    case "off_hours_reply_sent":
+      return {
+        kind: "system",
+        tone: "muted",
+        title: "Se envió la respuesta fuera de horario",
+        detail: str(meta.text) ? `Texto: ${str(meta.text)}` : null,
+      };
+    case "auto_template_sent": {
+      const name = str(meta.template_name);
+      return { kind: "system", tone: "muted", title: name ? `Se envió la plantilla de WhatsApp «${name}»` : "Se envió una plantilla de WhatsApp" };
+    }
+    case "auto_template_failed": {
+      const name = str(meta.template_name);
+      return {
+        kind: "system",
+        tone: "lost",
+        title: name ? `No se pudo enviar la plantilla de WhatsApp «${name}»` : "No se pudo enviar la plantilla de WhatsApp",
+        detail: str(meta.error),
+      };
+    }
+    case "auto_template_skipped": {
+      const reason = str(meta.reason);
+      return {
+        kind: "system",
+        tone: "muted",
+        title: "No se envió la plantilla automática",
+        detail:
+          reason === "no_whatsapp_channel"
+            ? "No hay un canal de WhatsApp conectado"
+            : reason === "no_phone"
+              ? "El contacto no tiene teléfono"
+              : null,
+      };
+    }
+    case "contacts_imported": {
+      const file = str(meta.file_name);
+      const num = (v: unknown) => (typeof v === "number" ? v : 0);
+      return {
+        kind: "system",
+        tone: "muted",
+        title: `Se importaron contactos${file ? ` desde ${file}` : ""}`,
+        detail: joinDetail([
+          `${num(meta.created)} nuevos`,
+          `${num(meta.updated)} actualizados`,
+          num(meta.skipped) > 0 && `${num(meta.skipped)} omitidos`,
+          num(meta.errors) > 0 && `${num(meta.errors)} con error`,
+        ]),
+      };
+    }
+    case "sequence_step_failed": {
+      const step = typeof meta.step_index === "number" ? meta.step_index + 1 : null;
+      return {
+        kind: "system",
+        tone: "lost",
+        title: step ? `Falló el paso ${step} de una secuencia` : "Falló un paso de una secuencia",
+        detail: str(meta.reason),
+      };
+    }
+    case "human_reply": {
+      const seconds = typeof meta.seconds === "number" ? meta.seconds : null;
+      return {
+        kind: "case",
+        tone: "default",
+        title: seconds !== null && formatDuration(seconds) ? `Respondió una persona en ${formatDuration(seconds)}` : "Respondió una persona",
+      };
+    }
+    case "sla_breached":
+      return {
+        kind: "case",
+        tone: "lost",
+        title:
+          str(meta.kind) === "first_response"
+            ? "Se superó el tiempo objetivo de primera respuesta"
+            : "Se superó el tiempo objetivo de resolución",
+      };
+    case "solution_registered": {
+      const note = str(meta.note);
+      const commitment = str(meta.commitment_at);
+      return {
+        kind: "case",
+        tone: "default",
+        title: meta.previous_commitment_at ? "Se actualizó la solución en proceso" : "Se registró la solución en proceso",
+        detail: joinDetail([note && `Nota: ${note}`, commitment && `Compromiso con el cliente: ${formatDateTime(commitment)}`]),
+      };
+    }
+    case "solution_overdue": {
+      const hours = typeof meta.hours === "number" ? meta.hours : null;
+      return {
+        kind: "case",
+        tone: "lost",
+        title:
+          str(meta.kind) === "commitment"
+            ? "Venció el compromiso con el cliente sin cumplirse"
+            : "Venció el plazo para registrar la solución",
+        detail: hours ? `Plazo: ${hours} h` : null,
+      };
+    }
+    case "close_requested": {
+      const note = str(meta.note);
+      return {
+        kind: "closed",
+        tone: "default",
+        title: "Se pidió cerrar la gestión sin solución",
+        detail: joinDetail([
+          meta.stage_id && typeof meta.stage_id === "string" && lk.stages[meta.stage_id] ? `Etapa final: ${lk.stages[meta.stage_id]}` : null,
+          meta.outcome_reason_id && typeof meta.outcome_reason_id === "string" && lk.outcomeReasons[meta.outcome_reason_id]
+            ? `Motivo: ${lk.outcomeReasons[meta.outcome_reason_id]}`
+            : null,
+          note && `Nota: ${note}`,
+          "Espera la aprobación de un supervisor",
+        ]),
+      };
+    }
+    case "close_request_approved":
+      return { kind: "closed", tone: "default", title: "Un supervisor aprobó el pedido de cierre" };
+    case "close_request_rejected": {
+      const comment = str(meta.comment);
+      return {
+        kind: "case",
+        tone: "default",
+        title: "Un supervisor rechazó el pedido de cierre: la gestión sigue abierta",
+        detail: comment ? `Comentario: ${comment}` : null,
+      };
+    }
+    case "complaint_dismissed":
+      return { kind: "system", tone: "muted", title: "Se descartó el aviso de reclamo (no era un reclamo)" };
     default:
       return { kind: "system", tone: "muted", title: `Actividad: ${a.type}` };
   }

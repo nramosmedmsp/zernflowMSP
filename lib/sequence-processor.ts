@@ -36,6 +36,9 @@ export async function processSequenceSteps() {
 
   for (const enrollment of enrollments) {
     try {
+      // Dos pasadas del cron a la vez no deben enviar el mismo paso dos veces:
+      // quien no logra tomar la inscripción la deja.
+      if (!(await claimEnrollment(supabase, enrollment))) continue;
       await processEnrollment(supabase, enrollment);
       processed++;
     } catch (err) {
@@ -50,6 +53,30 @@ export async function processSequenceSteps() {
   return { processed, failed, total: enrollments.length };
 }
 
+/** Si el proceso se cae a mitad de un paso, la inscripción vuelve a estar disponible pasado este tiempo. */
+const LEASE_MS = 10 * 60 * 1000;
+
+/**
+ * Toma la inscripción con una actualización condicional: solo prospera si
+ * sigue activa y con el mismo `next_step_at` con el que se leyó. Mientras dura
+ * el paso, `next_step_at` queda movido al futuro (alquiler), así que otra
+ * pasada del cron no la vuelve a ver como pendiente.
+ */
+async function claimEnrollment(supabase: ServiceClient, enrollment: { id: string; next_step_at: string | null }): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("sequence_enrollments")
+    .update({ next_step_at: new Date(Date.now() + LEASE_MS).toISOString() })
+    .eq("id", enrollment.id)
+    .eq("status", "active")
+    .eq("next_step_at", enrollment.next_step_at as string)
+    .select("id");
+  if (error) {
+    console.error(`Failed to claim enrollment ${enrollment.id}:`, error.message);
+    return false;
+  }
+  return !!data && data.length > 0;
+}
+
 async function processEnrollment(
   supabase: ServiceClient,
   enrollment: {
@@ -58,6 +85,7 @@ async function processEnrollment(
     contact_id: string;
     channel_id: string;
     current_step_index: number;
+    next_step_at?: string | null;
     sequences: {
       id: string;
       workspace_id: string;
@@ -73,6 +101,19 @@ async function processEnrollment(
       .from("sequence_enrollments")
       .update({ status: "cancelled" })
       .eq("id", enrollment.id);
+    return;
+  }
+
+  // Un contacto que se dio de baja no recibe nada más de la secuencia.
+  const { data: contact, error: contactError } = await supabase
+    .from("contacts")
+    .select("is_subscribed")
+    .eq("id", enrollment.contact_id)
+    .eq("workspace_id", sequence.workspace_id)
+    .maybeSingle();
+  if (contactError) throw new Error(contactError.message);
+  if (!contact || contact.is_subscribed === false) {
+    await supabase.from("sequence_enrollments").update({ status: "cancelled", next_step_at: null }).eq("id", enrollment.id);
     return;
   }
 
@@ -196,7 +237,7 @@ async function runMessageStep(supabase: ServiceClient, p: MessageStepParams): Pr
       await supabase.from("messages").insert({
         conversation_id: ctx.conversation.id,
         direction: "outbound",
-        text: storedText,
+        text: result.ok && result.text ? result.text : storedText,
         status: result.ok ? "sent" : "failed",
         platform_message_id: result.ok ? result.messageId : null,
       });
@@ -204,7 +245,7 @@ async function runMessageStep(supabase: ServiceClient, p: MessageStepParams): Pr
     if (!result.ok) await recordStepFailure(supabase, p, ctx.conversation?.id ?? null, result.error);
   } catch (err) {
     console.error("Failed to send sequence step:", err);
-    await recordStepFailure(supabase, p, null, err instanceof Error ? err.message : String(err));
+    await recordStepFailure(supabase, p, null, "No se pudo enviar el paso por un error inesperado");
   }
 }
 

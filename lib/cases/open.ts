@@ -16,6 +16,9 @@ import {
   type EngineResult,
 } from "./io";
 
+export const PAST_SCHEDULE_MESSAGE =
+  "La fecha programada ya pasó. Elige una fecha futura (a partir de mañana) o abre la gestión ahora, sin fecha.";
+
 export interface OpenCaseInput {
   workspaceId: string;
   contactId: string;
@@ -55,7 +58,9 @@ export async function openCase(
   if (input.scheduledFor) {
     scheduledFor = parseInstant(input.scheduledFor);
     if (!scheduledFor) return { error: "La fecha programada no es válida." };
-    if (new Date(scheduledFor).getTime() <= now.getTime()) scheduledFor = null;
+    // Una fecha que ya pasó (p. ej. «hoy» sin hora, que se toma como las 09:00)
+    // no se abre en silencio: la persona cree que la dejó para más tarde.
+    if (new Date(scheduledFor).getTime() <= now.getTime()) return { error: PAST_SCHEDULE_MESSAGE };
   }
 
   const explicitAssignee = input.assignee && input.assignee !== "auto" ? input.assignee : null;
@@ -146,4 +151,47 @@ export async function openCase(
 
   const assignment = assigneeId ? null : await assignCase(db, created.id, { actorId: input.actorId });
   return { ok: true, caseId: created.id, status: "open", assignment };
+}
+
+// ── Gestión paralela (M-32) ────────────────────────────────────────────────
+
+export interface OpenCaseSummary {
+  id: string;
+  caseTypeId: string | null;
+  status: "open" | "scheduled";
+}
+
+/** Gestiones abiertas o programadas del contacto. */
+export async function listActiveCases(db: Db, workspaceId: string, contactId: string): Promise<OpenCaseSummary[]> {
+  const { data } = await db
+    .from("cases")
+    .select("id, case_type_id, status")
+    .eq("workspace_id", workspaceId)
+    .eq("contact_id", contactId)
+    .in("status", ["open", "scheduled"]);
+  return (data ?? []).map((c) => ({
+    id: c.id,
+    caseTypeId: c.case_type_id,
+    status: c.status as "open" | "scheduled",
+  }));
+}
+
+export const SAME_TYPE_OPEN_MESSAGE =
+  "Este contacto ya tiene una gestión abierta de ese tipo. Ve a esa gestión en vez de abrir otra igual.";
+export const PARALLEL_CONFIRM_MESSAGE =
+  "Este contacto ya tiene otra gestión abierta. Confirma que quieres abrir una en paralelo.";
+
+/**
+ * Regla de «Nueva gestión» a mano: una gestión abierta por contacto por
+ * defecto. Del mismo tipo (o ambas sin clasificar) se bloquea; de otro tipo
+ * solo con confirmación expresa. Devuelve el mensaje de error o null.
+ */
+export function parallelOpeningError(
+  existing: readonly OpenCaseSummary[],
+  caseTypeId: string | null,
+  confirmed: boolean,
+): string | null {
+  if (existing.length === 0) return null;
+  if (existing.some((c) => c.caseTypeId === caseTypeId)) return SAME_TYPE_OPEN_MESSAGE;
+  return confirmed ? null : PARALLEL_CONFIRM_MESSAGE;
 }

@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback } from "react";
-import { Plus, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Loader2, Plus, X } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { flowStatusLabel } from "../labels";
 import { cn } from "@/lib/utils";
 import type { NodeType } from "@/lib/types/database";
 import type { CaseActionType } from "@/lib/flow-engine/types";
@@ -33,6 +35,8 @@ interface ActionPanelData {
 interface ActionPanelProps {
   data: Record<string, unknown>;
   onChange: (data: Record<string, unknown>) => void;
+  /** Flujo que se edita: no se ofrece como destino de "Ir a flujo". */
+  currentFlowId?: string;
 }
 
 interface ActionSubPanelProps {
@@ -40,7 +44,7 @@ interface ActionSubPanelProps {
   onChange: (data: Record<string, unknown>) => void;
 }
 
-export function ActionPanel({ data: rawData, onChange }: ActionPanelProps) {
+export function ActionPanel({ data: rawData, onChange, currentFlowId }: ActionPanelProps) {
   const data = rawData as ActionPanelData;
   const actionType = data.actionType || "addTag";
 
@@ -53,7 +57,7 @@ export function ActionPanel({ data: rawData, onChange }: ActionPanelProps) {
     case "httpRequest":
       return <HttpRequestConfig data={data} onChange={onChange} />;
     case "goToFlow":
-      return <GoToFlowConfig data={data} onChange={onChange} />;
+      return <GoToFlowConfig data={data} onChange={onChange} currentFlowId={currentFlowId} />;
     case "subscribe":
     case "unsubscribe":
       return <SubscribeConfig data={data} onChange={onChange} />;
@@ -287,23 +291,84 @@ function HttpRequestConfig({ data, onChange }: ActionSubPanelProps) {
 }
 
 /* ───────── Go To Flow Config ───────── */
-function GoToFlowConfig({ data, onChange }: ActionSubPanelProps) {
+interface FlowOption {
+  id: string;
+  name: string;
+  status: string;
+}
+
+function GoToFlowConfig({ data, onChange, currentFlowId }: ActionSubPanelProps & { currentFlowId?: string }) {
+  const [flows, setFlows] = useState<FlowOption[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const { data: rows } = await supabase
+        .from("flows")
+        .select("id, name, status")
+        .order("name", { ascending: true });
+      setFlows(rows ?? []);
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const selectedId = data.flowId || "";
+  const options = flows.filter((f) => f.id !== currentFlowId);
+  const selected = flows.find((f) => f.id === selectedId);
+  // Un destino guardado que ya no existe (o que es este mismo flujo) se muestra tal cual, para poder cambiarlo.
+  const missing = !!selectedId && !loading && !options.some((f) => f.id === selectedId);
+
   return (
     <div className="space-y-4">
       <div>
         <label className="mb-2 block text-xs font-semibold text-foreground">
-          ID del flujo de destino
+          Flujo de destino
         </label>
-        <input
-          type="text"
-          value={data.flowId || ""}
-          onChange={(e) => onChange({ ...data, flowId: e.target.value })}
-          placeholder="Escribe el ID del flujo..."
-          className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
-        />
+        {loading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Cargando flujos...
+          </div>
+        ) : options.length === 0 && !selectedId ? (
+          <p className="text-xs text-muted-foreground">
+            No hay otros flujos. Primero crea el flujo al que quieres derivar al contacto.
+          </p>
+        ) : (
+          <select
+            value={selectedId}
+            onChange={(e) => onChange({ ...data, flowId: e.target.value })}
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+          >
+            <option value="">Selecciona un flujo...</option>
+            {missing && (
+              <option value={selectedId}>
+                {selectedId === currentFlowId ? "Este mismo flujo" : "Flujo que ya no existe"}
+              </option>
+            )}
+            {options.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name} ({flowStatusLabel(f.status).toLowerCase()})
+              </option>
+            ))}
+          </select>
+        )}
         <p className="mt-1.5 text-xs text-muted-foreground">
           El contacto será derivado a este flujo (debe ser de este espacio y estar publicado).
         </p>
+        {selected && selected.status !== "published" && (
+          <p className="mt-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            Este flujo está en {flowStatusLabel(selected.status).toLowerCase()}: hasta que lo publiques, el contacto no podrá pasar a él.
+          </p>
+        )}
+        {missing && (
+          <p className="mt-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600">
+            {selectedId === currentFlowId
+              ? "Un flujo no puede derivar a sí mismo. Elige otro."
+              : "El flujo elegido ya no existe. Elige otro."}
+          </p>
+        )}
       </div>
 
       <p className="rounded-lg border border-border bg-muted p-3 text-xs text-muted-foreground">

@@ -17,7 +17,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { useCallback, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical, Route } from "lucide-react";
@@ -27,8 +27,10 @@ import { flowStatusLabel } from "./labels";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { startRouteProgress } from "@/components/ui/route-progress";
-import { createClient } from "@/lib/supabase/client";
-import type { Database, FlowStatus, Json } from "@/lib/types/database";
+import { apiErrorMessage } from "@/lib/api-errors";
+import { flowSignature, UNSAVED_CHANGES_MESSAGE } from "@/lib/flow-editor-state";
+import type { FlowIssue } from "@/lib/flow-engine/validate";
+import type { Database } from "@/lib/types/database";
 
 import { NodePalette } from "./node-palette";
 import { TriggerNode } from "./nodes/trigger-node";
@@ -40,6 +42,7 @@ import { AiResponseNode } from "./nodes/AiResponseNode";
 import { NodeConfigSidebar } from "./panels/NodeConfigSidebar";
 import { VersionHistoryPanel } from "./panels/VersionHistoryPanel";
 import { TestPanel } from "./panels/TestPanel";
+import { PublishReviewDialog } from "./publish-review-dialog";
 
 type Flow = Database["public"]["Tables"]["flows"]["Row"];
 
@@ -83,8 +86,7 @@ function getDefaultData(type: string, actionType?: string): Record<string, unkno
 function FlowCanvasInner({ flow }: FlowCanvasProps) {
   const router = useRouter();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition } = useReactFlow();
-  const supabase = createClient();
+  const { screenToFlowPosition, fitView } = useReactFlow();
 
   const initialNodes: Node[] = Array.isArray(flow.nodes)
     ? (flow.nodes as unknown as Node[])
@@ -106,6 +108,56 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Firma de lo último guardado o cargado: si difiere de la actual, hay cambios sin guardar.
+  const [savedSignature, setSavedSignature] = useState(() => flowSignature(flow.name, initialNodes, initialEdges));
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  // Problemas y avisos de la revisión previa a publicar.
+  const [issues, setIssues] = useState<FlowIssue[]>([]);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
+  const signature = useMemo(() => flowSignature(flowName, nodes, edges), [flowName, nodes, edges]);
+  const dirty = signature !== savedSignature;
+
+  // Aviso del navegador al cerrar o recargar la pestaña con cambios sin guardar.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = UNSAVED_CHANGES_MESSAGE;
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  // Enlaces internos (menú lateral, "Laboratorio" en la misma pestaña...): también piden confirmar.
+  useEffect(() => {
+    if (!dirty) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!anchor || (anchor.target && anchor.target !== "_self")) return;
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      if (!window.confirm(UNSAVED_CHANGES_MESSAGE)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [dirty]);
+
+  const issueNodeIds = useMemo(
+    () => new Set(issues.filter((i) => i.severity === "error" && i.nodeId).map((i) => i.nodeId as string)),
+    [issues],
+  );
+  const displayNodes = useMemo(
+    () =>
+      issueNodeIds.size === 0
+        ? nodes
+        : nodes.map((n) => (issueNodeIds.has(n.id) ? { ...n, className: cn(n.className, "rounded-xl ring-2 ring-red-500") } : n)),
+    [nodes, issueNodeIds],
+  );
 
   const selectedNode = selectedNodeId
     ? nodes.find((n) => n.id === selectedNodeId) || null
@@ -197,52 +249,49 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
     [setNodes, setEdges]
   );
 
+  const leaveEditor = useCallback(() => {
+    startRouteProgress();
+    router.push("/dashboard/flows");
+  }, [router]);
+
+  const handleBack = useCallback(() => {
+    if (dirty) setConfirmLeave(true);
+    else leaveEditor();
+  }, [dirty, leaveEditor]);
+
+  // Guarda por la API (revisa el rol): si no cambia ninguna fila responde error y nunca se muestra un éxito falso.
   const saveFlow = useCallback(
-    async (status?: FlowStatus, quiet = false): Promise<boolean> => {
-      if (status === "published") {
-        setPublishing(true);
-      } else {
-        setSaving(true);
-      }
-
+    async (quiet = false): Promise<boolean> => {
+      setSaving(true);
       try {
-        const update: Database["public"]["Tables"]["flows"]["Update"] = {
-          name: flowName,
-          nodes: nodes as unknown as Json,
-          edges: edges as unknown as Json,
-          updated_at: new Date().toISOString(),
-        };
+        const res = await fetch(`/api/v1/flows/${flow.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: flowName, nodes, edges }),
+        });
 
-        if (status) {
-          update.status = status;
-          if (status === "published") {
-            update.published_at = new Date().toISOString();
-          }
-        }
-
-        const { error } = await supabase
-          .from("flows")
-          .update(update)
-          .eq("id", flow.id);
-
-        if (error) {
-          console.error("Failed to save flow:", error);
+        if (!res.ok) {
           setSaveError("No se pudo guardar");
-          toast.error("No se pudo guardar el flujo. Inténtalo de nuevo.");
+          toast.error(await apiErrorMessage(res, "guardar el flujo"));
           setTimeout(() => setSaveError(null), 3000);
           return false;
         }
 
         setSaveError(null);
+        setSavedSignature(flowSignature(flowName, nodes, edges));
         setLastSaved(new Date());
         if (!quiet) toast.success("Flujo guardado");
         return true;
+      } catch {
+        setSaveError("No se pudo guardar");
+        toast.error("No se pudo guardar el flujo. Revisa tu conexión.");
+        setTimeout(() => setSaveError(null), 3000);
+        return false;
       } finally {
         setSaving(false);
-        setPublishing(false);
       }
     },
-    [flowName, nodes, edges, flow.id, supabase, toast]
+    [flowName, nodes, edges, flow.id, toast]
   );
 
   const handleSave = useCallback(() => void saveFlow(), [saveFlow]);
@@ -255,11 +304,13 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       if (!res.ok) {
         console.error("Failed to delete flow");
         setSaveError("No se pudo eliminar");
-        toast.error("No se pudo eliminar el flujo.");
+        toast.error(await apiErrorMessage(res, "eliminar el flujo"));
         setTimeout(() => setSaveError(null), 3000);
         setDeleting(false);
         return;
       }
+      // Ya no hay nada que guardar: que el aviso de salida no se interponga.
+      setSavedSignature(signature);
       toast.success("Flujo eliminado");
       startRouteProgress();
       router.push("/dashboard/flows");
@@ -270,33 +321,79 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       setTimeout(() => setSaveError(null), 3000);
       setDeleting(false);
     }
-  }, [flow.id, router, toast]);
-  const handlePublish = useCallback(async () => {
-    setPublishing(true);
-    try {
-      // First save the current state
-      if (!(await saveFlow(undefined, true))) return;
-      // Then call the publish API which increments version and saves snapshot
-      const res = await fetch(`/api/v1/flows/${flow.id}/publish`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        console.error("Failed to publish flow");
-        setSaveError("No se pudo publicar");
-        toast.error("No se pudo publicar el flujo.");
-        setTimeout(() => setSaveError(null), 3000);
-        return;
+  }, [flow.id, router, toast, signature]);
+
+  // Publica lo guardado. El servidor revisa el flujo: con errores (422) no
+  // publica; con avisos (409) pide confirmar. Ambos abren el diálogo con la lista.
+  const handlePublish = useCallback(
+    async (confirm = false) => {
+      setPublishing(true);
+      try {
+        // Primero se guarda el estado actual.
+        if (!(await saveFlow(true))) return;
+        const res = await fetch(`/api/v1/flows/${flow.id}/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm }),
+        });
+        if (res.status === 422 || res.status === 409) {
+          const body = (await res.json().catch(() => null)) as { issues?: FlowIssue[] } | null;
+          setIssues(body?.issues ?? []);
+          setReviewOpen(true);
+          return;
+        }
+        if (!res.ok) {
+          console.error("Failed to publish flow");
+          setSaveError("No se pudo publicar");
+          toast.error(await apiErrorMessage(res, "publicar flujos"));
+          setTimeout(() => setSaveError(null), 3000);
+          return;
+        }
+        setIssues([]);
+        setReviewOpen(false);
+        setSaveError(null);
+        setLastSaved(new Date());
+        toast.success("Flujo publicado");
+        router.refresh();
+      } catch {
+        toast.error("No se pudo publicar el flujo. Revisa tu conexión.");
+      } finally {
+        setPublishing(false);
       }
-      setSaveError(null);
-      setLastSaved(new Date());
-      toast.success("Flujo publicado");
-      router.refresh();
-    } catch {
-      toast.error("No se pudo publicar el flujo. Revisa tu conexión.");
+    },
+    [saveFlow, flow.id, router, toast]
+  );
+
+  const showIssueNode = useCallback(
+    (nodeId: string) => {
+      setReviewOpen(false);
+      setVersionPanelOpen(false);
+      setTestPanelOpen(false);
+      setSelectedNodeId(nodeId);
+      void fitView({ nodes: [{ id: nodeId }], duration: 300, maxZoom: 1.2 });
+    },
+    [fitView]
+  );
+
+  // Tras restaurar una versión el lienzo debe mostrar lo restaurado (no solo refrescar la página),
+  // o un "Guardar" posterior pisaría la versión con los nodos viejos.
+  const handleRestored = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/v1/flows/${flow.id}`);
+      if (res.ok) {
+        const fresh = (await res.json()) as { nodes?: unknown; edges?: unknown };
+        const freshNodes = Array.isArray(fresh.nodes) ? (fresh.nodes as Node[]) : [];
+        const freshEdges = Array.isArray(fresh.edges) ? (fresh.edges as Edge[]) : [];
+        setNodes(freshNodes);
+        setEdges(freshEdges);
+        setSelectedNodeId(null);
+        setIssues([]);
+        setSavedSignature(flowSignature(flowName, freshNodes, freshEdges));
+      }
     } finally {
-      setPublishing(false);
+      router.refresh();
     }
-  }, [saveFlow, flow.id, router, toast]);
+  }, [flow.id, flowName, router, setNodes, setEdges]);
 
   return (
     <div className="flex h-full flex-col">
@@ -304,10 +401,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => {
-              startRouteProgress();
-              router.push("/dashboard/flows");
-            }}
+            onClick={handleBack}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -341,7 +435,10 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
               {saveError}
             </span>
           )}
-          {!saveError && lastSaved && (
+          {!saveError && dirty && (
+            <span className="text-xs font-medium text-amber-600">Cambios sin guardar</span>
+          )}
+          {!saveError && !dirty && lastSaved && (
             <span className="text-xs text-muted-foreground">
               Guardado {formatTime(lastSaved)}
             </span>
@@ -437,7 +534,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             {saving ? "Guardando…" : "Guardar"}
           </button>
           <button
-            onClick={handlePublish}
+            onClick={() => void handlePublish()}
             disabled={publishing}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
           >
@@ -461,6 +558,20 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             )}
           </button>
           <ConfirmDialog
+            open={confirmLeave}
+            title="Salir sin guardar"
+            message="Tienes cambios sin guardar en este flujo. Si sales ahora, se perderán."
+            confirmLabel="Salir sin guardar"
+            cancelLabel="Seguir editando"
+            destructive
+            onConfirm={() => {
+              setConfirmLeave(false);
+              setSavedSignature(signature);
+              leaveEditor();
+            }}
+            onCancel={() => setConfirmLeave(false)}
+          />
+          <ConfirmDialog
             open={confirmDelete}
             title="Eliminar flujo"
             message={`"${flowName}" y sus disparadores, versiones e historial de ejecuciones se eliminarán de forma permanente. Esta acción no se puede deshacer.`}
@@ -481,7 +592,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
         <NodePalette />
         <div ref={reactFlowWrapper} className="flex-1">
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
@@ -515,14 +626,16 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             onChange={onNodeDataChange}
             onClose={closeSidebar}
             onDelete={deleteNode}
+            currentFlowId={flow.id}
           />
         )}
         {versionPanelOpen && (
           <VersionHistoryPanel
             flowId={flow.id}
             currentVersion={flow.version}
+            flowStatus={flow.status}
             onClose={() => setVersionPanelOpen(false)}
-            onRestore={() => router.refresh()}
+            onRestore={() => void handleRestored()}
           />
         )}
         {testPanelOpen && (
@@ -538,6 +651,15 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
           />
         )}
       </div>
+      {reviewOpen && (
+        <PublishReviewDialog
+          issues={issues}
+          publishing={publishing}
+          onClose={() => setReviewOpen(false)}
+          onPublishAnyway={() => void handlePublish(true)}
+          onShowNode={showIssueNode}
+        />
+      )}
     </div>
   );
 }

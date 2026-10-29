@@ -473,10 +473,14 @@ export async function transferCase(
   return { ok: true };
 }
 
+export const PAST_NEXT_ACTION_MESSAGE =
+  "Esa fecha y hora ya pasaron. Elige una fecha y hora futuras para el próximo contacto.";
+
 /** Próximo contacto (fecha y nota). `at` null lo quita. */
 export async function setNextAction(
   db: Db,
   params: { caseId: string; at: string | null; note?: string | null; actorId: string | null },
+  now: Date = new Date(),
 ): Promise<EngineResult<{ nextActionAt: string | null }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
@@ -490,6 +494,11 @@ export async function setNextAction(
 
   const at = params.at ? parseInstant(params.at) : null;
   if (params.at && !at) return { error: "La fecha del próximo contacto no es válida." };
+  // Una fecha pasada dejaría la gestión «atrasada» desde el primer minuto, con
+  // avisos falsos. Se permite repetir la fecha que ya tiene (para editar la nota).
+  if (at && new Date(at).getTime() <= now.getTime() && at !== row.next_action_at) {
+    return { error: PAST_NEXT_ACTION_MESSAGE };
+  }
   const note = params.note?.trim() || null;
   if (note && note.length > MAX_NEXT_ACTION_NOTE_LENGTH) {
     return { error: `La nota del próximo contacto admite hasta ${MAX_NEXT_ACTION_NOTE_LENGTH} caracteres.` };

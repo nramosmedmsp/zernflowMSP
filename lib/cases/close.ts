@@ -189,6 +189,8 @@ export interface ClosePreview {
   contactType: { from: string | null; to: string } | null;
   /** Gestiones que se programarán, con la fecha calculada. */
   schedules: (PlannedSchedule & { caseTypeName: string | null })[];
+  /** Gestiones que una regla pediría pero no se pueden programar (el tipo está archivado). */
+  blocked: { ruleId: string; caseTypeName: string | null }[];
 }
 
 /**
@@ -216,9 +218,11 @@ export async function previewClose(
 
   const typeIds = [...new Set(plan.schedules.map((s) => s.caseTypeId))];
   const { data: types } = typeIds.length
-    ? await db.from("case_types").select("id, name").eq("workspace_id", prepared.row.workspace_id).in("id", typeIds)
-    : { data: [] as { id: string; name: string }[] };
+    ? await db.from("case_types").select("id, name, archived_at").eq("workspace_id", prepared.row.workspace_id).in("id", typeIds)
+    : { data: [] as { id: string; name: string; archived_at: string | null }[] };
   const names = new Map((types ?? []).map((t) => [t.id, t.name]));
+  // Igual que al cerrar (applyRulePlan): un tipo archivado o borrado no se programa.
+  const usable = new Set((types ?? []).filter((t) => !t.archived_at).map((t) => t.id));
 
   return {
     ok: true,
@@ -233,7 +237,12 @@ export async function previewClose(
         plan.contactTypeId !== undefined
           ? { from: prepared.contact.contact_type_id, to: plan.contactTypeId }
           : null,
-      schedules: plan.schedules.map((s) => ({ ...s, caseTypeName: names.get(s.caseTypeId) ?? null })),
+      schedules: plan.schedules
+        .filter((s) => usable.has(s.caseTypeId))
+        .map((s) => ({ ...s, caseTypeName: names.get(s.caseTypeId) ?? null })),
+      blocked: plan.schedules
+        .filter((s) => !usable.has(s.caseTypeId))
+        .map((s) => ({ ruleId: s.ruleId, caseTypeName: names.get(s.caseTypeId) ?? null })),
     },
   };
 }

@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { updateSequence, deleteSequence } from "@/lib/actions/sequences";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { TemplateContentEditor } from "@/components/sequences/template-content-editor";
+import { validateSequenceSteps } from "@/lib/broadcasts/sequence-step";
 import type { SequenceStep, TemplateMessageContent } from "@/lib/types/database";
 
 interface SequenceEditorProps {
@@ -60,19 +61,25 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const hasMessageStep = steps.some((s) => s.type === "message" || s.type === "template");
-
   const handleSave = useCallback(async () => {
     setError(null);
     setSuccess(null);
 
-    // Los pasos de plantilla necesitan una plantilla elegida.
+    // Los pasos de plantilla necesitan una plantilla elegida y, si la secuencia
+    // queda activa, todos los pasos tienen que estar completos.
     const missing = steps.findIndex(
       (s) => s.type === "template" && !(s.template?.template_name && s.template?.language)
     );
     if (missing >= 0) {
       setError("El paso " + (missing + 1) + " es de plantilla: elige una plantilla aprobada.");
       return;
+    }
+    if (status === "active") {
+      const problem = validateSequenceSteps(steps);
+      if (problem) {
+        setError(problem);
+        return;
+      }
     }
     setSaving(true);
 
@@ -123,6 +130,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
       const updated = [...steps];
       updated.splice(index, 0, newStep);
       setSteps(updated);
+      setError(null);
     },
     [steps]
   );
@@ -132,6 +140,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
       const updated = [...steps];
       updated[index] = { ...updated[index], ...data };
       setSteps(updated);
+      setError(null);
     },
     [steps]
   );
@@ -139,21 +148,25 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
   const removeStep = useCallback(
     (index: number) => {
       setSteps(steps.filter((_, i) => i !== index));
+      setError(null);
     },
     [steps]
   );
 
   const toggleStatus = useCallback(() => {
     if (status === "active") {
+      setError(null);
       setStatus("paused");
     } else {
-      if (!hasMessageStep) {
-        setError("Agrega al menos un paso de mensaje antes de activar la secuencia");
+      const problem = validateSequenceSteps(steps);
+      if (problem) {
+        setError(problem);
         return;
       }
+      setError(null);
       setStatus("active");
     }
-  }, [status, hasMessageStep]);
+  }, [status, steps]);
 
   const statusInfo = statusConfig[status];
 

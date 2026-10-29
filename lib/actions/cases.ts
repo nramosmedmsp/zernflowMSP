@@ -182,6 +182,19 @@ export interface OpenManualCaseInput {
   assignee?: "me" | "auto" | string;
   /** Fecha futura ("YYYY-MM-DD" o ISO): la gestión queda programada. */
   scheduledFor?: string | null;
+  /**
+   * El contacto ya tiene una gestión abierta de otro tipo y la persona confirmó
+   * abrir otra en paralelo. Si es del mismo tipo siempre se rechaza.
+   */
+  confirmParallel?: boolean;
+}
+
+/** Gestión abierta o programada de un contacto, para avisar antes de abrir otra. */
+export interface ActiveCaseSummary {
+  id: string;
+  caseTypeId: string | null;
+  caseTypeName: string;
+  status: "open" | "scheduled";
 }
 
 // ── Utilidades ─────────────────────────────────────────────────────────────
@@ -970,6 +983,12 @@ export async function openManualCase(
   }
   if (input.scheduledFor) assignee = "auto";
 
+  // Una gestión abierta por contacto por defecto: otra igual se bloquea y una
+  // de otro tipo exige confirmación (en el servidor, no solo en el diálogo).
+  const existing = await engine.listActiveCases(s.db, s.workspaceId, contact.id);
+  const duplicate = engine.parallelOpeningError(existing, input.caseTypeId ?? null, input.confirmParallel === true);
+  if (duplicate) return { error: duplicate };
+
   const result = await engine.openCase(s.db, {
     workspaceId: s.workspaceId,
     contactId: contact.id,
@@ -980,6 +999,40 @@ export async function openManualCase(
   });
   if ("error" in result) return result;
   return { ok: true, caseId: result.caseId, status: result.status };
+}
+
+/** Gestiones abiertas o programadas de un contacto (para «Nueva gestión»). */
+export async function listContactActiveCases(
+  contactId: string,
+): Promise<CaseActionResult<{ cases: ActiveCaseSummary[] }>> {
+  if (!isId(contactId)) return { error: INVALID };
+  const s = await session();
+  if ("error" in s) return s;
+
+  const { data: contact } = await s.db
+    .from("contacts")
+    .select("id, owner_id, team_id")
+    .eq("id", contactId)
+    .eq("workspace_id", s.workspaceId)
+    .maybeSingle();
+  const summaries = contact ? await loadContactCaseSummaries(s.db, contact.id) : [];
+  if (!contact || !actorSeesContact(s.actor, contact, summaries)) return { error: "No se encontró el contacto." };
+
+  const active = await engine.listActiveCases(s.db, s.workspaceId, contact.id);
+  const typeIds = [...new Set(active.map((c) => c.caseTypeId).filter((id): id is string => !!id))];
+  const { data: types } = typeIds.length
+    ? await s.db.from("case_types").select("id, name").in("id", typeIds)
+    : { data: [] as { id: string; name: string }[] };
+  const names = new Map((types ?? []).map((t) => [t.id, t.name]));
+  return {
+    ok: true,
+    cases: active.map((c) => ({
+      id: c.id,
+      caseTypeId: c.caseTypeId,
+      caseTypeName: c.caseTypeId ? (names.get(c.caseTypeId) ?? "Sin clasificar") : "Sin clasificar",
+      status: c.status,
+    })),
+  };
 }
 
 // ── Personales y configuración ─────────────────────────────────────────────

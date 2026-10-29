@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2, Search, Send, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -49,6 +49,9 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
   const [values, setValues] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // Clave de una sola vez: la misma en todos los reintentos del mismo envío
+  // (misma plantilla y mismos valores); cambia si el asesor cambia algo.
+  const sendKey = useRef<{ fingerprint: string; id: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +95,7 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
   function choose(template: TemplateSummary) {
     setSelected(template);
     setSendError(null);
+
     // La primera variable suele ser el nombre del contacto.
     setValues(template.slots.map((_, i) => (i === 0 ? suggestFirstParam(contactName) : "")));
   }
@@ -104,6 +108,8 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
     if (!selected || !built || !built.ok || sending) return;
     setSending(true);
     setSendError(null);
+    const fingerprint = JSON.stringify([conversationId, selected.name, selected.language, built.params]);
+    if (sendKey.current?.fingerprint !== fingerprint) sendKey.current = { fingerprint, id: crypto.randomUUID() };
     try {
       const res = await fetch("/api/v1/templates/send", {
         method: "POST",
@@ -113,6 +119,7 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
           templateName: selected.name,
           language: selected.language,
           params: built.params,
+          clientMessageId: sendKey.current.id,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -126,7 +133,9 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
       onSent();
       onClose();
     } catch {
-      setSendError("No se pudo enviar la plantilla. Revisa tu conexión e inténtalo de nuevo.");
+      // La respuesta se cortó: la plantilla pudo haber salido. Si se reintenta,
+      // va con la misma clave y Zernio no la repite.
+      setSendError("No se recibió respuesta. Puede que la plantilla ya haya salido: revisa el chat antes de reintentar.");
     } finally {
       setSending(false);
     }
