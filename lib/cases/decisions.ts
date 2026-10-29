@@ -33,16 +33,30 @@ export function resolveReopenStageId(
 }
 
 /**
+ * ¿La etapa ya significa "se le escribió al cliente" ("Recordatorio enviado",
+ * "Contactado")? Entonces la plantilla automática no necesita avanzarla.
+ */
+export function isSentStageName(name: string | null | undefined): boolean {
+  return !!name && /\b(enviad[oa]s?|contactad[oa]s?)\b/i.test(name.normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+}
+
+/**
  * Etapa a la que pasa la gestión al enviarse la plantilla automática: la
- * segunda etapa abierta, si la gestión está sin etapa o en la primera.
+ * segunda etapa abierta, si la gestión está sin etapa o en la primera. M-7: si
+ * la primera etapa ya es de "enviado" ("Recordatorio enviado") no se avanza:
+ * la segunda ("Interesado") es una respuesta del cliente y dispararía su flujo
+ * sin que haya contestado; la gestión se queda donde está hasta que alguien la
+ * mueva.
  */
 export function nextAutoTemplateStageId(
-  openStages: readonly { id: string; position: number }[],
+  openStages: readonly { id: string; position: number; name?: string | null }[],
   currentStageId: string | null,
 ): string | null {
   const open = [...openStages].sort((a, b) => a.position - b.position);
-  if (open.length >= 2 && (currentStageId === null || currentStageId === open[0].id)) return open[1].id;
-  return null;
+  if (open.length < 2) return null;
+  if (currentStageId !== null && currentStageId !== open[0].id) return null;
+  if (isSentStageName(open[0].name)) return null;
+  return open[1].id;
 }
 
 export type ActivationPlan = { action: "activate" } | { action: "defer"; to: Date };

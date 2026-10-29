@@ -479,6 +479,12 @@ export async function transferCase(
   return { ok: true };
 }
 
+/** ¿Es el mismo instante (con un minuto de margen)? Falso si falta alguno. */
+function isSameNextAction(at: string | null, current: string | null): boolean {
+  if (!at || !current) return false;
+  return Math.abs(new Date(at).getTime() - new Date(current).getTime()) < 60_000;
+}
+
 export const PAST_NEXT_ACTION_MESSAGE =
   "Esa fecha y hora ya pasaron. Elige una fecha y hora futuras para el próximo contacto.";
 
@@ -501,8 +507,11 @@ export async function setNextAction(
   const at = params.at ? parseInstant(params.at) : null;
   if (params.at && !at) return { error: "La fecha del próximo contacto no es válida." };
   // Una fecha pasada dejaría la gestión «atrasada» desde el primer minuto, con
-  // avisos falsos. Se permite repetir la fecha que ya tiene (para editar la nota).
-  if (at && new Date(at).getTime() <= now.getTime() && at !== row.next_action_at) {
+  // avisos falsos. Se permite repetir la fecha que ya tiene (para editar solo la
+  // nota): se comparan instantes con un minuto de margen porque la base y el
+  // formulario escriben la misma fecha con formato distinto y sin segundos (M-8).
+  const sameInstant = isSameNextAction(at, row.next_action_at);
+  if (at && new Date(at).getTime() <= now.getTime() && !sameInstant) {
     return { error: PAST_NEXT_ACTION_MESSAGE };
   }
   const note = params.note?.trim() || null;
@@ -510,14 +519,19 @@ export async function setNextAction(
     return { error: `La nota del próximo contacto admite hasta ${MAX_NEXT_ACTION_NOTE_LENGTH} caracteres.` };
   }
 
+  // Misma fecha: solo cambia la nota y se conservan los avisos ya enviados.
   const { error } = await db
     .from("cases")
-    .update({
-      next_action_at: at,
-      next_action_note: at ? note : null,
-      next_action_notified_at: null,
-      commitment_alerted_at: null,
-    })
+    .update(
+      sameInstant
+        ? { next_action_note: note }
+        : {
+            next_action_at: at,
+            next_action_note: at ? note : null,
+            next_action_notified_at: null,
+            commitment_alerted_at: null,
+          },
+    )
     .eq("id", row.id);
   if (error) return { error: GENERIC_ERROR };
 
@@ -528,10 +542,10 @@ export async function setNextAction(
     contact_id: row.contact_id,
     actor_id: params.actorId,
     from_value: row.next_action_at,
-    to_value: at,
+    to_value: sameInstant ? row.next_action_at : at,
     meta: note ? { note } : {},
   });
-  return { ok: true, nextActionAt: at };
+  return { ok: true, nextActionAt: sameInstant ? row.next_action_at : at };
 }
 
 /**

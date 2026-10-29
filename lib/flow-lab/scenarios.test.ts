@@ -389,11 +389,10 @@ describe("cerrar ganada → gracias + recompra programada a 25 días", () => {
     expect(template.text).toContain("Hola Lucía, ya casi se te acaba tu suplemento");
     expect(recompra.autoTemplateSentAt).toBeTruthy();
 
-    // Pasa a la segunda etapa ("Interesado") y eso dispara «Recompra interesada»; la ventana está cerrada
-    // (el cliente escribió hace 25 días) y el nodo no tiene plantilla: no se envía.
-    expect(s.stageNameOf(recompra)).toBe("Interesado");
-    expect(s.steps("case_event").some((e) => e.text.includes("«Recompra interesada»"))).toBe(true);
-    expect(s.steps("message_skipped").length).toBeGreaterThan(0);
+    // M-7: la primera etapa ya es «Recordatorio enviado»: la gestión se queda ahí y no pasa a
+    // «Interesado» (ni dispara «Recompra interesada») hasta que el cliente responda.
+    expect(s.stageNameOf(recompra)).toBe("Recordatorio enviado");
+    expect(s.steps("case_event").some((e) => e.text.includes("«Recompra interesada»"))).toBe(false);
   });
 
   it("si el cliente vuelve a escribir tras la activación, la gestión de Recompra es la que se usa", () => {

@@ -39,6 +39,12 @@ const numberFormat = new Intl.NumberFormat(APP_LOCALE);
 
 function toDate(value: DateInput): Date | null {
   if (value === null || value === undefined) return null;
+  // M-4: una fecha de calendario ("2026-10-30") es un día, no la medianoche UTC
+  // (que en Lima sería el día anterior): se toma el mediodía de Lima.
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const day = new Date(`${value}T12:00:00-05:00`);
+    return Number.isNaN(day.getTime()) ? null : day;
+  }
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }

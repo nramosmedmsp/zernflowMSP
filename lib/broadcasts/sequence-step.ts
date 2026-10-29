@@ -38,10 +38,20 @@ export function decideStepSend(step: Pick<SequenceStep, "type" | "content" | "te
   return { action: "fail", reason: window === "closed" ? NO_TEMPLATE_REASON : NO_CONVERSATION_REASON };
 }
 
+function hasEmptyParam(template: TemplateMessageContent): boolean {
+  return template.params.some((p) => p.trim().length === 0);
+}
+
+function emptyParamsReason(n: number): string {
+  return `El paso ${n} usa una plantilla: completa todas sus variables.`;
+}
+
 /**
  * Revisión de los pasos de una secuencia antes de activarla (pantalla y
  * servidor): al menos un paso de mensaje, cada mensaje con texto o plantilla
- * y cada espera con minutos. Devuelve el primer problema en español, o null.
+ * y cada espera con minutos. Una plantilla (sola o alternativa) debe traer todas
+ * sus variables llenas, como en Difusiones: WhatsApp rechaza valores vacíos.
+ * Devuelve el primer problema en español, o null.
  */
 export function validateSequenceSteps(steps: readonly SequenceStep[]): string | null {
   if (!steps.some((s) => s.type === "message" || s.type === "template")) {
@@ -57,12 +67,19 @@ export function validateSequenceSteps(steps: readonly SequenceStep[]): string | 
       continue;
     }
     if (step.type === "template") {
-      if (!parseTemplateContent(step.template)) return `El paso ${n} es de plantilla: elige una plantilla aprobada.`;
+      const template = parseTemplateContent(step.template);
+      if (!template) return `El paso ${n} es de plantilla: elige una plantilla aprobada.`;
+      if (hasEmptyParam(template)) return emptyParamsReason(n);
       continue;
     }
     if (step.type !== "message") return `El paso ${n} no es válido.`;
     const text = (step.content ?? "").trim();
-    if (!text && !parseTemplateContent(step.template)) return `El paso ${n} no tiene texto: escribe el mensaje.`;
+    const fallback = parseTemplateContent(step.template);
+    if (step.template && !fallback) {
+      return `El paso ${n} tiene plantilla alternativa: elige una plantilla o cambia el tipo de envío a Mensaje.`;
+    }
+    if (!text && !fallback) return `El paso ${n} no tiene texto: escribe el mensaje.`;
+    if (fallback && hasEmptyParam(fallback)) return emptyParamsReason(n);
     if (text.length > MAX_TEXT_LENGTH) return `El paso ${n} es demasiado largo (máximo ${MAX_TEXT_LENGTH} caracteres).`;
   }
   return null;

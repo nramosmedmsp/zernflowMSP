@@ -120,4 +120,27 @@ describe("nodos action guardados por el lienzo", () => {
     const upd = calls.find((c) => c.table === "contacts" && c.op === "update");
     expect(upd?.payload).toEqual({ is_subscribed: false });
   });
+
+  it("B-19: la baja por flujo queda en el historial del contacto", async () => {
+    const { db, calls } = fakeDb(flowWith({ actionType: "unsubscribe" }));
+    await executeFlow(db, context());
+    const logged = calls.find((c) => c.table === "activity" && c.op === "insert");
+    expect(logged?.payload).toEqual([
+      expect.objectContaining({
+        workspace_id: "ws1",
+        type: "contact_unsubscribed",
+        contact_id: "contact1",
+        meta: { source: "flow", flow_id: "flow1" },
+      }),
+    ]);
+  });
+
+  it("B-19: pasar a atención humana pausa el bot y lo deja en el historial", async () => {
+    const { db, calls } = fakeDb(flowWith({ actionType: "humanTakeover" }));
+    await executeFlow(db, context());
+    const logged = calls.find((c) => c.table === "activity" && c.op === "insert");
+    expect(logged?.payload).toEqual([
+      expect.objectContaining({ type: "automation_paused", contact_id: "contact1", meta: { source: "flow", flow_id: "flow1" } }),
+    ]);
+  });
 });

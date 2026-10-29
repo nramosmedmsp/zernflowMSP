@@ -357,6 +357,12 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
 
 type MessageMode = "message" | "template" | "fallback";
 
+/**
+ * M-5: plantilla vacía que marca el modo "con plantilla alternativa" mientras
+ * todavía no se elige ninguna (sin esto el selector volvía solo a "Mensaje").
+ */
+const EMPTY_TEMPLATE: TemplateMessageContent = { kind: "template", template_name: "", language: "", params: [] };
+
 function modeOf(step: SequenceStep): MessageMode {
   if (step.type === "template") return "template";
   return step.template ? "fallback" : "message";
@@ -400,7 +406,7 @@ function StepCard({
     } else if (next === "message") {
       onChange({ type: "message", content: step.content ?? "", template: null });
     } else {
-      onChange({ type: "message", content: step.content ?? "", template: step.template ?? null });
+      onChange({ type: "message", content: step.content ?? "", template: step.template ?? EMPTY_TEMPLATE });
     }
   }
 
@@ -472,7 +478,10 @@ function StepCard({
                 <TemplateContentEditor
                   workspaceId={workspaceId}
                   value={step.template ?? null}
-                  onChange={(template: TemplateMessageContent | null) => onChange({ template })}
+                  onChange={(template: TemplateMessageContent | null) =>
+                    // En "alternativa" quitar la plantilla la deja vacía, sin cambiar de modo.
+                    onChange({ template: template ?? (mode === "fallback" ? EMPTY_TEMPLATE : null) })
+                  }
                 />
               </div>
             )}

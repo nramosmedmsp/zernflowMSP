@@ -7,6 +7,7 @@ import {
   type DeliveryResult,
 } from "@/lib/broadcasts/delivery";
 import { decideStepSend } from "@/lib/broadcasts/sequence-step";
+import { isDemoChannel } from "@/lib/demo";
 import { messagePreview } from "@/lib/message-preview";
 import { loadStepSchedule } from "@/lib/sequences/schedule";
 import {
@@ -293,15 +294,22 @@ async function runMessageStep(supabase: ServiceClient, p: MessageStepParams): Pr
     // Mensaje saliente en la conversación (si ya existe una).
     if (ctx.conversation) {
       const shownText = result.ok && result.text ? result.text : storedText;
-      await supabase.from("messages").insert({
-        conversation_id: ctx.conversation.id,
-        direction: "outbound",
-        text: shownText,
-        status: result.ok ? "sent" : "failed",
-        platform_message_id: result.ok ? result.messageId : null,
-        // Origen visible en el chat: "Secuencia · nombre" (R2-B5).
-        sent_by_node_id: `${SEQUENCE_ORIGIN_PREFIX}${p.sequenceName?.trim() || "Secuencia"}`,
-      });
+      // Origen visible en el chat: "Secuencia · nombre" (R2-B5).
+      const origin = `${SEQUENCE_ORIGIN_PREFIX}${p.sequenceName?.trim() || "Secuencia"}`;
+      if (isDemoChannel(ctx.channel) && result.ok && result.messageId) {
+        // B-18: en canales de prueba el mensajero ya guardó el mensaje: solo se
+        // le pone el origen, sin insertar un segundo (que se veía duplicado).
+        await supabase.from("messages").update({ sent_by_node_id: origin }).eq("id", result.messageId);
+      } else {
+        await supabase.from("messages").insert({
+          conversation_id: ctx.conversation.id,
+          direction: "outbound",
+          text: shownText,
+          status: result.ok ? "sent" : "failed",
+          platform_message_id: result.ok ? result.messageId : null,
+          sent_by_node_id: origin,
+        });
+      }
       // La conversación sube en la lista y el chat abierto se refresca.
       const { error: touchError } = await supabase
         .from("conversations")

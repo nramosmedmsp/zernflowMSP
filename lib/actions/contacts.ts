@@ -20,7 +20,19 @@ import {
 } from "@/lib/cases/visibility";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { normalizePhone } from "@/components/contacts/contact-labels";
+import { normalizeImportPhone, senderIdFromPhone } from "@/lib/import/phone";
 import { ilikePattern } from "@/components/cases/case-filters";
+
+/**
+ * Teléfono en el formato de la importación y el webhook ("+51987654321"): un
+ * celular peruano de 9 dígitos recibe +51. Si no se puede llevar a ese formato
+ * (por ejemplo un número local corto) se conserva el texto limpio tal cual.
+ */
+function canonicalPhone(value: string): { value: string; linkable: boolean } {
+  const canonical = normalizeImportPhone(value);
+  if (canonical.ok && canonical.value) return { value: canonical.value, linkable: true };
+  return { value, linkable: false };
+}
 
 export type ContactActionResult<T extends object = object> = ({ ok: true } & T) | { error: string };
 
@@ -163,14 +175,49 @@ export async function createContact(input: {
   const s = await session();
   if ("error" in s) return s;
 
-  const digits = phone.value.replace(/\D/g, "");
-  const { data: same } = await s.db
+  const typed = phone.value;
+  const canonical = canonicalPhone(typed);
+  const digits = canonical.value.replace(/\D/g, "");
+  // Variantes con las que pudo guardarse antes (con o sin +51, tal como se escribió).
+  const typedDigits = typed.replace(/\D/g, "");
+  const variants = [...new Set([canonical.value, typed, digits, `+${digits}`, typedDigits, `+${typedDigits}`])];
+  let { data: same } = await s.db
     .from("contacts")
     .select("id, display_name, phone, email, owner_id, team_id")
     .eq("workspace_id", s.workspaceId)
-    .in("phone", [phone.value, digits, `+${digits}`])
+    .in("phone", variants)
     .limit(1)
     .maybeSingle();
+
+  // Canales de WhatsApp activos: el vínculo (contact_channels) es lo que usa el
+  // webhook para reconocer al cliente cuando escribe.
+  const { data: channels } = await s.db
+    .from("channels")
+    .select("id")
+    .eq("workspace_id", s.workspaceId)
+    .eq("platform", "whatsapp")
+    .eq("is_active", true);
+  const channelIds = (channels ?? []).map((c) => c.id);
+  const senderId = senderIdFromPhone(canonical.value);
+
+  if (!same && canonical.linkable && channelIds.length > 0) {
+    const { data: link } = await s.db
+      .from("contact_channels")
+      .select("contact_id")
+      .in("channel_id", channelIds)
+      .eq("platform_sender_id", senderId)
+      .limit(1)
+      .maybeSingle();
+    if (link) {
+      const { data: linked } = await s.db
+        .from("contacts")
+        .select("id, display_name, phone, email, owner_id, team_id")
+        .eq("workspace_id", s.workspaceId)
+        .eq("id", link.contact_id)
+        .maybeSingle();
+      same = linked;
+    }
+  }
   if (same) {
     const summaries = await loadContactCaseSummaries(s.db, same.id);
     if (!actorSeesContact(s.actor, same, summaries)) {
@@ -197,7 +244,7 @@ export async function createContact(input: {
     .insert({
       workspace_id: s.workspaceId,
       display_name: name,
-      phone: phone.value,
+      phone: canonical.value,
       owner_id: s.userId,
       team_id: team,
       contact_type_id: def?.id ?? null,
@@ -208,6 +255,17 @@ export async function createContact(input: {
   if (error || !created) {
     console.error("[contacts] create", error?.message);
     return { error: GENERIC_ERROR };
+  }
+
+  if (canonical.linkable && channelIds.length > 0) {
+    const { error: linkError } = await s.db.from("contact_channels").insert(
+      channelIds.map((channelId) => ({
+        contact_id: created.id,
+        channel_id: channelId,
+        platform_sender_id: senderId,
+      })),
+    );
+    if (linkError) console.error("[contacts] create link", linkError.message);
   }
   return {
     ok: true,
@@ -273,8 +331,12 @@ export async function updateContactPhone(
   contactId: string,
   phone: string | null,
 ): Promise<ContactActionResult<{ phone: string | null }>> {
-  const normalized = normalizePhone(phone);
-  if (!normalized.ok) return { error: normalized.error };
+  const checked = normalizePhone(phone);
+  if (!checked.ok) return { error: checked.error };
+  const normalized = {
+    ...checked,
+    value: checked.value === null ? null : canonicalPhone(checked.value).value,
+  };
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
   if (ctx.contact.phone !== normalized.value) {

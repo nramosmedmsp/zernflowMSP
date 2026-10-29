@@ -195,10 +195,10 @@ export async function sendAutoTemplate(
       .eq("channel_id", target.channelId);
   }
 
-  // Segunda etapa abierta ("Recordatorio enviado" / "Contactado").
+  // Segunda etapa abierta, salvo que la primera ya sea "Recordatorio enviado" (M-7).
   const { data: stages } = await db
     .from("case_stages")
-    .select("id, position")
+    .select("id, position, name")
     .eq("case_type_id", type.id)
     .eq("kind", "open")
     .is("archived_at", null)

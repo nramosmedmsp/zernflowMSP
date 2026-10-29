@@ -22,6 +22,7 @@ import {
   dayLabel,
   draftFromHours,
   draftHasRanges,
+  draftHasInvalidRange,
   draftToPayload,
   openWeekdaysIfEmpty,
   removeRange,
@@ -466,7 +467,7 @@ function ScopeCard({
       )}
 
       <div className="flex items-center gap-3">
-        <button type="button" onClick={save} disabled={saving || !dirty} className={primaryButtonClass}>
+        <button type="button" onClick={save} disabled={saving || !dirty || (editing && draftHasInvalidRange(draft))} className={primaryButtonClass}>
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
           {saving ? "Guardando..." : "Guardar horario"}
         </button>

@@ -3,6 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import { releaseMemberWork } from "@/lib/cases/member-removal";
+import { logActivity, type Db } from "@/lib/cases/io";
 import { rpcAuthUserExists } from "@/lib/supabase/extra-rpc";
 import { findAuthUserByEmail, generateAccessLink } from "@/lib/supabase/admin-users";
 import { sendAppMail } from "@/lib/mail/send";
@@ -10,7 +11,8 @@ import { isMailConfigured } from "@/lib/mail/settings";
 import { inviteEmail, resetPasswordEmail } from "@/lib/mail/templates";
 import {
   APP_URL_MISSING_MESSAGE,
-  EXISTING_ACCOUNT_MESSAGE,
+  EXISTING_ACCOUNT_PRIVILEGED_MESSAGE,
+  EXISTING_ACCOUNT_LOOKUP_MESSAGE,
   crossWorkspaceAuthorityError,
   type RoleMembership,
   MAIL_NOT_CONFIGURED_MESSAGE,
@@ -49,7 +51,7 @@ export type AccessDelivery =
 
 export type CreateTeamUserResult =
   | { error: string }
-  | { ok: true; outcome: "created"; member: TeamMemberView; delivery: AccessDelivery };
+  | { ok: true; outcome: "created" | "readded"; member: TeamMemberView; delivery: AccessDelivery };
 
 async function managerContext(workspaceId: string) {
   const ctx = await getWorkspace();
@@ -131,8 +133,10 @@ async function membershipsOf(service: ServiceClient, userId: string): Promise<Ro
 /**
  * Crea un usuario nuevo para el espacio actual: crea la cuenta con un enlace de
  * activación y lo envía con el correo de la app (si está configurado). Si el
- * correo ya tiene cuenta NO se agrega en silencio al espacio: se rechaza y hay
- * que invitarla para que ella acepte.
+ * correo ya tiene cuenta (por ejemplo, alguien a quien se quitó del espacio), el
+ * Dueño o Administrador la vuelve a agregar directamente con el rol elegido,
+ * siempre que no sea Dueño ni Administrador de otro espacio y quien la agrega
+ * tenga autoridad sobre ella en cada espacio al que pertenezca.
  */
 export async function createTeamUser(
   workspaceId: string,
@@ -165,11 +169,67 @@ export async function createTeamUser(
 
   if (exists) {
     const existingUser = await findAuthUserByEmail(service, email);
-    if (existingUser && (await getMembership(service, workspaceId, existingUser.id))) {
+    if (!existingUser) return { error: EXISTING_ACCOUNT_LOOKUP_MESSAGE };
+    if (await getMembership(service, workspaceId, existingUser.id)) {
       return { error: "Esta persona ya es miembro del espacio de trabajo." };
     }
-    // Nunca se une a una cuenta existente sin que la persona acepte.
-    return { error: EXISTING_ACCOUNT_MESSAGE };
+
+    // Si pertenece a otros espacios, quien la agrega debe tener autoridad sobre
+    // ella en todos (nunca se une en silencio a alguien que administra otro
+    // espacio) y no puede ser Dueño ni Administrador en ninguno.
+    const otherMemberships = await membershipsOf(service, existingUser.id);
+    if (otherMemberships.length > 0) {
+      const authority = crossWorkspaceAuthorityError({
+        actorMemberships: await membershipsOf(service, ctx.user.id),
+        targetMemberships: otherMemberships,
+      });
+      if (authority) return { error: authority };
+      if (otherMemberships.some((m) => canManageTeam(m.role))) {
+        return { error: EXISTING_ACCOUNT_PRIVILEGED_MESSAGE };
+      }
+    }
+
+    const joinedAt = new Date().toISOString();
+    const { error: addError } = await service
+      .from("workspace_members")
+      .insert({ workspace_id: workspaceId, user_id: existingUser.id, role });
+    if (addError) {
+      console.error("[createTeamUser] re-add membership", addError.message);
+      return { error: "No se pudo agregar a la persona. Inténtalo de nuevo." };
+    }
+
+    await logActivity(service as unknown as Db, {
+      workspace_id: workspaceId,
+      type: "config_changed",
+      actor_id: ctx.user.id,
+      to_value: role,
+      meta: { action: "member_readded", entity: "team", user_id: existingUser.id, email, role },
+    });
+
+    const member = memberViewFromUser(existingUser, { userId: existingUser.id, role, joinedAt });
+    const status = memberStatus(existingUser.last_sign_in_at);
+    let delivery: AccessDelivery;
+    if (!(await isMailConfigured(service))) {
+      delivery = { sent: false, notConfigured: true, message: notConfiguredMessage(status) };
+    } else {
+      const link = await generateAccessLink(service, {
+        email,
+        type: accessLinkTypeFor(!!existingUser.email_confirmed_at),
+        baseUrl,
+        fullName: displayName(existingUser),
+      });
+      delivery = link.ok
+        ? await deliverAccessLink(service, {
+            to: email,
+            name: displayName(existingUser),
+            url: link.url,
+            status,
+            inviterName: inviterNameOf(ctx.user),
+            workspaceName: ctx.workspace.name,
+          })
+        : { sent: false, notConfigured: false, message: link.error };
+    }
+    return { ok: true, outcome: "readded", member, delivery };
   }
 
   // Invitación pendiente: el trigger handle_new_user (00017) la ve y no crea un

@@ -7,7 +7,6 @@ import { pickSuggestedCaseTypeId, resolveReopenStageId } from "./decisions";
 import { runEventRules } from "./effects";
 import { emitCaseOpened, emitStageChanged } from "./events";
 import { businessSecondsBetween } from "./hours";
-import { detectComplaint } from "@/lib/complaint-detect";
 import { REOPEN_WINDOW_MS } from "./dates";
 import {
   caseLink,
@@ -75,25 +74,23 @@ async function reopenStageId(db: Db, row: CaseRow): Promise<string | null> {
 }
 
 /**
- * Tipos protegidos (Postventa): dentro de las 24 h siguientes al cierre
- * cualquier mensaje reabre; pasado ese tiempo y dentro de la ventana del tipo
- * (7 días) solo lo hace un mensaje que parece reclamo (o sin texto, como una
- * foto del producto). La ventana se cuenta desde el primer cierre de la
- * gestión: reabrir y cerrar de nuevo no la renueva. Si no se reabre, el
- * mensaje abre una gestión nueva (por ejemplo una Venta).
+ * Tipos protegidos (Postventa): dentro de la ventana del tipo (7 días, como
+ * promete Configuración) cualquier mensaje del cliente reabre la gestión, sea
+ * cual sea su texto. La ventana se cuenta desde el primer cierre de la
+ * gestión: reabrir y cerrar de nuevo no la renueva. Fuera de la ventana el
+ * mensaje abre una gestión nueva (por ejemplo una Venta); si además parece un
+ * reclamo, la marca de reclamo (complaint.ts) avisa a los supervisores.
  */
 async function protectedMayReopen(
   db: Db,
   closed: CaseRow,
   at: string,
   windowMs: number,
-  text: string | null | undefined,
 ): Promise<boolean> {
   const closedAt = closed.closed_at ? new Date(closed.closed_at).getTime() : Number.NaN;
   if (Number.isNaN(closedAt)) return false;
   const now = new Date(at).getTime();
   if (now - closedAt < REOPEN_WINDOW_MS) return true;
-  if (typeof text === "string" && text.trim() !== "" && !detectComplaint(text)) return false;
   const { data: first } = await db
     .from("activity")
     .select("created_at")
@@ -127,6 +124,53 @@ async function latestOpenCase(db: Db, contactId: string): Promise<CaseRow | null
 }
 
 /**
+ * M-1: el mensaje del cliente vale para todas las gestiones abiertas del
+ * contacto, no solo para la más reciente: sella la entrada y empieza la espera
+ * en las demás (así el responsable de cada una lo ve en "Por responder").
+ */
+async function stampParallelInbound(
+  db: Db,
+  params: { contactId: string; keepCaseId: string; at: string },
+): Promise<void> {
+  const { data: others, error } = await db
+    .from("cases")
+    .select("id, waiting_since")
+    .eq("contact_id", params.contactId)
+    .eq("status", "open")
+    .neq("id", params.keepCaseId);
+  if (error) {
+    console.error("[cases] parallel inbound", error.message);
+    return;
+  }
+  for (const other of others ?? []) {
+    const { error: stampError } = await db
+      .from("cases")
+      .update(inboundPatch(other, params.at))
+      .eq("id", other.id);
+    if (stampError) console.error("[cases] parallel inbound stamp", stampError.message);
+  }
+}
+
+/**
+ * M-1: la respuesta de una persona en la conversación cierra la espera de las
+ * demás gestiones abiertas del contacto (la "primera respuesta" solo se
+ * registra en la de quien responde, en handleHumanOutbound).
+ */
+async function clearParallelWaiting(
+  db: Db,
+  params: { contactId: string; keepCaseId: string; at: string },
+): Promise<void> {
+  const { error } = await db
+    .from("cases")
+    .update({ last_outbound_at: params.at, waiting_since: null })
+    .eq("contact_id", params.contactId)
+    .eq("status", "open")
+    .neq("id", params.keepCaseId)
+    .not("waiting_since", "is", null);
+  if (error) console.error("[cases] parallel clear waiting", error.message);
+}
+
+/**
  * Mensaje entrante (después de guardar contacto y conversación):
  * 1. usa la gestión abierta más reciente del contacto; si no hay, reabre la
  *    cerrada dentro de la ventana de su tipo (24 h si no define otra) o abre una nueva (tipo sugerido por el tipo
@@ -146,9 +190,8 @@ export async function handleInbound(
     conversationId?: string | null;
     at?: string;
     /**
-     * Texto del mensaje del cliente. Una Postventa cerrada hace más de 24 h
-     * solo se reabre si el texto parece un reclamo (o si no hay texto, por
-     * ejemplo una foto del producto).
+     * Texto del mensaje del cliente (ya no condiciona la reapertura de una
+     * Postventa: dentro de su ventana cualquier mensaje la reabre).
      */
     text?: string | null;
     /** Para las pruebas; por defecto envía por Zernio. */
@@ -190,7 +233,7 @@ export async function handleInbound(
       const type = c.case_type_id ? (typeById.get(c.case_type_id) ?? null) : null;
       const windowMs = reopenWindowMs(type?.reopen_window_days);
       if (!shouldReopen(c, at, windowMs)) continue;
-      if (type?.protected && !(await protectedMayReopen(db, c, at, windowMs, params.text))) continue;
+      if (type?.protected && !(await protectedMayReopen(db, c, at, windowMs))) continue;
       lastClosed = c;
       break;
     }
@@ -344,6 +387,9 @@ export async function handleInbound(
     if (error) console.error("[cases] inbound stamp", error.message);
   }
 
+  // 2b. M-1: con gestiones en paralelo el cliente espera respuesta en todas.
+  await stampParallelInbound(db, { contactId: contact.id, keepCaseId: row.id, at });
+
   // 3. Reparto. Solo se avisa "sin asignar" cuando la gestión es nueva o se reabre.
   let assignment: AssignOutcome | null = null;
   if (!row.assignee_id) {
@@ -494,6 +540,11 @@ export async function handleHumanOutboundForConversation(
     userId: params.userId,
     at: params.at,
     conversationId: conversation.id,
+  });
+  await clearParallelWaiting(db, {
+    contactId: conversation.contact_id,
+    keepCaseId: target.id,
+    at: params.at ?? new Date().toISOString(),
   });
 }
 

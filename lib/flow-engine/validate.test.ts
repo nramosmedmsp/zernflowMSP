@@ -157,3 +157,31 @@ describe("avisos de publicación (R2-B10, R2-B22)", () => {
     expect(codes([t, msg("m1", "Uno")], [edge("t", "m1")])).not.toContain("comment_multi_message");
   });
 });
+
+describe("tanda 8: avisos de la revisión previa", () => {
+  const caseTrigger = (extra: Record<string, unknown>): FlowNodeLike => ({
+    id: "t",
+    type: "trigger",
+    data: { triggerType: "case_opened", ...extra },
+  });
+
+  it("B-22: «solo sin clasificar» no avisa de que falta el tipo de gestión", () => {
+    const nodes = [caseTrigger({ onlyUnclassified: true }), msg("m", "Hola")];
+    expect(codes(nodes, [edge("t", "m")])).not.toContain("case_trigger_no_type");
+    // Sin esa casilla el aviso sigue.
+    expect(codes([caseTrigger({}), msg("m", "Hola")], [edge("t", "m")])).toContain("case_trigger_no_type");
+  });
+
+  it("B-12: las esperas y condiciones sueltas se nombran, no se llaman «Nodo»", () => {
+    const nodes: FlowNodeLike[] = [
+      trigger(),
+      msg("m", "Hola"),
+      { id: "w", type: "delay", data: {} },
+      { id: "c", type: "condition", data: {} },
+    ];
+    const messages = validateFlowGraph(nodes, [edge("t", "m")]).map((i) => i.message);
+    expect(messages.some((m) => m.includes("«Espera»"))).toBe(true);
+    expect(messages.some((m) => m.includes("«Condición»"))).toBe(true);
+    expect(messages.some((m) => m.includes("«Nodo»"))).toBe(false);
+  });
+});

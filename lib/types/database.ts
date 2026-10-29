@@ -264,6 +264,7 @@ export type ActivityType =
   | "next_action_set"
   | "automation_paused"
   | "automation_resumed"
+  | "contact_unsubscribed"
   | "config_changed"
   // Fase 2 (00021)
   | "off_hours_reply_sent"
@@ -1070,6 +1071,7 @@ export interface Database {
           status_at?: string | null;
           error_code?: number | null;
           error_text?: string | null;
+          sent_by_node_id?: string | null;
         };
         Relationships: [
           {

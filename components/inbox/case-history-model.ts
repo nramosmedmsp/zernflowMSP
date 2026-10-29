@@ -139,7 +139,7 @@ export function formatHistory(rows: readonly CaseHistoryRow[], lookup: HistoryLo
         break;
       }
       case "automation_paused":
-        text = `${actor} pausó el bot`;
+        text = meta.source === "flow" ? "Un flujo pasó la conversación a atención humana y pausó el bot" : `${actor} pausó el bot`;
         break;
       case "automation_resumed":
         text = who ? `${actor} reanudó el bot` : "Se reanudó el bot";

@@ -288,6 +288,7 @@ describe("textos en español para todos los tipos de actividad (M-30)", () => {
     first_response: true,
     next_action_set: true,
     automation_paused: true,
+    contact_unsubscribed: true,
     automation_resumed: true,
     config_changed: true,
     off_hours_reply_sent: true,

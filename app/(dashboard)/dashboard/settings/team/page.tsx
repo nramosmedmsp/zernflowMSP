@@ -3,12 +3,24 @@ import { getWorkspace } from "@/lib/workspace";
 import { TeamView } from "@/components/settings/team-view";
 import { createServiceClient } from "@/lib/supabase/server";
 import { isMailConfigured } from "@/lib/mail/settings";
+import { NoPermission } from "@/components/settings/cases/no-permission";
 import { canManageTeam, memberViewFromUser } from "@/lib/team-rules";
 
 export const metadata: Metadata = { title: "Equipo" };
 
 export default async function TeamPage() {
   const { workspace, user, role } = await getWorkspace();
+
+  // B-7: la lista de miembros (correos, roles, estado) es solo para el Dueño y
+  // los Administradores; se revisa en el servidor antes de consultar nada.
+  if (!canManageTeam(role)) {
+    return (
+      <NoPermission
+        title="Equipo"
+        message="Solo el Dueño o un Administrador pueden ver y administrar el equipo."
+      />
+    );
+  }
 
   // El cliente de servicio hace falta para ver a todos los miembros (la política
   // SELECT de workspace_members solo devuelve las filas propias) y para leer

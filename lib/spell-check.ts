@@ -212,12 +212,14 @@ export function replaceIssue(text: string, issue: SpellToken, replacement: strin
   return best ? apply(best.start, best.end) : null;
 }
 
+const WORD_MIN = 2;
 const WORD_MAX = 60;
 
 /** Palabra para el diccionario de la tienda: una sola, con letras, guion o apóstrofo. */
 export function cleanSpellWord(raw: string): { ok: true; word: string } | { ok: false; error: string } {
   const word = (raw ?? "").trim();
   if (!word) return { ok: false, error: "Escribe una palabra." };
+  if (word.length < WORD_MIN) return { ok: false, error: `La palabra debe tener al menos ${WORD_MIN} letras.` };
   if (word.length > WORD_MAX) return { ok: false, error: `La palabra puede tener hasta ${WORD_MAX} letras.` };
   if (!/^\p{L}[\p{L}'’-]*$/u.test(word)) return { ok: false, error: "Escribe una sola palabra, sin espacios ni números." };
   return { ok: true, word };
