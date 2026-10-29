@@ -84,6 +84,7 @@ export default async function TeamsSettingsPage() {
       isDefault: t.is_default,
       archived: t.archived_at !== null,
       assignmentMode: t.assignment_mode,
+      supervisorSkipsChats: t.supervisor_skips_chats === true,
       members: (teamMembers ?? [])
         .filter((tm) => tm.team_id === t.id)
         .map((tm) => ({ userId: tm.user_id, role: tm.role, caseTypeIds: tm.case_type_ids })),

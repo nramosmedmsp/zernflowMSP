@@ -405,6 +405,51 @@ describe("cron: plazo para registrar la solución", () => {
   });
 });
 
+describe("cron: plazo de la solución en horas hábiles (R2-10)", () => {
+  const WEEK = [["09:00", "18:00"]];
+  const setHours = () => {
+    fake.rows("workspaces")[0].settings = { business_hours: { mon: WEEK, tue: WEEK, wed: WEEK, thu: WEEK, fri: WEEK, sat: [], sun: [] } };
+  };
+  // Viernes 2026-10-16 17:00 de Lima = 22:00 UTC. NOW es martes 10:00 de Lima.
+  const FRIDAY_5PM = "2026-10-16T22:00:00.000Z";
+
+  it("no avisa a las 24 h de reloj si el fin de semana no cuenta", async () => {
+    setHours();
+    const c = openPostventa({ opened_at: FRIDAY_5PM });
+    expect((await notifySolutionDeadlines(db(), { deadline: deadline(), now: NOW })).alerted).toBe(0);
+    expect(row("cases", c.id).deadline_alerted_at).toBeNull();
+  });
+
+  it("avisa cuando se cumplen las 24 horas hábiles y lo dice en el aviso", async () => {
+    setHours();
+    const c = openPostventa({ opened_at: FRIDAY_5PM });
+    // 1 h del viernes + 9 h el lunes + 9 h el martes + 5 h del miércoles = miércoles 14:00 de Lima.
+    const justBefore = new Date("2026-10-21T18:59:00.000Z");
+    expect((await notifySolutionDeadlines(db(), { deadline: deadline(), now: justBefore })).alerted).toBe(0);
+    const due = new Date("2026-10-21T19:01:00.000Z");
+    expect((await notifySolutionDeadlines(db(), { deadline: deadline(), now: due })).alerted).toBe(1);
+    expect(row("cases", c.id).deadline_alerted_at).toBe(due.toISOString());
+    expect(notes("solution_overdue")[0].body).toContain("24 horas hábiles");
+    expect(activity("solution_overdue", c.id as string)[0].meta).toMatchObject({ business_hours: true });
+  });
+
+  it("sin horario configurado sigue contando horas de reloj", async () => {
+    const c = openPostventa({ opened_at: FRIDAY_5PM });
+    expect((await notifySolutionDeadlines(db(), { deadline: deadline(), now: NOW })).alerted).toBe(1);
+    expect(row("cases", c.id).deadline_alerted_at).toBe(NOW.toISOString());
+    expect(notes("solution_overdue")[0].body).toBe("Pasaron más de 24 h y nadie registró la solución ni la cerró.");
+  });
+
+  it("un feriado de la empresa no cuenta", async () => {
+    setHours();
+    fake.seed("holidays", [{ workspace_id: WS, team_id: null, date: "2026-10-19", name: "Feriado" }]);
+    openPostventa({ opened_at: FRIDAY_5PM });
+    // Con el lunes feriado el plazo se corre un día: miércoles 14:00 ya no vence, jueves 14:00 sí.
+    expect((await notifySolutionDeadlines(db(), { deadline: deadline(), now: new Date("2026-10-21T19:01:00.000Z") })).alerted).toBe(0);
+    expect((await notifySolutionDeadlines(db(), { deadline: deadline(), now: new Date("2026-10-22T19:01:00.000Z") })).alerted).toBe(1);
+  });
+});
+
 describe("cron: compromiso vencido", () => {
   it("avisa una vez por compromiso al responsable y a los supervisores", async () => {
     const c = openPostventa({

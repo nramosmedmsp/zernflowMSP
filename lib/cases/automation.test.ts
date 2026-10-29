@@ -496,6 +496,17 @@ describe("plantilla automática de las proactivas", () => {
     expect(stageName(caseById(caseId))).toBe("Por vencer");
   });
 
+  it("R2: quien pidió la baja no recibe la plantilla automática", async () => {
+    const caseId = await scheduledRenovacion();
+    fake.rows("contacts")[0].is_subscribed = false;
+    const m = messenger();
+    const r = await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(r).toMatchObject({ activated: 1, autoTemplates: { sent: 0, failed: 0 } });
+    expect(m.sendTemplate).not.toHaveBeenCalled();
+    expect(activity("auto_template_skipped", caseId)).toMatchObject([{ meta: { reason: "unsubscribed" } }]);
+    expect(caseById(caseId).auto_template_sent_at ?? null).toBeNull();
+  });
+
   it("un tipo sin plantilla no envía nada", async () => {
     await scheduledRenovacion();
     fake.rows("case_types").find((t) => t.name === "Renovación")!.auto_template = null;

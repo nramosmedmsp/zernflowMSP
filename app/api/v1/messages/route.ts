@@ -512,7 +512,7 @@ async function withLocalMeta(
   if (ids.length === 0) return messages;
   const { data, error } = await supabase
     .from("messages")
-    .select("platform_message_id, sent_by_user_id, sent_by_flow_id, status, error_text")
+    .select("platform_message_id, sent_by_user_id, sent_by_flow_id, sent_by_node_id, status, error_text")
     .eq("conversation_id", conversationId)
     .in("platform_message_id", ids);
   if (error) {

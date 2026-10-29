@@ -122,7 +122,8 @@ function questionItems(text: string, suggestions: Suggestion[]): { items: Omit<R
       end,
       from,
       to,
-      safe: true,
+      // Si la frase no es claramente una pregunta ("Cuando puedas me confirmas?") es dudosa.
+      safe: !mark.unsure && !words.some((w) => w.unsure),
       source: words.length > 0 ? "pregunta" : "signo",
       others: [],
       underline: wordsEnd > start ? { start, end: wordsEnd } : firstWordRange(text, start, end),
@@ -151,7 +152,7 @@ export function buildReviewItems(text: string, issues: readonly SpellIssue[], ig
       end: s.end,
       from: s.from,
       to: s.to,
-      safe: true,
+      safe: !s.unsure,
       source: s.source === "pregunta" ? "pregunta" : "lista",
       others: [],
       underline: { start: s.start, end: s.end },

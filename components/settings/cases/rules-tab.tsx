@@ -300,7 +300,7 @@ export function RulesTab({ type, data, run, busy }: TabProps) {
     <div className="space-y-4">
       <SectionTitle
         title="Reglas"
-        hint="Qué pasa en el CRM cuando una gestión de este tipo se abre, cambia de etapa o se cierra. Se aplican en este orden."
+        hint="Qué pasa en el CRM cuando una gestión de este tipo se abre, cambia de etapa o se cierra. Se aplican en este orden. Si varias reglas cambian el tipo de contacto, gana la más específica (la que pide más ganadas, p. ej. «desde la 3.ª» gana a «desde la 2.ª»); si empatan, la que está más abajo."
       />
 
       <ul className="space-y-2">

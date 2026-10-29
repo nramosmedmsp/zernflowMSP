@@ -118,10 +118,28 @@ export async function processComment({
 
   const config = matchedTrigger.config as unknown as CommentKeywordConfig;
 
+  // Se reclama el comentario ANTES de responder: si Zernio entrega el aviso dos
+  // veces a la vez, solo uno llega a publicar la respuesta y mandar el DM (R2-B13).
+  const claim = await supabase.from("comment_logs").insert({
+    channel_id: channel.id,
+    workspace_id: channel.workspace_id,
+    post_id: comment.postId,
+    platform_comment_id: comment.id,
+    author_id: comment.author.id || null,
+    author_name: comment.author.name || null,
+    author_username: comment.author.username || null,
+    comment_text: comment.text,
+    matched_trigger_id: matchedTrigger.id,
+  });
+  if (claim.error) {
+    if (claim.error.code === "23505") return { matched: false, skipped: "already_processed" };
+    console.error("[comments] no se pudo reclamar el comentario:", claim.error.message);
+  }
+
   try {
     const senderId = comment.author.id || `comment_${comment.id}`;
     const senderName =
-      comment.author.name || comment.author.username || "Unknown commenter";
+      comment.author.name || comment.author.username || "Comentarista de Instagram";
 
     let contactId: string;
     const { data: existingContactChannel } = await supabase
@@ -190,35 +208,47 @@ export async function processComment({
       }
     }
 
-    // Local conversation only — there is no Zernio DM conversation until the
-    // flow's privateReply node creates one, so late_conversation_id stays null
-    // and sendMessage nodes in comment flows are no-ops until the contact replies.
-    const { data: conversation } = await supabase
+    // Conversación local: todavía no existe un chat de mensajes directos en Zernio
+    // hasta que el flujo mande la respuesta privada. NO se toca la última
+    // actividad ni la vista previa: el comentario no es un mensaje del chat, y
+    // si el flujo no llega a enviar nada, la conversación no debe subir en la
+    // lista con un texto que nadie escribió ahí (R2-B12).
+    let conversationId: string | null = null;
+    const { data: existingConversation } = await supabase
       .from("conversations")
-      .upsert(
-        {
+      .select("id")
+      .eq("channel_id", channel.id)
+      .eq("contact_id", contactId)
+      .maybeSingle();
+    if (existingConversation) {
+      conversationId = existingConversation.id;
+    } else {
+      const { data: created } = await supabase
+        .from("conversations")
+        .insert({
           workspace_id: channel.workspace_id,
           channel_id: channel.id,
           contact_id: contactId,
           platform: channel.platform,
           status: "open",
-          last_message_at: new Date().toISOString(),
-          last_message_preview: `[Comment] ${comment.text.slice(0, 80)}`,
-        },
-        { onConflict: "channel_id,contact_id" },
-      )
-      .select("id")
-      .single();
+        })
+        .select("id")
+        .single();
+      conversationId = created?.id ?? null;
+    }
 
+    // "Enviado" solo si de verdad salió un mensaje del flujo (R2-B11).
     let dmSent = false;
-    if (conversation) {
+    let flowError: string | undefined;
+    if (conversationId) {
+      const startedAt = new Date(Date.now() - 10_000).toISOString(); // margen por si los relojes difieren
       try {
         await executeFlow(supabase, {
           triggerId: matchedTrigger.id,
           flowId: matchedTrigger.flow_id,
           channelId: channel.id,
           contactId,
-          conversationId: conversation.id,
+          conversationId,
           workspaceId: channel.workspace_id,
           lateAccountId: channel.late_account_id,
           incomingMessage: {
@@ -236,9 +266,11 @@ export async function processComment({
             post_id: comment.postId,
           },
         });
-        dmSent = true;
+        dmSent = await flowSentMessage(supabase, conversationId, matchedTrigger.flow_id, startedAt);
+        if (!dmSent) flowError = "El flujo no envió ningún mensaje al cliente";
       } catch (err) {
         console.error("Failed to execute comment flow:", err);
+        flowError = err instanceof Error ? err.message : "No se pudo ejecutar el flujo";
       }
     }
 
@@ -263,6 +295,7 @@ export async function processComment({
       triggerId: matchedTrigger.id,
       dmSent,
       replySent,
+      error: flowError,
     });
 
     return { matched: true, triggerId: matchedTrigger.id };
@@ -277,6 +310,25 @@ export async function processComment({
     });
     return { matched: true, triggerId: matchedTrigger.id, error: errorMessage };
   }
+}
+
+/** ¿Salió algún mensaje de este flujo en el chat desde `since`? */
+async function flowSentMessage(
+  supabase: SupabaseClient<Database>,
+  conversationId: string,
+  flowId: string,
+  since: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("messages")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .eq("direction", "outbound")
+    .eq("sent_by_flow_id", flowId)
+    .eq("status", "sent")
+    .gte("created_at", since)
+    .limit(1);
+  return (data?.length ?? 0) > 0;
 }
 
 async function logComment({

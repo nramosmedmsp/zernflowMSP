@@ -51,6 +51,41 @@ const withTeams = (extra: Partial<RoutingInput> = {}) =>
     ...extra,
   });
 
+describe("R2-17: «El supervisor no recibe chats»", () => {
+  const teams = (skip?: boolean) => [
+    { id: "sede-a", isDefault: true, assignmentMode: "round_robin" as const, supervisorsSkipChats: skip },
+  ];
+  const base = (skip?: boolean, extra: Partial<RoutingInput> = {}) =>
+    withTeams({ teams: teams(skip), ...extra });
+
+  it("por defecto los supervisores entran al reparto", () => {
+    const d = decideAssignment(base());
+    expect(d.kind === "pick" && d.candidates).toContain("sup");
+    expect(eligibleMembers(base(false), "sede-a").map((m) => m.userId)).toContain("sup");
+  });
+
+  it("encendido, el reparto automático los salta (y a los asesores no)", () => {
+    const members = eligibleMembers(base(true), "sede-a").map((m) => m.userId);
+    expect(members).not.toContain("sup");
+    expect(members).toContain("ana");
+    const d = decideAssignment(base(true));
+    expect(d.kind === "pick" && d.candidates).not.toContain("sup");
+  });
+
+  it("encendido, ni como responsable del contacto se le reparte solo", () => {
+    const d = decideAssignment(base(true, { contactOwnerId: "sup" }));
+    expect(d.kind).toBe("pick");
+    expect(d.kind === "pick" && d.candidates).not.toContain("sup");
+  });
+
+  it("si el equipo solo tiene supervisores y está encendido, queda sin elegibles", () => {
+    const onlySup = base(true, {
+      teamMembers: [{ teamId: "sede-a", userId: "sup", role: "supervisor", caseTypeIds: null }],
+    });
+    expect(decideAssignment(onlySup).kind).toBe("none");
+  });
+});
+
 describe("equipo de destino", () => {
   it("sin equipos no hay equipo", () => {
     expect(resolveTargetTeamId(input({ contactTeamId: "x" }))).toBeNull();

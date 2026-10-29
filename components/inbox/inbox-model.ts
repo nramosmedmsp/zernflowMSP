@@ -3,7 +3,14 @@
 // probarla con vitest (inbox-model.test.ts).
 
 import { limaDateOf } from "@/lib/cases/dates";
-import { claimBadge, claimPriority, type ClaimBadge, type SolutionCaseInput } from "@/lib/cases/protection";
+import {
+  claimBadge,
+  claimPriority,
+  solutionScheduleFor,
+  type ClaimBadge,
+  type SolutionCaseInput,
+  type SolutionSchedules,
+} from "@/lib/cases/protection";
 import type { Database, MemberAvailability, Platform, StageKind, TeamRole } from "@/lib/types/database";
 
 export type ContactRow = Database["public"]["Tables"]["contacts"]["Row"];
@@ -47,6 +54,8 @@ export interface InboxMeta {
   members: InboxMember[];
   /** Canales de prueba del espacio (lib/demo.ts): etiqueta "Prueba". */
   demoChannelIds?: string[];
+  /** Horarios para contar el plazo de la solución en horas hábiles (R2-10); ausente = reloj. */
+  solutionSchedules?: SolutionSchedules | null;
 }
 
 /** De quién son los chats que se ven ("Ver"). */
@@ -133,8 +142,9 @@ function sameLimaDay(iso: string | null, today: string): boolean {
 }
 
 /** Lo que el control de reclamos necesita de una gestión de la bandeja. */
-function solutionInput(c: InboxCase): SolutionCaseInput & { hasCloseRequest: boolean } {
+function solutionInput(c: InboxCase, schedules?: SolutionSchedules | null): SolutionCaseInput & { hasCloseRequest: boolean } {
   return {
+    solutionSchedule: solutionScheduleFor(schedules, c.team_id),
     status: c.status,
     openedAt: c.opened_at,
     solutionClockAt: c.solution_clock_at,
@@ -177,6 +187,7 @@ export function caseMatchesState(
   now: Date,
   /** Plazo de solución del tipo de la gestión (control de reclamos). */
   deadlineHours?: number | null,
+  schedules?: SolutionSchedules | null,
 ): boolean {
   switch (state) {
     case "waiting":
@@ -187,7 +198,7 @@ export function caseMatchesState(
       const due = !!c.next_action_at && limaDateOf(new Date(c.next_action_at)) <= today;
       const activatedToday = c.scheduled_for !== null && sameLimaDay(c.opened_at, today);
       // Postventa: el plazo para registrar la solución vencido también es seguimiento de hoy.
-      const claimOverdue = claimPriority(solutionInput(c), deadlineHours, now) === 2;
+      const claimOverdue = claimPriority(solutionInput(c, schedules), deadlineHours, now) === 2;
       return due || activatedToday || claimOverdue;
     }
     case "all":
@@ -399,9 +410,9 @@ export function buildRows(
   const rows: InboxRow[] = [];
   const typeOf = new Map(meta.caseTypes.map((t) => [t.id, t]));
   const deadlineOf = (c: InboxCase) => (c.case_type_id ? (typeOf.get(c.case_type_id)?.solutionDeadlineHours ?? null) : null);
-  const urgency = (c: InboxCase) => (c.status === "open" ? claimPriority(solutionInput(c), deadlineOf(c), now) : 0);
+  const urgency = (c: InboxCase) => (c.status === "open" ? claimPriority(solutionInput(c, meta.solutionSchedules), deadlineOf(c), now) : 0);
   const claimOf = (c: InboxCase | null): ClaimBadge | null =>
-    c && c.status === "open" ? claimBadge(solutionInput(c), deadlineOf(c), now) : null;
+    c && c.status === "open" ? claimBadge(solutionInput(c, meta.solutionSchedules), deadlineOf(c), now) : null;
   const otherProtectedOf = (shown: InboxCase | null, all: readonly InboxCase[]): string | null => {
     for (const c of all) {
       if (c === shown || c.id === shown?.id || c.status !== "open" || !c.case_type_id) continue;
@@ -420,7 +431,7 @@ export function buildRows(
     const contactTeamId = conversation.contacts?.team_id ?? null;
     const matching = all.filter(
       (c) => caseMatchesScope(c, scope, meta, contactTeamId) &&
-        caseMatchesState(c, state, now, deadlineOf(c)) &&
+        caseMatchesState(c, state, now, deadlineOf(c), meta.solutionSchedules) &&
         caseMatchesFilters(c, filters),
     );
 
@@ -525,16 +536,29 @@ export function memberName(members: readonly InboxMember[], userId: string | nul
   return members.find((m) => m.userId === userId)?.name ?? "Otra persona";
 }
 
+/** Nombre de la secuencia que envió el mensaje (sent_by_node_id = "sequence:<nombre>"); null si no fue una secuencia. */
+export function sequenceOriginName(nodeId: string | null | undefined): string | null {
+  return nodeId && nodeId.startsWith("sequence:") ? nodeId.slice("sequence:".length) || "Secuencia" : null;
+}
+
 /**
  * Quién envió un mensaje propio: "Tú", el nombre del asesor o "Bot · flujo".
  * null si no se sabe (por ejemplo, enviado desde otra app).
  */
 export function messageAuthor(
-  message: { direction: string; sent_by_user_id: string | null; sent_by_flow_id: string | null; flow_name?: string | null },
+  message: {
+    direction: string;
+    sent_by_user_id: string | null;
+    sent_by_flow_id: string | null;
+    sent_by_node_id?: string | null;
+    flow_name?: string | null;
+  },
   members: readonly InboxMember[],
   meId: string,
 ): string | null {
   if (message.direction !== "outbound") return null;
+  const sequence = sequenceOriginName(message.sent_by_node_id);
+  if (sequence !== null) return `Secuencia · ${sequence}`;
   if (message.sent_by_flow_id) return message.flow_name ? `Bot · ${message.flow_name}` : "Bot";
   if (!message.sent_by_user_id) return null;
   if (message.sent_by_user_id === meId) return "Tú";

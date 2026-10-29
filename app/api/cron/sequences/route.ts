@@ -5,7 +5,7 @@ import { processSequenceSteps } from "@/lib/sequence-processor";
 /**
  * Cron job handler that processes sequence enrollments.
  * Call via Vercel Cron or external cron every 30-60 seconds.
- * GET /api/cron/sequences?key=CRON_SECRET
+ * GET /api/cron/sequencescon la cabecera Authorization: Bearer CRON_SECRET
  */
 export async function GET(request: NextRequest) {
   if (!isCronAuthorized(request)) {

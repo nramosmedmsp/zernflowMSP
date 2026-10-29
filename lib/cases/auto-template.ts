@@ -41,7 +41,7 @@ export type { AutoTemplateVars };
 export type AutoTemplateOutcome =
   | { status: "none" }
   | { status: "sent"; params: string[] }
-  | { status: "skipped"; reason: "not_open" | "already_sent" | "no_whatsapp_channel" | "no_phone" }
+  | { status: "skipped"; reason: "not_open" | "already_sent" | "no_whatsapp_channel" | "no_phone" | "unsubscribed" }
   | { status: "failed"; error: string };
 
 interface WhatsAppTarget {
@@ -107,6 +107,12 @@ export async function sendAutoTemplate(
   const contact = await loadContact(db, row.workspace_id, row.contact_id);
   if (!contact) return { status: "skipped", reason: "not_open" };
   const base = { workspace_id: row.workspace_id, case_id: row.id, contact_id: row.contact_id };
+
+  // R2: quien pidió la baja no recibe la plantilla automática (igual que flujos, difusiones y secuencias).
+  if (contact.is_subscribed === false) {
+    await logActivity(db, { ...base, type: "auto_template_skipped", meta: { template_name: template.template_name, reason: "unsubscribed" } });
+    return { status: "skipped", reason: "unsubscribed" };
+  }
 
   const target = await whatsappTarget(db, row.workspace_id, contact.id, contact.phone);
   if (!target.lateAccountId || !target.phone) {

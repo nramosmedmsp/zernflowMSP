@@ -8,6 +8,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getWorkspace } from "@/lib/workspace";
+import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import {
   checkHolidayInput,
@@ -74,14 +75,9 @@ export async function saveCompanyHours(workspaceId: string, hours: unknown): Pro
   }
 
   const settings = mergeBusinessHoursSettings(current.settings, checked.value) as Json;
-  const { error } = await ctx.supabase
-    .from("workspaces")
-    .update({ settings })
-    .eq("id", ctx.workspaceId)
-    .select("id")
-    .single();
+  const error = await mergeWorkspaceSettings(ctx.supabase, ctx.workspaceId, current.settings, settings);
   if (error) {
-    console.error("[saveCompanyHours]", error.message);
+    console.error("[saveCompanyHours]", error);
     return { error: GENERIC_ERROR };
   }
   revalidatePath(PATH);

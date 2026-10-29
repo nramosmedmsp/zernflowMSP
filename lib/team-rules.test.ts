@@ -52,7 +52,7 @@ describe("removeMemberError", () => {
     expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "member" })).toBeNull();
     expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "admin" })).toBeNull();
     expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "member" })).toBeNull();
-    expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "admin" })).toBeNull();
+    expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "admin" })).toMatch(/Solo el Dueño puede quitar a un Administrador/);
   });
 
   it("nadie puede quitar al Dueño", () => {

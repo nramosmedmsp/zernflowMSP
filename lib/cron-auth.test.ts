@@ -14,9 +14,12 @@ describe("isCronAuthorized", () => {
     else process.env.CRON_SECRET = original;
   });
 
-  it("acepta la clave en la cabecera (como la manda Vercel) y en ?key=", () => {
+  it("acepta la clave en la cabecera (como la manda Vercel)", () => {
     expect(isCronAuthorized(req("http://x/api/cron/jobs", { authorization: "Bearer secreto-largo" }))).toBe(true);
-    expect(isCronAuthorized(req("http://x/api/cron/jobs?key=secreto-largo"))).toBe(true);
+  });
+
+  it("B-8: ya no acepta la clave en la URL (?key=)", () => {
+    expect(isCronAuthorized(req("http://x/api/cron/jobs?key=secreto-largo"))).toBe(false);
   });
 
   it("rechaza clave ausente, equivocada o de otro largo", () => {

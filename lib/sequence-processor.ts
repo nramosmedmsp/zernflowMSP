@@ -7,6 +7,16 @@ import {
   type DeliveryResult,
 } from "@/lib/broadcasts/delivery";
 import { decideStepSend } from "@/lib/broadcasts/sequence-step";
+import { messagePreview } from "@/lib/message-preview";
+import { loadStepSchedule } from "@/lib/sequences/schedule";
+import {
+  SEQUENCE_ORIGIN_PREFIX,
+  isSendStep,
+  nextSendTime,
+  resolveStepIndex,
+  stepDueAt,
+  type StepSchedule,
+} from "@/lib/sequences/steps";
 import type { Json, SequenceStep } from "@/lib/types/database";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
@@ -33,13 +43,14 @@ export async function processSequenceSteps() {
 
   let processed = 0;
   let failed = 0;
+  const schedules = new ScheduleCache(supabase);
 
   for (const enrollment of enrollments) {
     try {
       // Dos pasadas del cron a la vez no deben enviar el mismo paso dos veces:
       // quien no logra tomar la inscripción la deja.
       if (!(await claimEnrollment(supabase, enrollment))) continue;
-      await processEnrollment(supabase, enrollment);
+      await processEnrollment(supabase, enrollment, schedules);
       processed++;
     } catch (err) {
       console.error(
@@ -77,6 +88,23 @@ async function claimEnrollment(supabase: ServiceClient, enrollment: { id: string
   return !!data && data.length > 0;
 }
 
+/** Horario de atención por empresa, leído una sola vez por pasada del cron. */
+class ScheduleCache {
+  private cache = new Map<string, Promise<StepSchedule | null>>();
+  constructor(private db: ServiceClient) {}
+  get(workspaceId: string): Promise<StepSchedule | null> {
+    let hit = this.cache.get(workspaceId);
+    if (!hit) {
+      hit = loadStepSchedule(this.db, workspaceId);
+      this.cache.set(workspaceId, hit);
+    }
+    return hit;
+  }
+}
+
+/** Una secuencia en pausa (o en borrador) no avanza: se vuelve a mirar en este tiempo. */
+const PAUSED_RECHECK_MS = 5 * 60 * 1000;
+
 async function processEnrollment(
   supabase: ServiceClient,
   enrollment: {
@@ -85,22 +113,35 @@ async function processEnrollment(
     contact_id: string;
     channel_id: string;
     current_step_index: number;
+    current_step_id?: string | null;
     next_step_at?: string | null;
     sequences: {
       id: string;
       workspace_id: string;
+      name?: string | null;
       steps: unknown;
       status: string;
     } | null;
-  }
+  },
+  schedules: ScheduleCache,
 ) {
   const sequence = enrollment.sequences;
-  if (!sequence || sequence.status !== "active") {
-    // Sequence was paused/deleted, cancel enrollment
+  if (!sequence) {
+    // La secuencia se borró.
     await supabase
       .from("sequence_enrollments")
-      .update({ status: "cancelled" })
+      .update({ status: "cancelled", next_step_at: null })
       .eq("id", enrollment.id);
+    return;
+  }
+  if (sequence.status !== "active") {
+    // En pausa (o de vuelta a borrador): la inscripción se conserva tal cual y
+    // sigue donde iba cuando la secuencia se active otra vez (R2-B1).
+    await supabase
+      .from("sequence_enrollments")
+      .update({ next_step_at: new Date(Date.now() + PAUSED_RECHECK_MS).toISOString() })
+      .eq("id", enrollment.id)
+      .eq("status", "active");
     return;
   }
 
@@ -118,7 +159,9 @@ async function processEnrollment(
   }
 
   const steps = (sequence.steps as SequenceStep[]) || [];
-  const stepIndex = enrollment.current_step_index;
+  // Los pasos se pueden haber editado desde que la persona entró: se busca su
+  // paso por id y no por posición (R2-B3).
+  const stepIndex = resolveStepIndex(steps, enrollment);
 
   if (stepIndex >= steps.length) {
     // No more steps, complete the enrollment
@@ -127,14 +170,56 @@ async function processEnrollment(
       .update({
         status: "completed",
         completed_at: new Date().toISOString(),
+        next_step_at: null,
       })
       .eq("id", enrollment.id);
     return;
   }
 
   const currentStep = steps[stepIndex];
+  const schedule = await schedules.get(sequence.workspace_id);
+  const now = new Date();
 
-  if (currentStep.type === "message" || currentStep.type === "template") {
+  // Fuera del horario de atención no se manda nada: el paso espera a la próxima
+  // hora hábil (R2-B20). Las esperas sí corren en horas de reloj.
+  if (isSendStep(currentStep)) {
+    const sendAt = nextSendTime(now, schedule);
+    if (sendAt.getTime() > now.getTime()) {
+      await rescheduleEnrollment(supabase, enrollment.id, sendAt);
+      return;
+    }
+  }
+
+  // Se avanza ANTES de enviar (y se comprueba): si el avance no se pudo guardar
+  // no se envía nada y no se repite el paso; si el proceso se cae a mitad de
+  // envío, ese paso no se vuelve a mandar (R2-B19).
+  const nextIndex = stepIndex + 1;
+  const nextStep = steps[nextIndex];
+  const advance =
+    nextIndex >= steps.length
+      ? {
+          current_step_index: nextIndex,
+          current_step_id: null,
+          status: "completed" as const,
+          completed_at: now.toISOString(),
+          next_step_at: null,
+        }
+      : {
+          current_step_index: nextIndex,
+          current_step_id: nextStep.id ?? null,
+          next_step_at: stepDueAt(nextStep, now, schedule).toISOString(),
+        };
+  const { data: advanced, error: advanceError } = await supabase
+    .from("sequence_enrollments")
+    .update(advance)
+    .eq("id", enrollment.id)
+    .eq("status", "active")
+    .select("id");
+  if (advanceError) throw new Error(`No se pudo avanzar la inscripción: ${advanceError.message}`);
+  // La cancelaron mientras tanto: no se envía.
+  if (!advanced || advanced.length === 0) return;
+
+  if (isSendStep(currentStep)) {
     // Comportamiento ante un paso fallido (igual que antes de la fase 2): el
     // fallo se registra (activity 'sequence_step_failed' con el motivo) y la
     // inscripción SIGUE con el paso siguiente; un paso fallido no detiene ni
@@ -142,6 +227,7 @@ async function processEnrollment(
     await runMessageStep(supabase, {
       enrollmentId: enrollment.id,
       sequenceId: sequence.id,
+      sequenceName: sequence.name ?? null,
       workspaceId: sequence.workspace_id,
       contactId: enrollment.contact_id,
       channelId: enrollment.channel_id,
@@ -149,50 +235,22 @@ async function processEnrollment(
       step: currentStep,
     });
   }
-  // Delay steps don't need action; they just waited until next_step_at
+  // Las esperas no hacen nada: solo esperaron hasta next_step_at.
+}
 
-  // Advance to next step
-  const nextIndex = stepIndex + 1;
-
-  if (nextIndex >= steps.length) {
-    // Completed
-    await supabase
-      .from("sequence_enrollments")
-      .update({
-        current_step_index: nextIndex,
-        status: "completed",
-        completed_at: new Date().toISOString(),
-        next_step_at: null,
-      })
-      .eq("id", enrollment.id);
-    return;
-  }
-
-  // Calculate next_step_at based on the next step
-  const nextStep = steps[nextIndex];
-  let nextStepAt: string;
-
-  if (nextStep.type === "delay" && nextStep.delayMinutes) {
-    nextStepAt = new Date(
-      Date.now() + nextStep.delayMinutes * 60 * 1000
-    ).toISOString();
-  } else {
-    // Next step is a message, execute it on the next cron tick
-    nextStepAt = new Date().toISOString();
-  }
-
-  await supabase
+async function rescheduleEnrollment(supabase: ServiceClient, enrollmentId: string, at: Date): Promise<void> {
+  const { error } = await supabase
     .from("sequence_enrollments")
-    .update({
-      current_step_index: nextIndex,
-      next_step_at: nextStepAt,
-    })
-    .eq("id", enrollment.id);
+    .update({ next_step_at: at.toISOString() })
+    .eq("id", enrollmentId)
+    .eq("status", "active");
+  if (error) throw new Error(error.message);
 }
 
 interface MessageStepParams {
   enrollmentId: string;
   sequenceId: string;
+  sequenceName?: string | null;
   workspaceId: string;
   contactId: string;
   channelId: string;
@@ -234,13 +292,25 @@ async function runMessageStep(supabase: ServiceClient, p: MessageStepParams): Pr
 
     // Mensaje saliente en la conversación (si ya existe una).
     if (ctx.conversation) {
+      const shownText = result.ok && result.text ? result.text : storedText;
       await supabase.from("messages").insert({
         conversation_id: ctx.conversation.id,
         direction: "outbound",
-        text: result.ok && result.text ? result.text : storedText,
+        text: shownText,
         status: result.ok ? "sent" : "failed",
         platform_message_id: result.ok ? result.messageId : null,
+        // Origen visible en el chat: "Secuencia · nombre" (R2-B5).
+        sent_by_node_id: `${SEQUENCE_ORIGIN_PREFIX}${p.sequenceName?.trim() || "Secuencia"}`,
       });
+      // La conversación sube en la lista y el chat abierto se refresca.
+      const { error: touchError } = await supabase
+        .from("conversations")
+        .update({
+          last_message_at: new Date().toISOString(),
+          ...(result.ok ? { last_message_preview: messagePreview(shownText) } : {}),
+        })
+        .eq("id", ctx.conversation.id);
+      if (touchError) console.error("[sequences] no se pudo actualizar la conversación:", touchError.message);
     }
     if (!result.ok) await recordStepFailure(supabase, p, ctx.conversation?.id ?? null, result.error);
   } catch (err) {

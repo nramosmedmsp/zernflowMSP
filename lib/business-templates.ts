@@ -15,6 +15,7 @@ import type {
   StageKind,
 } from "@/lib/types/database";
 import { logActivity, type Db as SupabaseDb } from "@/lib/cases/io";
+import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 
 // ── Datos ──────────────────────────────────────────────────────────────────
 
@@ -624,10 +625,19 @@ export function supabaseTemplateStore(db: SupabaseDb): TemplateStore {
       throwOn((await db.from("case_rules").insert(rows)).error, "insert case_rules");
     },
     async saveSettings(workspaceId, settings) {
-      throwOn(
-        (await db.from("workspaces").update({ settings: settings as Json }).eq("id", workspaceId)).error,
-        "save settings",
-      );
+      // Se compara con lo que hay AHORA en la base (no con lo leído al empezar): solo se envían las claves
+      // que la plantilla cambia, así no se pisan ajustes guardados mientras tanto.
+      const { data: fresh } = await db.from("workspaces").select("settings").eq("id", workspaceId).maybeSingle();
+      const current: Record<string, unknown> =
+        fresh?.settings && typeof fresh.settings === "object" && !Array.isArray(fresh.settings)
+          ? (fresh.settings as Record<string, unknown>)
+          : {};
+      const next = { ...current };
+      for (const key of ["business_template", "key_date_label"]) {
+        if (key in settings) next[key] = settings[key];
+      }
+      const message = await mergeWorkspaceSettings(db, workspaceId, current, next);
+      if (message) throw new Error(`save settings: ${message}`);
     },
   };
 }

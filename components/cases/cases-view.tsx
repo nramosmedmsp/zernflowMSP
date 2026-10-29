@@ -21,7 +21,7 @@ import {
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import type { CaseListRow } from "@/app/(dashboard)/dashboard/cases/load-cases";
-import { claimBadge } from "@/lib/cases/protection";
+import { claimBadge, solutionScheduleFor, type SolutionSchedules } from "@/lib/cases/protection";
 import type { CaseStatus } from "@/lib/types/database";
 
 interface CaseTypeOption {
@@ -44,6 +44,8 @@ interface PersonOption {
 }
 
 export interface CasesViewProps {
+  /** Horarios para contar el plazo de la solución en horas hábiles (R2-10). */
+  solutionSchedules?: SolutionSchedules | null;
   rows: CaseListRow[];
   total: number;
   page: number;
@@ -365,6 +367,7 @@ export function CasesView(props: CasesViewProps) {
                   {
                     status: row.status,
                     openedAt: row.openedAt,
+                    solutionSchedule: solutionScheduleFor(props.solutionSchedules, row.teamId),
                     solutionClockAt: row.solutionClockAt,
                     solutionStatus: row.solutionStatus,
                     solutionNote: row.solutionNote,

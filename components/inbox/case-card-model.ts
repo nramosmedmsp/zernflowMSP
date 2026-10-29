@@ -186,7 +186,7 @@ export function solutionBanner(
     case "pending":
       return {
         tone: "amber",
-        text: `${input.typeName}: registra la solución antes de ${relativeDayTime(new Date(state.dueAt), now)} (quedan ${formatSpan(state.msLeft, { round: "up" })})`,
+        text: `${input.typeName}: registra la solución antes de ${relativeDayTime(new Date(state.dueAt), now)} (quedan ${formatSpan(state.businessMsLeft ?? state.msLeft, { round: "up" })}${state.businessMsLeft === undefined ? "" : " hábiles"})`,
         action: "register",
         actionLabel: "Registrar solución",
       };

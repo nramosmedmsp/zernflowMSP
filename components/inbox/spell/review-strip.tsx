@@ -170,6 +170,8 @@ export function ReviewStrip({
   onSendAsIs,
   onApplySafeAndSend,
   onDisable,
+  reviewOff = false,
+  onEnable,
 }: {
   items: ReviewItem[];
   /** Modo revisión: se intentó enviar con cosas pendientes. */
@@ -186,6 +188,10 @@ export function ReviewStrip({
   onSendAsIs: () => void;
   onApplySafeAndSend: () => void;
   onDisable: () => void;
+  /** La revisión ortográfica está apagada en este equipo (solo se revisan las {variables}). */
+  reviewOff?: boolean;
+  /** Vuelve a encender la revisión ortográfica. */
+  onEnable?: () => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -278,19 +284,36 @@ export function ReviewStrip({
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-800 dark:text-amber-300">
           <span>Enter envía cuando no quede nada · Ctrl+Enter: enviar así</span>
-          <button
-            type="button"
-            onClick={onDisable}
-            className="underline-offset-2 hover:text-foreground hover:underline"
-          >
-            No volver a revisar en este equipo
-          </button>
+          {!reviewOff && (
+            <button
+              type="button"
+              onClick={onDisable}
+              className="underline-offset-2 hover:text-foreground hover:underline"
+            >
+              No volver a revisar en este equipo
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
-  if (items.length === 0) return null;
+  const offLine =
+    reviewOff && onEnable ? (
+      <p className="text-[11px] text-muted-foreground">
+        La revisión ortográfica está apagada en este equipo.{" "}
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onEnable}
+          className="font-medium underline underline-offset-2 hover:text-foreground"
+        >
+          Activar
+        </button>
+      </p>
+    ) : null;
+
+  if (items.length === 0) return offLine;
   const shown = items.slice(0, MAX_CHIPS);
   return (
     <div ref={rootRef} className="flex flex-wrap items-center gap-1.5" aria-label="Cosas por revisar">
@@ -310,6 +333,7 @@ export function ReviewStrip({
           Corregir las seguras ({safeCount})
         </button>
       )}
+      {offLine && <div className="basis-full">{offLine}</div>}
     </div>
   );
 }

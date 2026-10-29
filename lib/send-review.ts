@@ -98,6 +98,36 @@ const QUESTION_WORDS: Readonly<Record<string, string>> = {
   cuales: "cuáles",
 };
 
+/** Lo que suele seguir a "cómo / cuándo / dónde / qué…" en una pregunta corta de verdad. */
+const QUESTION_CONTINUATIONS: ReadonlySet<string> = new Set([
+  "estas", "estás", "esta", "está", "estan", "están", "es", "son", "fue", "fueron", "sale", "salen", "cuesta", "cuestan",
+  "llega", "llegan", "tiene", "tienen", "hay", "puedo", "puedes", "puede", "pueden", "podemos", "podria", "podría", "seria",
+  "sería", "queda", "quedan", "viene", "vienen", "va", "van", "tal", "hora", "precio", "costo", "se", "te", "lo", "la", "me",
+]);
+
+/** Siempre preguntas cuando la frase termina en "?": no son conjunciones. */
+const NEVER_CONJUNCTION = new Set(["cuanto", "cuanta", "cuantos", "cuantas", "cuánto", "cuánta", "cuántos", "cuántas"]);
+
+/**
+ * ¿Es claramente una pregunta que abre con esa palabra? "Cuando puedas me
+ * confirmas?" no: ahí "cuando" es una conjunción y poner tilde o ¿ al inicio la
+ * dejaría mal. Con una palabra interrogativa ambigua (cuando, como, donde,
+ * que…) solo es segura si la frase es muy corta o sigue un patrón conocido
+ * ("¿cómo estás?", "¿qué hora es?"). Sin palabra interrogativa al inicio no
+ * hay ambigüedad.
+ */
+function isClearQuestion(text: string, s: Sentence): boolean {
+  const at = openingAt(text, s);
+  const body = text.slice(at, s.end).replace(/[\s?!.]+$/, "");
+  const words = body.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const first = (words[0] ?? "").toLowerCase();
+  if (!(first in QUESTION_WORDS) && !Object.values(QUESTION_WORDS).includes(first)) return true;
+  if (NEVER_CONJUNCTION.has(first)) return true;
+  if (words.length <= 3) return true;
+  const second = (words[1] ?? "").toLowerCase();
+  return QUESTION_CONTINUATIONS.has(second) && words.length <= 6;
+}
+
 /**
  * Dónde empieza de verdad la frase: la primera palabra, o la que sigue a un
  * saludo con coma ("Hola Ana, como estas?" → "como").
@@ -175,6 +205,8 @@ function wordFixes(text: string, masked: Array<[number, number]>, list: Sentence
       to: matchCase(w.value, to),
       kind: "word",
       source,
+      // Una frase que no es claramente una pregunta queda como "dudosa" (R2-B17).
+      ...(source === "pregunta" && sentence && !isClearQuestion(text, sentence) ? { unsure: true } : {}),
     });
   });
 
@@ -217,6 +249,7 @@ function markFixes(text: string, masked: Array<[number, number]>, list: Sentence
       to: opening,
       kind: "mark",
       preview: { before: sentenceText, after: opening + sentenceText },
+      ...(s.closing === "?" && !isClearQuestion(text, s) ? { unsure: true } : {}),
     });
   }
   return out;

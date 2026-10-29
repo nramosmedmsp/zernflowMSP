@@ -7,6 +7,8 @@ import { getWorkspace } from "@/lib/workspace";
 import { revalidatePath } from "next/cache";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { validateSequenceSteps } from "@/lib/broadcasts/sequence-step";
+import { enrollInSequence } from "@/lib/sequences/enroll";
+import { ensureStepIds } from "@/lib/sequences/steps";
 import type { SequenceStep } from "@/lib/types/database";
 
 const GENERIC_ERROR = "No se pudo completar la operación. Inténtalo de nuevo.";
@@ -63,11 +65,16 @@ export async function updateSequence(
     if (problem) return { error: problem };
   }
 
+  // Cada paso lleva un id estable: las inscripciones activas lo usan para seguir
+  // en su paso aunque se agreguen, quiten o reordenen pasos (R2-B3).
+  const stepsWithIds = updates.steps ? ensureStepIds(updates.steps) : undefined;
+  if (stepsWithIds) await stampLegacyEnrollments(supabase, sequenceId, existing.steps, stepsWithIds);
+
   const { data, error } = await supabase
     .from("sequences")
     .update({
       ...updates,
-      steps: updates.steps ? JSON.parse(JSON.stringify(updates.steps)) : undefined,
+      steps: stepsWithIds ? JSON.parse(JSON.stringify(stepsWithIds)) : undefined,
       updated_at: new Date().toISOString(),
     })
     .eq("id", sequenceId)
@@ -134,39 +141,21 @@ export async function enrollContact(
   const steps = (sequence.steps as unknown as SequenceStep[]) || [];
   if (steps.length === 0) return { error: "La secuencia no tiene pasos" };
 
-  // Calcular next_step_at según el primer paso
-  let nextStepAt: string;
-  const firstStep = steps[0];
-  if (firstStep.type === "delay" && firstStep.delayMinutes) {
-    nextStepAt = new Date(
-      Date.now() + firstStep.delayMinutes * 60 * 1000
-    ).toISOString();
-  } else {
-    // Paso de mensaje: se ejecuta de inmediato
-    nextStepAt = new Date().toISOString();
-  }
-
-  const { data, error } = await supabase
-    .from("sequence_enrollments")
-    .insert({
-      sequence_id: sequenceId,
-      contact_id: contactId,
-      channel_id: channelId,
-      next_step_at: nextStepAt,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    if (error.code === "23505") {
-      return { error: "El contacto ya está inscrito en esta secuencia" };
-    }
-    console.error("[sequences] enroll", error.message);
+  const result = await enrollInSequence(supabase, {
+    workspaceId: workspace.id,
+    sequenceId,
+    steps,
+    contactId,
+    channelId,
+  });
+  if (!result.ok) {
+    if (result.reason === "already_active") return { error: "El contacto ya está inscrito en esta secuencia" };
+    console.error("[sequences] enroll", result.error);
     return { error: GENERIC_ERROR };
   }
 
   revalidatePath(`/dashboard/sequences/${sequenceId}`);
-  return { ok: true, enrollment: data };
+  return { ok: true, reactivated: result.reactivated };
 }
 
 export async function cancelEnrollment(enrollmentId: string) {
@@ -199,4 +188,31 @@ export async function cancelEnrollment(enrollmentId: string) {
 
   revalidatePath(`/dashboard/sequences/${enrollment.sequence_id}`);
   return { ok: true };
+}
+
+/**
+ * Inscripciones anteriores a los ids de paso (current_step_id vacío): se les
+ * sella el id del paso en el que van para que esta edición no las desordene.
+ * Si los pasos viejos ya tenían id se usa ese; si no, se asume que el paso en
+ * esa posición sigue siendo el mismo en la lista nueva (edición sin reordenar).
+ */
+async function stampLegacyEnrollments(
+  supabase: Awaited<ReturnType<typeof getWorkspace>>["supabase"],
+  sequenceId: string,
+  oldSteps: unknown,
+  newSteps: readonly SequenceStep[],
+) {
+  const { data: legacy } = await supabase
+    .from("sequence_enrollments")
+    .select("id, current_step_index")
+    .eq("sequence_id", sequenceId)
+    .eq("status", "active")
+    .is("current_step_id", null);
+  if (!legacy || legacy.length === 0) return;
+  const old = (Array.isArray(oldSteps) ? oldSteps : []) as SequenceStep[];
+  for (const e of legacy) {
+    const id = old[e.current_step_index]?.id ?? newSteps[e.current_step_index]?.id ?? null;
+    if (!id) continue;
+    await supabase.from("sequence_enrollments").update({ current_step_id: id }).eq("id", e.id);
+  }
 }

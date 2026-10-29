@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PERU_HOLIDAYS,
+  addBusinessMinutes,
   businessMinutesBetween,
   easterSunday,
   effectiveBusinessHours,
@@ -251,5 +252,40 @@ describe("lectura y validación", () => {
     expect(parseReassignAfterMinutes(0)).toBeNull();
     expect(parseReassignAfterMinutes(1.5)).toBeNull();
     expect(parseReassignAfterMinutes(null)).toBeNull();
+  });
+});
+
+describe("addBusinessMinutes (R2-10)", () => {
+  it("sin horario son minutos de reloj", () => {
+    expect(addBusinessMinutes(lima("2026-10-16", "10:00"), 90, null)?.toISOString()).toBe(lima("2026-10-16", "11:30").toISOString());
+  });
+
+  it("dentro del mismo tramo", () => {
+    expect(addBusinessMinutes(lima("2026-10-16", "09:30"), 60, STORE)?.toISOString()).toBe(lima("2026-10-16", "10:30").toISOString());
+  });
+
+  it("salta el almuerzo y el cierre de la tarde hasta el día hábil siguiente", () => {
+    // 12:00 + 2 h: 1 h hasta las 13:00 y 1 h desde las 14:00.
+    expect(addBusinessMinutes(lima("2026-10-16", "12:00"), 120, STORE)?.toISOString()).toBe(lima("2026-10-16", "15:00").toISOString());
+    // Viernes 18:00 + 2 h: 1 h hasta las 19:00 y 1 h el sábado desde las 09:00.
+    expect(addBusinessMinutes(lima("2026-10-16", "18:00"), 120, STORE)?.toISOString()).toBe(lima("2026-10-17", "10:00").toISOString());
+  });
+
+  it("empieza a contar en la próxima apertura si se pide fuera de horario y respeta feriados", () => {
+    // Sábado 14:00 (cerrado) + 1 h: domingo cerrado, lunes 09:00 -> 10:00.
+    expect(addBusinessMinutes(lima("2026-10-17", "14:00"), 60, STORE)?.toISOString()).toBe(lima("2026-10-19", "10:00").toISOString());
+    // Si el lunes es feriado, pasa al martes.
+    expect(addBusinessMinutes(lima("2026-10-17", "14:00"), 60, STORE, ["2026-10-19"])?.toISOString()).toBe(lima("2026-10-20", "10:00").toISOString());
+  });
+
+  it("es el inverso de businessMinutesBetween, también a través de semanas", () => {
+    const from = lima("2026-10-14", "11:00");
+    const due = addBusinessMinutes(from, 24 * 60, STORE)!;
+    expect(businessMinutesBetween(from, due, STORE)).toBeCloseTo(24 * 60, 3);
+  });
+
+  it("null si el horario nunca abre", () => {
+    const days = Array.from({ length: 80 }, (_, i) => new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10));
+    expect(addBusinessMinutes(lima("2026-10-16", "10:00"), 60, { mon: [["09:00", "10:00"]] } as BusinessHours, new Set(days))).not.toBeNull();
   });
 });

@@ -179,3 +179,24 @@ describe("underlineMarks", () => {
     expect(underlineMarks([...items, ...items])).toHaveLength(1);
   });
 });
+
+describe("preguntas dudosas (R2-B17)", () => {
+  it("una frase que no es claramente una pregunta no se corrige sola", async () => {
+    const { buildReviewItems, safeReviewItems } = await import("./review-items");
+    const items = buildReviewItems("Cuando puedas me confirmas?", []);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((i) => !i.safe)).toBe(true);
+    expect(safeReviewItems(items)).toEqual([]);
+  });
+
+  it("las preguntas claras siguen siendo seguras", async () => {
+    const { buildReviewItems, safeReviewItems } = await import("./review-items");
+    for (const text of ["Hola Ana, como estas?", "Que hora es?", "Cuanto cuesta el envio de la proteina?", "Tienes stock?"]) {
+      const items = buildReviewItems(text, []);
+      const questionItems = items.filter((i) => i.source === "pregunta" || i.source === "signo");
+      expect(questionItems.length, text).toBeGreaterThan(0);
+      expect(questionItems.every((i) => i.safe), text).toBe(true);
+      expect(safeReviewItems(questionItems).length).toBe(questionItems.length);
+    }
+  });
+});

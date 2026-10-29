@@ -19,7 +19,15 @@ import {
   type CasePermissions,
 } from "@/lib/cases/access";
 import { isDateString } from "@/lib/cases/dates";
-import { claimPriority, isCaseSupervisor, parseCloseRequest } from "@/lib/cases/protection";
+import {
+  claimPriority,
+  isCaseSupervisor,
+  parseCloseRequest,
+  solutionScheduleFor,
+  type SolutionSchedule,
+  type SolutionSchedules,
+} from "@/lib/cases/protection";
+import { loadSolutionSchedules } from "@/lib/cases/hours";
 import { GENERIC_ERROR, type CaseRow, type Db } from "@/lib/cases/io";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor, type WorkspaceActor } from "@/lib/cases/visibility";
 import { isOutcomeKind } from "@/lib/cases/rules";
@@ -81,6 +89,8 @@ export interface CaseView {
   solutionBy: string | null;
   /** Desde cuándo corre el plazo de la solución (null = desde que se abrió). */
   solutionClockAt: string | null;
+  /** Horario con el que se cuentan las horas hábiles del plazo (null = horas de reloj). */
+  solutionSchedule: SolutionSchedule | null;
   /** Pedido de cierre «sin solución» esperando a un supervisor. */
   closeRequest: CloseRequestView | null;
   /** Último pedido de cierre que un supervisor rechazó (con su comentario), mientras no haya otro pedido. */
@@ -295,6 +305,7 @@ function toCaseView(
   permissions: CasePermissions,
   canSupervise: boolean,
   lastRejection: CaseView["lastRejection"] = null,
+  schedules: SolutionSchedules | null = null,
 ): CaseView {
   return {
     id: row.id,
@@ -327,6 +338,7 @@ function toCaseView(
     solutionAt: row.solution_at ?? null,
     solutionBy: row.solution_by ?? null,
     solutionClockAt: row.solution_clock_at ?? null,
+    solutionSchedule: solutionScheduleFor(schedules, row.team_id),
     closeRequest: toCloseRequestView(row.close_request),
     lastRejection: row.close_request ? null : lastRejection,
     canSupervise,
@@ -474,7 +486,13 @@ export async function getContactCases(
       });
     }
   }
-  const views = activeCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row), rejections.get(row.id) ?? null));
+  // R2-10: el plazo de la solución cuenta horas hábiles; solo se leen los horarios si algún tipo tiene plazo.
+  const schedules = caseTypes.some((t) => t.solutionDeadlineHours)
+    ? await loadSolutionSchedules(s.db, s.workspaceId)
+    : null;
+  const views = activeCases.map((row) =>
+    toCaseView(row, permsOf(row), supervisesOf(row), rejections.get(row.id) ?? null, schedules),
+  );
   let activeCaseId: string | null = null;
   if (caseId && [...activeCases, ...closedCases].some((c) => c.id === caseId)) {
     activeCaseId = caseId;
@@ -491,6 +509,7 @@ export async function getContactCases(
           solutionStatus: c.solution_status,
           solutionNote: c.solution_note,
           nextActionAt: c.next_action_at,
+          solutionSchedule: solutionScheduleFor(schedules, c.team_id),
         },
         c.case_type_id ? (caseTypes.find((t) => t.id === c.case_type_id)?.solutionDeadlineHours ?? null) : null,
         nowDate,
@@ -517,7 +536,7 @@ export async function getContactCases(
       },
       activeCaseId,
       cases: views,
-      recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row))),
+      recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row), null, schedules)),
       caseTypes,
       contactTypes: (contactTypes ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color, isDefault: t.is_default })),
       teams: s.actor.teams,

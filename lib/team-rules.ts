@@ -34,7 +34,8 @@ interface ActorTarget {
 
 /**
  * ¿Puede `actor` quitar a `target` del espacio? Devuelve el motivo en español
- * si no puede, o null si sí. Nadie puede quitar al Dueño ni quitarse a sí mismo.
+ * si no puede, o null si sí. Nadie puede quitar al Dueño ni quitarse a sí mismo,
+ * y a un Administrador solo lo quita el Dueño (R2-13).
  */
 export function removeMemberError(params: ActorTarget): string | null {
   if (!canManageTeam(params.actorRole)) {
@@ -45,6 +46,9 @@ export function removeMemberError(params: ActorTarget): string | null {
   }
   if (params.targetRole === "owner") {
     return "No se puede quitar al Dueño del espacio de trabajo.";
+  }
+  if (params.targetRole === "admin" && params.actorRole !== "owner") {
+    return "Solo el Dueño puede quitar a un Administrador del espacio de trabajo.";
   }
   return null;
 }

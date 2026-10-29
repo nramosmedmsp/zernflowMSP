@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Database } from "@/lib/types/database";
+import { uniqueChannelName } from "@/lib/realtime-channel";
 
 export type CaseNote = Database["public"]["Tables"]["case_notes"]["Row"];
 
@@ -29,7 +30,7 @@ export function useCaseNotes(contactId: string | null, conversationId: string | 
       });
 
     const channel = supabase
-      .channel(`case-notes-${contactId}`)
+      .channel(uniqueChannelName(`case-notes-${contactId}`))
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "case_notes", filter: `contact_id=eq.${contactId}` },

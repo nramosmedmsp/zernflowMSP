@@ -17,7 +17,7 @@ import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
 import { Composer } from "./composer";
 import { DemoBadge } from "./demo-badge";
 import { SimulateInboundDialog } from "./simulate-inbound-dialog";
-import { latestIso, memberName, messageAuthor, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
+import { latestIso, memberName, messageAuthor, sequenceOriginName, waitingText, type InboxConversation, type InboxMember } from "./inbox-model";
 import type { CaseNote } from "./use-case-notes";
 import { useThreadMessages } from "./use-thread-messages";
 import { useNow } from "./use-now";
@@ -98,7 +98,7 @@ function MessageBubble({
   const media = message.media ?? [];
   // Archivos sin el detalle de la bandeja (envíos del bot o canales de prueba).
   const bareAttachment = media.length === 0 && Array.isArray(message.attachments) && message.attachments.length > 0;
-  const isBot = message.sent_by_flow_id !== null;
+  const isBot = message.sent_by_flow_id !== null || sequenceOriginName(message.sent_by_node_id) !== null;
   // Envíos de la bandeja que aún no llegan a la lista de Zernio (lib/inbox-outbox.ts).
   const outboxId = message.id.startsWith("outbox-") ? message.id.slice("outbox-".length) : null;
   const sending = !isInbound && message.status === "pending" && !!outboxId;
@@ -693,7 +693,8 @@ export function MessageThread({
       <Composer
         conversation={conversation}
         noteCase={noteCase}
-        lastInboundAt={latestIso(noteCase?.lastInboundAt, lastInboundMessageAt)}
+        // La ventana de 24 h es de ESTE chat: no la del último mensaje de la gestión (que puede venir de Instagram).
+        lastInboundAt={latestIso(conversation.last_inbound_at, lastInboundMessageAt)}
         members={members}
         me={me}
         teamName={teamName}

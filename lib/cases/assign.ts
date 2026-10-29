@@ -52,7 +52,8 @@ export async function loadAssignmentContext(
       db.from("workspaces").select("name, settings").eq("id", workspaceId).maybeSingle(),
       db
         .from("teams")
-        .select("id, name, is_default, assignment_mode, business_hours")
+        // "*": así sigue funcionando aunque la columna supervisor_skips_chats (00034) aún no exista.
+        .select("*")
         .eq("workspace_id", workspaceId)
         .is("archived_at", null),
       db
@@ -72,6 +73,7 @@ export async function loadAssignmentContext(
         id: t.id,
         isDefault: t.is_default,
         assignmentMode: normalizeAssignmentMode(t.assignment_mode),
+        supervisorsSkipChats: t.supervisor_skips_chats === true,
       })),
       teamMembers: (teamMembers ?? []).map((m) => ({
         teamId: m.team_id,

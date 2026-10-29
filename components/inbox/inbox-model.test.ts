@@ -341,6 +341,10 @@ describe("messageAuthor", () => {
     expect(messageAuthor(msg({}), members, "u-yo")).toBeNull();
     expect(messageAuthor(msg({ direction: "inbound", sent_by_user_id: "u-ana" }), members, "u-yo")).toBeNull();
   });
+
+  it("los mensajes de una secuencia dicen «Secuencia · nombre» (R2-B5)", () => {
+    expect(messageAuthor({ ...msg({}), sent_by_node_id: "sequence:Bienvenida" }, members, "u-yo")).toBe("Secuencia · Bienvenida");
+  });
 });
 
 describe("control de reclamos en la bandeja (M-22, B-31)", () => {

@@ -15,10 +15,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Upload,
+  UserPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import { Spinner } from "@/components/ui/spinner";
+import { NewContactDialog } from "@/components/contacts/new-contact-dialog";
 import { formatNumber, formatRelative } from "@/lib/format";
 import { NO_VALUE_FILTER } from "@/components/contacts/contact-filters";
 import {
@@ -91,6 +93,7 @@ export function ContactsView({
   canImport: boolean;
 }) {
   const router = useRouter();
+  const [creating, setCreating] = useState(false);
   const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState(params.search);
   const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
@@ -144,6 +147,15 @@ export function ContactsView({
                 : `${formatNumber(total)} ${total === 1 ? "contacto" : "contactos"} en tu espacio de trabajo`}
             </p>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              <UserPlus className="h-4 w-4" />
+              Crear contacto
+            </button>
           {canImport && (
             <Link
               href="/dashboard/contacts/import"
@@ -153,7 +165,18 @@ export function ContactsView({
               Importar
             </Link>
           )}
+          </div>
         </div>
+        {creating && (
+          <NewContactDialog
+            onClose={() => setCreating(false)}
+            onCreated={({ contactId }) => {
+              setCreating(false);
+              startRouteProgress();
+              router.push(`/dashboard/contacts/${contactId}`);
+            }}
+          />
+        )}
 
         {/* Search and filters */}
         <div className="mt-4 flex flex-wrap items-center gap-3">

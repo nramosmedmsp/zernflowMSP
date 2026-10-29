@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getWorkspace } from "@/lib/workspace";
+import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import {
   ADMIN_ONLY_MESSAGE,
   OWNER_ONLY_SECRETS_MESSAGE,
@@ -128,14 +129,9 @@ export async function saveAttentionSettings(
   }
 
   const settings = mergeAttentionSettings(current.settings, parsed.value) as Json;
-  const { error: updateError } = await supabase
-    .from("workspaces")
-    .update({ settings })
-    .eq("id", workspace.id)
-    .select("id")
-    .single();
+  const updateError = await mergeWorkspaceSettings(supabase, workspace.id, current.settings, settings);
   if (updateError) {
-    console.error("[saveAttentionSettings]", updateError.message);
+    console.error("[saveAttentionSettings]", updateError);
     return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
   }
 
@@ -170,14 +166,9 @@ export async function saveAttentionAutomation(
   }
 
   const settings = mergeAutomationSettings(current.settings, parsed.value) as Json;
-  const { error: updateError } = await supabase
-    .from("workspaces")
-    .update({ settings })
-    .eq("id", workspace.id)
-    .select("id")
-    .single();
+  const updateError = await mergeWorkspaceSettings(supabase, workspace.id, current.settings, settings);
   if (updateError) {
-    console.error("[saveAttentionAutomation]", updateError.message);
+    console.error("[saveAttentionAutomation]", updateError);
     return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
   }
 

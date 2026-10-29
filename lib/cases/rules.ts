@@ -352,8 +352,10 @@ export interface PlanRulesInput {
 
 /**
  * Aplica las reglas que coinciden, en orden de `position`:
- * - set_contact_type: la última que aplica define el tipo final (así "Cliente"
- *   y luego "Cliente frecuente desde la 2.ª ganada" dejan uno solo);
+ * - set_contact_type: gana la regla MÁS ESPECÍFICA (la de mayor "desde la N.ª
+ *   ganada"); a igual especificidad, la última por posición. Así "Cliente" y
+ *   "Cliente frecuente desde la 2.ª" dejan uno solo, sin importar el orden
+ *   en que se escribieron (R2-15);
  * - schedule_case: hoy + N días, o N días antes de la fecha clave, a las 09:00
  *   de Lima; `overrides.scheduleAt` reemplaza la fecha calculada;
  * - ask_key_date: avisa que hay que pedir la fecha clave.
@@ -362,6 +364,7 @@ export function planRules(input: PlanRulesInput): RulePlan {
   const plan: RulePlan = { matchedRuleIds: [], schedules: [], askKeyDate: null };
   const ordered = [...input.rules].sort((a, b) => a.position - b.position);
   const override = input.overrides?.scheduleAt ? parseScheduleAt(input.overrides.scheduleAt, input.now) : null;
+  let typeSpecificity = -1;
 
   for (const rule of ordered) {
     if (!ruleMatches(rule, input.ctx)) continue;
@@ -370,7 +373,11 @@ export function planRules(input: PlanRulesInput): RulePlan {
       const nth = rule.params.from_nth_win;
       if (nth && input.wonCount < nth) continue;
       plan.matchedRuleIds.push(rule.id);
-      plan.contactTypeId = rule.params.contact_type_id;
+      const specificity = nth ?? 1;
+      if (specificity >= typeSpecificity) {
+        typeSpecificity = specificity;
+        plan.contactTypeId = rule.params.contact_type_id;
+      }
       continue;
     }
 

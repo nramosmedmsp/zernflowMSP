@@ -51,7 +51,7 @@ export function ClaimsTab({ type, run, busy }: TabProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="claims-hours" className="mb-1 block text-xs font-medium text-muted-foreground">
-            Plazo para registrar la solución (horas)
+            Plazo para registrar la solución (horas hábiles)
           </label>
           <input
             id="claims-hours"
@@ -67,7 +67,7 @@ export function ClaimsTab({ type, run, busy }: TabProps) {
             className={`${inputClass} w-full`}
           />
           <p className="mt-1 text-xs text-muted-foreground">
-            Desde que se abre, la gestión debe cerrarse como resuelta o tener registrada una solución en proceso con fecha compromiso. Si no, se avisa al supervisor.
+            Desde que se abre, la gestión debe cerrarse como resuelta o tener registrada una solución en proceso con fecha compromiso. Si no, se avisa al supervisor. Cuenta horas hábiles según el horario de atención del equipo (o de la empresa) y sus feriados; sin horario configurado, cuenta horas corridas. Al activarlo o cambiarlo, las gestiones abiertas que aún no tenían plazo empiezan a contar desde ese momento.
           </p>
         </div>
         <div>

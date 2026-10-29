@@ -83,6 +83,8 @@ export type SequenceStatus = "draft" | "active" | "paused";
 export type SequenceEnrollmentStatus = "active" | "completed" | "cancelled";
 
 export interface SequenceStep {
+  /** Id estable del paso (00035): las inscripciones lo guardan para sobrevivir a ediciones. */
+  id?: string;
   type: "message" | "delay" | "template";
   /** Message text (for message steps) */
   content?: string;
@@ -1437,6 +1439,8 @@ export interface Database {
           contact_id: string;
           channel_id: string;
           current_step_index: number;
+          /** Id del paso en el que va (00035); null en inscripciones anteriores. */
+          current_step_id: string | null;
           status: SequenceEnrollmentStatus;
           enrolled_at: string;
           next_step_at: string | null;
@@ -1448,6 +1452,7 @@ export interface Database {
           contact_id: string;
           channel_id: string;
           current_step_index?: number;
+          current_step_id?: string | null;
           status?: SequenceEnrollmentStatus;
           enrolled_at?: string;
           next_step_at?: string | null;
@@ -1455,6 +1460,8 @@ export interface Database {
         };
         Update: {
           current_step_index?: number;
+          current_step_id?: string | null;
+          enrolled_at?: string;
           status?: SequenceEnrollmentStatus;
           next_step_at?: string | null;
           completed_at?: string | null;
@@ -1494,6 +1501,8 @@ export interface Database {
           /** Fase 2: horario propio (ver BusinessHours); null = usa el de la empresa. */
           business_hours: Json | null;
           archived_at: string | null;
+          /** 00034: true = los supervisores del equipo no entran al reparto automático. */
+          supervisor_skips_chats: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -1504,6 +1513,7 @@ export interface Database {
           is_default?: boolean;
           assignment_mode?: AssignmentMode;
           business_hours?: Json | null;
+          supervisor_skips_chats?: boolean;
           archived_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1513,6 +1523,7 @@ export interface Database {
           is_default?: boolean;
           assignment_mode?: AssignmentMode;
           business_hours?: Json | null;
+          supervisor_skips_chats?: boolean;
           archived_at?: string | null;
           updated_at?: string;
         };

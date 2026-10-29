@@ -23,6 +23,7 @@
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
+import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
 import type {
@@ -370,6 +371,7 @@ interface TypeRow {
   protected?: boolean;
   solution_deadline_hours?: number | null;
   reopen_window_days?: number | null;
+  auto_template?: unknown;
   archived_at: string | null;
 }
 
@@ -585,6 +587,12 @@ export async function updateCaseType(input: UpdateCaseTypeInput): Promise<Config
     if (input.isProactive !== undefined) {
       patch.is_proactive = input.isProactive === true;
       before.is_proactive = row.is_proactive;
+      // Una plantilla automática solo tiene sentido en un tipo proactivo: al dejar de serlo no se
+      // queda mandando mensajes a escondidas.
+      if (input.isProactive !== true && row.auto_template) {
+        patch.auto_template = null;
+        before.auto_template = row.auto_template;
+      }
     }
     if (input.requireCategory !== undefined) {
       patch.require_category = input.requireCategory === true;
@@ -677,6 +685,24 @@ export async function updateCaseType(input: UpdateCaseTypeInput): Promise<Config
       "update case_types",
     );
     if ((data ?? []).length === 0) return { error: ADMIN_ONLY_MESSAGE };
+
+    // R2-10: al encender o cambiar el plazo de la solución, las gestiones abiertas que aún no
+    // tienen reloj empiezan a contar desde ahora (así las viejas no avisan todas de golpe).
+    const newDeadline = patch.solution_deadline_hours as number | null | undefined;
+    if (newDeadline && newDeadline > 0 && newDeadline !== (row.solution_deadline_hours ?? null)) {
+      const svc = await service();
+      must(
+        await svc
+          .from("cases")
+          .update({ solution_clock_at: nowIso() })
+          .eq("workspace_id", s.workspaceId)
+          .eq("case_type_id", row.id)
+          .eq("status", "open")
+          .is("solution_clock_at", null)
+          .select("id"),
+        "update cases solution_clock_at",
+      );
+    }
     await audit(s, "case_type_updated", "case_type", {
       entityId: row.id,
       name: (patch.name as string | undefined) ?? row.name,
@@ -713,15 +739,50 @@ async function setTypeArchived(s: Session, row: TypeRow, archived: boolean): Pro
   if ((data ?? []).length === 0) throw new Error("case_types: sin permiso");
 }
 
-export async function archiveCaseType(id: string): Promise<ConfigResult> {
+/**
+ * R2-3: qué rompe archivar un tipo. Las gestiones programadas (proactivas) de
+ * un tipo archivado se activarían igual, con su plantilla automática, sin que
+ * nadie pueda verlas en la configuración; y las reglas de otros tipos que lo
+ * programan dejarían de crearlas sin avisar.
+ */
+async function archiveImpact(s: Session, row: TypeRow): Promise<{ scheduled: number; ruleRefs: number }> {
+  const svc = await service();
+  const [scheduled, rules] = await Promise.all([
+    svc
+      .from("cases")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", s.workspaceId)
+      .eq("case_type_id", row.id)
+      .eq("status", "scheduled"),
+    loadWorkspaceRules(s.db, s.workspaceId),
+  ]);
+  must(scheduled, "cases");
+  return { scheduled: scheduled.count ?? 0, ruleRefs: countRuleRefs(rules, { caseTypeId: row.id }, row.id) };
+}
+
+function scheduledBlockMessage(name: string, scheduled: number): string {
+  return `«${name}» tiene ${scheduled} ${scheduled === 1 ? "gestión programada" : "gestiones programadas"} que aún no se activa${scheduled === 1 ? "" : "n"}. Cancélalas o espera a que se activen antes de archivar el tipo.`;
+}
+
+export async function archiveCaseType(id: string): Promise<ConfigResult<{ message?: string }>> {
   return run(async (s) => {
     const row = await ownedType(s, id);
     if (!row) return { error: TYPE_NOT_FOUND };
-    if (row.archived_at === null) {
-      await setTypeArchived(s, row, true);
-      await audit(s, "case_type_archived", "case_type", { entityId: row.id, name: row.name });
-    }
-    return { ok: true };
+    if (row.archived_at !== null) return { ok: true };
+    const impact = await archiveImpact(s, row);
+    if (impact.scheduled > 0) return { error: scheduledBlockMessage(row.name, impact.scheduled) };
+    await setTypeArchived(s, row, true);
+    await audit(s, "case_type_archived", "case_type", {
+      entityId: row.id,
+      name: row.name,
+      meta: { rule_refs: impact.ruleRefs },
+    });
+    return impact.ruleRefs > 0
+      ? {
+          ok: true,
+          message: `El tipo se archivó. ${impact.ruleRefs === 1 ? "Una regla de otro tipo lo programaba y dejará" : `${impact.ruleRefs} reglas de otros tipos lo programaban y dejarán`} de crear esas gestiones: revísalas en la pestaña Reglas.`,
+        }
+      : { ok: true };
   });
 }
 
@@ -753,7 +814,11 @@ export async function removeCaseType(id: string): Promise<ConfigResult<{ outcome
     const outcome = decideRemoval({ historyCount: history, configRefs });
     const what = `El tipo «${row.name}»`;
     if (outcome === "archive") {
-      if (row.archived_at === null) await setTypeArchived(s, row, true);
+      if (row.archived_at === null) {
+        const impact = await archiveImpact(s, row);
+        if (impact.scheduled > 0) return { error: scheduledBlockMessage(row.name, impact.scheduled) };
+        await setTypeArchived(s, row, true);
+      }
       await audit(s, "case_type_archived", "case_type", { entityId: row.id, name: row.name, meta: { history_cases: history, config_refs: configRefs } });
       return { ok: true, outcome, message: removalMessage(outcome, what, history > 0 ? "history" : "config") };
     }
@@ -1505,11 +1570,9 @@ export async function saveKeyDateLabel(label: string): Promise<ConfigResult<{ la
     const next = { ...settings };
     if (clean === null) delete next.key_date_label;
     else next.key_date_label = clean;
-    const { data } = must(
-      await s.db.from("workspaces").update({ settings: next as Json }).eq("id", s.workspaceId).select("id"),
-      "update workspaces",
-    );
-    if ((data ?? []).length === 0) return { error: ADMIN_ONLY_MESSAGE };
+    const saveError = await mergeWorkspaceSettings(s.db, s.workspaceId, settings, next);
+    if (saveError === "sin permiso") return { error: ADMIN_ONLY_MESSAGE };
+    if (saveError) throw new Error(`update workspaces: ${saveError}`);
     await audit(s, "key_date_label_changed", "workspace", { from: previous, to: clean });
     return { ok: true, label: clean ?? "" };
   });

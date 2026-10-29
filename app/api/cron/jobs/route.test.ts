@@ -45,7 +45,7 @@ describe("GET /api/cron/jobs", () => {
       { id: "old", received_at: new Date(Date.now() - 72 * 3600_000).toISOString() },
       { id: "new", received_at: new Date().toISOString() },
     ]);
-    await get({}, "?key=secreto");
+    await get({ authorization: "Bearer secreto" });
     expect(fake.rows("webhook_events").map((e) => e.id)).toEqual(["new"]);
   });
 });

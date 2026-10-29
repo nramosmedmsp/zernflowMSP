@@ -794,6 +794,64 @@ describe("tipos de gestión: destino, tiempos y quitar", () => {
   });
 });
 
+describe("R2-10 / R2-3: plazo de la solución, archivar y plantilla automática", () => {
+  const caseOf = (typeName: string, extra: Record<string, unknown> = {}) => {
+    const first = fake.rows("case_stages").filter((x) => x.case_type_id === typeId(typeName) && x.kind === "open").sort((a, b) => (a.position as number) - (b.position as number))[0];
+    return seedCase(typeName, first.name as string, extra);
+  };
+
+  it("al encender o cambiar el plazo, las abiertas sin reloj empiezan a contar desde ahora", async () => {
+    const old = caseOf("Postventa");
+    const withClock = caseOf("Postventa", { solution_clock_at: "2026-10-01T10:00:00.000Z" });
+    const closed = caseOf("Postventa", { status: "resolved" });
+    const other = caseOf("Venta");
+    const before = Date.now();
+    expect(await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: 24 })).toEqual({ ok: true });
+    const clock = (id: unknown) => fake.rows("cases").find((c) => c.id === id)!.solution_clock_at as string | null | undefined;
+    expect(new Date(clock(old.id)!).getTime()).toBeGreaterThanOrEqual(before);
+    expect(clock(withClock.id)).toBe("2026-10-01T10:00:00.000Z");
+    expect(clock(closed.id) ?? null).toBeNull();
+    expect(clock(other.id) ?? null).toBeNull();
+  });
+
+  it("no toca los relojes si el plazo no cambia o se apaga", async () => {
+    await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: 24 });
+    const later = caseOf("Postventa");
+    expect(await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: 24 })).toEqual({ ok: true });
+    expect(fake.rows("cases").find((c) => c.id === later.id)!.solution_clock_at ?? null).toBeNull();
+    expect(await updateCaseType({ id: typeId("Postventa"), solutionDeadlineHours: "" })).toEqual({ ok: true });
+    expect(fake.rows("cases").find((c) => c.id === later.id)!.solution_clock_at ?? null).toBeNull();
+  });
+
+  it("no se archiva un tipo con gestiones programadas pendientes", async () => {
+    caseOf("Recompra", { status: "scheduled", scheduled_for: "2026-12-01T14:00:00.000Z" });
+    const res = await archiveCaseType(typeId("Recompra"));
+    expect(res).toMatchObject({ error: expect.stringContaining("1 gestión programada") });
+    expect(fake.rows("case_types").find((t) => t.name === "Recompra")!.archived_at ?? null).toBeNull();
+    // Quitarlo tampoco lo archiva a escondidas.
+    expect(await removeCaseType(typeId("Recompra"))).toMatchObject({ error: expect.stringContaining("programada") });
+    expect(fake.rows("case_types").find((t) => t.name === "Recompra")!.archived_at ?? null).toBeNull();
+  });
+
+  it("archivar un tipo que otra regla programa avisa qué reglas dejan de crearlo", async () => {
+    const res = await archiveCaseType(typeId("Recompra"));
+    expect(res).toMatchObject({ ok: true, message: expect.stringContaining("regla") });
+    expect(fake.rows("case_types").find((t) => t.name === "Recompra")!.archived_at).not.toBeNull();
+    // Uno sin referencias archiva sin mensaje.
+    expect(await archiveCaseType(typeId("Postventa"))).toEqual({ ok: true });
+  });
+
+  it("dejar de ser proactivo quita la plantilla automática", async () => {
+    const id = typeId("Recompra");
+    fake.rows("case_types").find((t) => t.id === id)!.is_proactive = true;
+    fake.rows("case_types").find((t) => t.id === id)!.auto_template = { template_name: "recordatorio", language: "es", params: ["{nombre}"] };
+    expect(await updateCaseType({ id, isProactive: false })).toEqual({ ok: true });
+    const row = fake.rows("case_types").find((t) => t.id === id)!;
+    expect(row.is_proactive).toBe(false);
+    expect(row.auto_template).toBeNull();
+  });
+});
+
 describe("reglas", () => {
   it("agregar, desactivar, reactivar y borrar", async () => {
     const venta = typeId("Venta");

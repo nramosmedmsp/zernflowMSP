@@ -320,6 +320,41 @@ export function businessMinutesBetween(
   return ms / MINUTE_MS;
 }
 
+/**
+ * Instante en que se cumplen `minutes` minutos de atención contando desde
+ * `from` (inverso de businessMinutesBetween). Sin horario son minutos de
+ * reloj. null si el horario no abre en los próximos ~10 años (todo feriado).
+ */
+export function addBusinessMinutes(
+  from: Date | string | number,
+  minutes: number,
+  hours: BusinessHours | null | undefined,
+  holidays?: HolidayDates | null,
+): Date | null {
+  const start = toMs(from);
+  if (Number.isNaN(start)) return null;
+  const wanted = Math.max(0, minutes) * MINUTE_MS;
+  if (!hasSchedule(hours)) return new Date(start + wanted);
+  const set = toSet(holidays);
+  const CHUNK_DAYS = 62;
+  let remaining = wanted;
+  let cursor = start;
+  let chunkStart = shiftDate(limaDate(start), -1);
+  for (let chunk = 0; chunk * CHUNK_DAYS <= MAX_SPAN_DAYS; chunk++) {
+    const chunkEnd = shiftDate(chunkStart, CHUNK_DAYS);
+    for (const [s, e] of intervalsForDates(chunkStart, chunkEnd, hours, set)) {
+      const from2 = Math.max(s, cursor);
+      if (e <= from2) continue;
+      const available = e - from2;
+      if (available >= remaining) return new Date(from2 + remaining);
+      remaining -= available;
+      cursor = e;
+    }
+    chunkStart = shiftDate(chunkEnd, -1);
+  }
+  return null;
+}
+
 // ── Texto ───────────────────────────────────────────────────────────────────
 
 function clock(ms: number): string {
