@@ -17,7 +17,10 @@ describe("detectComplaint", () => {
     ["nunca llego mi paquete", "nunca llegó"],
     ["quiero una devolución", "devolución"],
     ["Quiero DEVOLUCION del dinero", "devolución"],
-    ["lo quiero devolver", "devolver"],
+    ["lo quiero devolver", "quiero devolver"],
+    ["quiero devolver el producto", "quiero devolver"],
+    ["necesito devolver mi dinero", "devolver mi dinero"],
+    ["que me devuelvan la plata", "me devuelvan"],
     ["pido reembolso", "reembolso"],
     ["me estafaron", "me estafaron"],
     ["esto es una estafa", "estafa"],
@@ -39,7 +42,7 @@ describe("detectComplaint", () => {
 
   it("prefiere la frase más larga que empieza en el mismo lugar", () => {
     expect(detectComplaint("me llegó roto")?.phrase).toBe("llegó roto");
-    expect(detectComplaint("no llegó roto, llegó bien")?.phrase).toBe("no llegó");
+    expect(detectComplaint("el pote no llegó, ¿dónde está?")?.phrase).toBe("no llegó");
   });
 
   it("la ñ no se confunde con la n", () => {
@@ -57,6 +60,13 @@ describe("detectComplaint", () => {
     "Ok, ya pagué por Yape",
     "¿A qué hora llega mi pedido?",
     "Me gustaría reclamar mi premio del sorteo",
+    "¿me puedes devolver la llamada?",
+    "Devuélveme la llamada cuando puedas",
+    "el pote no está roto, gracias",
+    "no llegó roto, llegó bien",
+    "nada roto, todo perfecto",
+    "sin daños y sellado, gracias",
+    "no está vencido, la fecha es 2027",
     "",
     "   ",
   ])("no marca «%s»", (text) => {

@@ -154,7 +154,8 @@ export function formatHistory(rows: readonly CaseHistoryRow[], lookup: HistoryLo
       case "solution_registered": {
         const note = str(meta.note);
         const when = time(str(meta.commitment_at));
-        text = `${actor} registró la solución${note ? `: ${short(note)}` : ""}${when ? ` · compromiso ${when}` : ""}`;
+        const before = time(str(meta.previous_commitment_at));
+        text = `${actor} registró la solución${note ? `: ${short(note)}` : ""}${when ? ` · compromiso ${when}` : ""}${before ? ` (antes ${before})` : ""}`;
         break;
       }
       case "solution_overdue":

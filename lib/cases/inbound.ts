@@ -7,7 +7,18 @@ import { pickSuggestedCaseTypeId, resolveReopenStageId } from "./decisions";
 import { runEventRules } from "./effects";
 import { emitCaseOpened, emitStageChanged } from "./events";
 import { businessSecondsBetween } from "./hours";
-import { caseLink, contactName, firstOpenStageId, loadContact, logActivity, type CaseRow, type Db } from "./io";
+import { detectComplaint } from "@/lib/complaint-detect";
+import { REOPEN_WINDOW_MS } from "./dates";
+import {
+  caseLink,
+  clearComplaintFlag,
+  contactName,
+  firstOpenStageId,
+  loadContact,
+  logActivity,
+  type CaseRow,
+  type Db,
+} from "./io";
 import { reopenWindowMs } from "./protection";
 import { notifySupervisors } from "./supervisors";
 import type { CaseMessenger } from "./messaging";
@@ -62,6 +73,38 @@ async function reopenStageId(db: Db, row: CaseRow): Promise<string | null> {
   return resolveReopenStageId(closed?.from_value, openStages ?? []);
 }
 
+/**
+ * Tipos protegidos (Postventa): dentro de las 24 h siguientes al cierre
+ * cualquier mensaje reabre; pasado ese tiempo y dentro de la ventana del tipo
+ * (7 días) solo lo hace un mensaje que parece reclamo (o sin texto, como una
+ * foto del producto). La ventana se cuenta desde el primer cierre de la
+ * gestión: reabrir y cerrar de nuevo no la renueva. Si no se reabre, el
+ * mensaje abre una gestión nueva (por ejemplo una Venta).
+ */
+async function protectedMayReopen(
+  db: Db,
+  closed: CaseRow,
+  at: string,
+  windowMs: number,
+  text: string | null | undefined,
+): Promise<boolean> {
+  const closedAt = closed.closed_at ? new Date(closed.closed_at).getTime() : Number.NaN;
+  if (Number.isNaN(closedAt)) return false;
+  const now = new Date(at).getTime();
+  if (now - closedAt < REOPEN_WINDOW_MS) return true;
+  if (typeof text === "string" && text.trim() !== "" && !detectComplaint(text)) return false;
+  const { data: first } = await db
+    .from("activity")
+    .select("created_at")
+    .eq("case_id", closed.id)
+    .eq("type", "case_closed")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const firstClosedAt = first?.created_at ? new Date(first.created_at).getTime() : Number.NaN;
+  return Number.isNaN(firstClosedAt) || now - firstClosedAt < windowMs;
+}
+
 function parseOpenResult(data: Json | null): { caseId: string; created: boolean } | null {
   if (data && typeof data === "object" && !Array.isArray(data) && typeof data.case_id === "string") {
     return { caseId: data.case_id, created: data.created === true };
@@ -101,6 +144,12 @@ export async function handleInbound(
     contactId: string;
     conversationId?: string | null;
     at?: string;
+    /**
+     * Texto del mensaje del cliente. Una Postventa cerrada hace más de 24 h
+     * solo se reabre si el texto parece un reclamo (o si no hay texto, por
+     * ejemplo una foto del producto).
+     */
+    text?: string | null;
     /** Para las pruebas; por defecto envía por Zernio. */
     messenger?: CaseMessenger;
   },
@@ -135,9 +184,15 @@ export async function handleInbound(
       : { data: [] as ReopenType[] };
     const typeById = new Map<string, ReopenType>((types ?? []).map((t) => [t.id, t]));
     // La cerrada más reciente cuya ventana siga abierta (cada tipo tiene la suya).
-    const lastClosed = (recentClosed ?? []).find((c) =>
-      shouldReopen(c, at, reopenWindowMs(c.case_type_id ? typeById.get(c.case_type_id)?.reopen_window_days : null)),
-    );
+    let lastClosed: CaseRow | undefined;
+    for (const c of recentClosed ?? []) {
+      const type = c.case_type_id ? (typeById.get(c.case_type_id) ?? null) : null;
+      const windowMs = reopenWindowMs(type?.reopen_window_days);
+      if (!shouldReopen(c, at, windowMs)) continue;
+      if (type?.protected && !(await protectedMayReopen(db, c, at, windowMs, params.text))) continue;
+      lastClosed = c;
+      break;
+    }
     const reopenedType = lastClosed?.case_type_id ? (typeById.get(lastClosed.case_type_id) ?? null) : null;
     if (lastClosed) {
       const stageId = await reopenStageId(db, lastClosed);
@@ -171,6 +226,7 @@ export async function handleInbound(
       if (updated && updated.length > 0) {
         row = updated[0];
         reopened = true;
+        if (reopenedType?.protected) await clearComplaintFlag(db, row.workspace_id, row.contact_id);
         await logActivity(db, {
           workspace_id: row.workspace_id,
           type: "case_reopened",

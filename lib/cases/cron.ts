@@ -287,6 +287,8 @@ export async function notifyOverdueNextActions(
       .from("cases")
       .select("id")
       .eq("status", "open")
+      // Con una solución en proceso avisa "Compromiso vencido" (otra tarea): un solo aviso.
+      .is("solution_status", null)
       .is("next_action_notified_at", null)
       .lte("next_action_at", nowIso)
       .order("next_action_at", { ascending: true })
@@ -302,6 +304,7 @@ export async function notifyOverdueNextActions(
       .from("cases")
       .update({ next_action_notified_at: nowIso })
       .in("id", due.map((r) => r.id))
+      .is("solution_status", null)
       .is("next_action_notified_at", null)
       .select("id, workspace_id, contact_id, assignee_id, next_action_note");
     if (claimError) {

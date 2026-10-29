@@ -82,6 +82,7 @@ export type NotificationType =
   | "solution_overdue"
   | "commitment_overdue"
   | "complaint_unclassified"
+  | "commitment_changed"
   // Seguridad: cambio del servidor de correo (00030)
   | "mail_settings_changed";
 
@@ -187,6 +188,26 @@ export async function loadCaseType(db: Db, workspaceId: string, caseTypeId: stri
     .eq("workspace_id", workspaceId)
     .maybeSingle();
   return data ?? null;
+}
+
+/**
+ * Quita la marca de "posible reclamo" de las conversaciones del contacto. Se
+ * llama cuando una gestión protegida (Postventa) se abre, se reabre o se
+ * clasifica por cualquier camino: el reclamo ya tiene dueño y la marca vieja
+ * no debe bloquear los reclamos futuros. Nunca lanza: un fallo solo se registra.
+ */
+export async function clearComplaintFlag(db: Db, workspaceId: string, contactId: string): Promise<void> {
+  try {
+    const { error } = await db
+      .from("conversations")
+      .update({ complaint_flagged_at: null, complaint_excerpt: null })
+      .eq("workspace_id", workspaceId)
+      .eq("contact_id", contactId)
+      .not("complaint_flagged_at", "is", null);
+    if (error) console.error("[cases] clear complaint flag", error.message);
+  } catch (err) {
+    console.error("[cases] clear complaint flag", err);
+  }
 }
 
 export async function loadCase(db: Db, caseId: string): Promise<CaseRow | null> {

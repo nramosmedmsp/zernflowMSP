@@ -328,3 +328,74 @@ describe("messageAuthor", () => {
     expect(messageAuthor(msg({ direction: "inbound", sent_by_user_id: "u-ana" }), members, "u-yo")).toBeNull();
   });
 });
+
+describe("control de reclamos en la bandeja (M-22, B-31)", () => {
+  const PV = "type-postventa";
+  const VENTA = "type-venta";
+  const types = (): InboxMeta["caseTypes"] => [
+    { id: PV, name: "Postventa", color: null, archived: false, protected: true, solutionDeadlineHours: 24, stages: [] },
+    { id: VENTA, name: "Venta", color: null, archived: false, protected: false, solutionDeadlineHours: null, stages: [] },
+  ];
+  // Postventa abierta hace 30 h sin solución: plazo vencido. Venta más reciente.
+  const overduePv = () =>
+    kase({ id: "pv", contact_id: "c1", case_type_id: PV, assignee_id: OTHER, opened_at: "2026-10-17T09:00:00Z", created_at: "2026-10-17T09:00:00Z" });
+  const newerSale = () =>
+    kase({ id: "venta", contact_id: "c1", case_type_id: VENTA, assignee_id: ME, opened_at: "2026-10-18T14:00:00Z", created_at: "2026-10-18T14:00:00Z" });
+  const admin = () => meta({ isAdmin: true, caseTypes: types() });
+
+  it("la Postventa con plazo vencido representa al chat aunque haya una Venta más nueva y mía", () => {
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([newerSale(), overduePv()]), "all", "all", EMPTY_FILTERS, admin(), NOW);
+    expect(rows[0].case?.id).toBe("pv");
+    expect(rows[0].claim).toMatchObject({ kind: "late" });
+    expect(rows[0].caseCount).toBe(2);
+  });
+
+  it("una Postventa en plazo (sin vencer) también va antes que la Venta", () => {
+    const pv = kase({ id: "pv", contact_id: "c1", case_type_id: PV, opened_at: "2026-10-18T10:00:00Z" });
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([newerSale(), pv]), "all", "all", EMPTY_FILTERS, admin(), NOW);
+    expect(rows[0].case?.id).toBe("pv");
+    expect(rows[0].claim).toBeNull();
+  });
+
+  it("una solución en proceso con el compromiso vencido sube a la Postventa", () => {
+    const pv = kase({
+      id: "pv", contact_id: "c1", case_type_id: PV, opened_at: "2026-10-10T10:00:00Z",
+      solution_status: "in_progress", next_action_at: "2026-10-18T12:00:00Z",
+    });
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([newerSale(), pv]), "all", "all", EMPTY_FILTERS, admin(), NOW);
+    expect(rows[0].case?.id).toBe("pv");
+    expect(rows[0].claim).toMatchObject({ kind: "commitment" });
+  });
+
+  it("sin tipos protegidos el orden no cambia", () => {
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([newerSale(), overduePv()]), "all", "all", EMPTY_FILTERS, meta({ isAdmin: true }), NOW);
+    expect(rows[0].case?.id).toBe("venta");
+    expect(rows[0].claim ?? null).toBeNull();
+  });
+
+  it("si la fila muestra otra gestión (filtro), avisa que hay una Postventa abierta", () => {
+    const rows = buildRows(
+      [conv("x1", "c1")],
+      groupCasesByContact([newerSale(), overduePv()]),
+      "all",
+      "all",
+      { ...EMPTY_FILTERS, caseTypeId: VENTA },
+      admin(),
+      NOW,
+    );
+    expect(rows[0].case?.id).toBe("venta");
+    expect(rows[0].otherProtected).toBe("Postventa");
+  });
+
+  it("Seguimiento hoy incluye la Postventa con el plazo vencido, aunque no tenga próximo contacto", () => {
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([overduePv()]), "all", "today", EMPTY_FILTERS, admin(), NOW);
+    expect(rows.map((r) => r.case?.id)).toEqual(["pv"]);
+    expect(caseMatchesState(overduePv(), "today", NOW, 24)).toBe(true);
+    expect(caseMatchesState(overduePv(), "today", NOW, null)).toBe(false);
+  });
+
+  it("Seguimiento hoy no incluye una Postventa que aún está en plazo", () => {
+    const pv = kase({ id: "pv", contact_id: "c1", case_type_id: PV, opened_at: "2026-10-18T10:00:00Z" });
+    expect(caseMatchesState(pv, "today", NOW, 24)).toBe(false);
+  });
+});

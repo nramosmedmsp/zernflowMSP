@@ -19,7 +19,7 @@ import {
   type CasePermissions,
 } from "@/lib/cases/access";
 import { isDateString } from "@/lib/cases/dates";
-import { isCaseSupervisor, parseCloseRequest } from "@/lib/cases/protection";
+import { claimPriority, isCaseSupervisor, parseCloseRequest } from "@/lib/cases/protection";
 import { GENERIC_ERROR, type CaseRow, type Db } from "@/lib/cases/io";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor, type WorkspaceActor } from "@/lib/cases/visibility";
 import { isOutcomeKind } from "@/lib/cases/rules";
@@ -439,8 +439,25 @@ export async function getContactCases(
     activeCaseId = caseId;
   } else {
     const open = activeCases.filter((c) => c.status === "open");
+    // Control de reclamos: primero la gestión con plazo o compromiso vencido y luego la que corre contra el plazo.
+    const nowDate = new Date();
+    const urgencyOf = (c: CaseRow) =>
+      claimPriority(
+        {
+          status: c.status,
+          openedAt: c.opened_at,
+          solutionClockAt: c.solution_clock_at,
+          solutionStatus: c.solution_status,
+          solutionNote: c.solution_note,
+          nextActionAt: c.next_action_at,
+        },
+        c.case_type_id ? (caseTypes.find((t) => t.id === c.case_type_id)?.solutionDeadlineHours ?? null) : null,
+        nowDate,
+      );
+    const topUrgency = Math.max(0, ...open.map(urgencyOf));
+    const pool = topUrgency > 0 ? open.filter((c) => urgencyOf(c) === topUrgency) : open;
     activeCaseId =
-      open.find((c) => c.assignee_id === s.userId)?.id ?? open[0]?.id ?? activeCases[0]?.id ?? null;
+      pool.find((c) => c.assignee_id === s.userId)?.id ?? pool[0]?.id ?? activeCases[0]?.id ?? null;
   }
 
   const settings = ws?.settings && typeof ws.settings === "object" && !Array.isArray(ws.settings) ? ws.settings : {};

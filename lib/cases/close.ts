@@ -51,6 +51,7 @@ export interface CloseCaseInput {
 }
 
 export const MAX_OUTCOME_NOTE_LENGTH = 2000;
+export const CLOSE_REQUEST_RESOLVED = "El pedido de cierre ya fue resuelto.";
 
 interface Prepared {
   row: CaseRow;
@@ -248,6 +249,11 @@ export async function closeCase(
     actorId: string | null;
     /** Datos extra para el registro de actividad (por ejemplo quién pidió el cierre). */
     activityMeta?: Record<string, unknown>;
+    /**
+     * Cierra solo si el pedido de cierre sigue pendiente (aprobación de un
+     * supervisor): si otro supervisor lo rechazó o aprobó antes, no cierra.
+     */
+    requireCloseRequest?: boolean;
   },
   now: Date = new Date(),
 ): Promise<EngineResult<{ status: OutcomeKind; effects: RuleEffects }>> {
@@ -270,7 +276,7 @@ export async function closeCase(
   }
 
   const closedAt = now.toISOString();
-  const { data: updated, error } = await db
+  let closeQuery = db
     .from("cases")
     .update({
       status: prepared.kind,
@@ -288,10 +294,13 @@ export async function closeCase(
       close_request: null,
     })
     .eq("id", row.id)
-    .eq("status", "open")
-    .select("*");
+    .eq("status", "open");
+  if (input.requireCloseRequest) closeQuery = closeQuery.not("close_request", "is", null);
+  const { data: updated, error } = await closeQuery.select("*");
   if (error) return { error: GENERIC_ERROR };
-  if (!updated || updated.length === 0) return { error: "La gestión ya está cerrada." };
+  if (!updated || updated.length === 0) {
+    return { error: input.requireCloseRequest ? CLOSE_REQUEST_RESOLVED : "La gestión ya está cerrada." };
+  }
   const closed = updated[0];
 
   await logActivity(db, {

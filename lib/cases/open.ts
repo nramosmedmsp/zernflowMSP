@@ -6,6 +6,7 @@ import { parseInstant } from "./dates";
 import { runEventRules, scheduleCase } from "./effects";
 import {
   GENERIC_ERROR,
+  clearComplaintFlag,
   firstOpenStageId,
   isWorkspaceMember,
   loadCaseType,
@@ -28,6 +29,11 @@ export interface OpenCaseInput {
   assignee?: string | "auto" | null;
   /** Si es futura, la gestión queda programada para esa fecha. */
   scheduledFor?: string | null;
+  /**
+   * Solo asigna a la persona indicada si es del equipo de destino de la
+   * gestión; si no lo es, queda sin responsable y se reparte sola.
+   */
+  assigneeOnlyIfInTeam?: boolean;
 }
 
 export async function openCase(
@@ -53,7 +59,7 @@ export async function openCase(
   }
 
   const explicitAssignee = input.assignee && input.assignee !== "auto" ? input.assignee : null;
-  const assigneeId = input.assignee === "auto" ? null : (explicitAssignee ?? input.actorId);
+  let assigneeId = input.assignee === "auto" ? null : (explicitAssignee ?? input.actorId);
   if (assigneeId && !(await isWorkspaceMember(db, input.workspaceId, assigneeId))) {
     return { error: "La persona no es miembro de este espacio de trabajo." };
   }
@@ -87,6 +93,15 @@ export async function openCase(
     members: ctx.members,
     workspaceMode: ctx.workspaceMode,
   });
+  if (input.assigneeOnlyIfInTeam && assigneeId && teamId) {
+    const { data: membership } = await db
+      .from("team_members")
+      .select("team_id")
+      .eq("team_id", teamId)
+      .eq("user_id", assigneeId)
+      .maybeSingle();
+    if (!membership) assigneeId = null;
+  }
   const openedAt = now.toISOString();
   const { data: created, error } = await db
     .from("cases")
@@ -118,6 +133,8 @@ export async function openCase(
       .eq("workspace_id", input.workspaceId)
       .eq("user_id", assigneeId);
   }
+  // Una Postventa nueva atiende cualquier aviso de reclamo anterior del contacto.
+  if (caseType?.protected) await clearComplaintFlag(db, input.workspaceId, contact.id);
   if (caseTypeId) {
     await runEventRules(db, {
       caseRow: created,

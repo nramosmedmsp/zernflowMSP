@@ -154,6 +154,8 @@ export async function approveCloseRequest(
         close_request: { requested_by: request.requestedBy, requested_at: request.requestedAt },
         approved_by: params.actorId,
       },
+      // Si otro supervisor lo rechazó (o aprobó) antes, no se cierra.
+      requireCloseRequest: true,
     },
     now,
   );
@@ -311,6 +313,10 @@ export async function registerSolutionInProgress(
   if (error) return { error: GENERIC_ERROR };
   if (!updated || updated.length === 0) return { error: "La gestión ya no está abierta." };
 
+  // Actualizar una solución ya registrada mueve el compromiso: queda anotado
+  // lo anterior y se avisa a los supervisores (no a quien lo hizo).
+  const previousCommitment = row.solution_status === "in_progress" ? row.next_action_at : null;
+  const changed = row.solution_status === "in_progress" && previousCommitment !== commitment;
   await logActivity(db, {
     workspace_id: row.workspace_id,
     type: "solution_registered",
@@ -319,7 +325,32 @@ export async function registerSolutionInProgress(
     actor_id: params.actorId,
     from_value: row.solution_status,
     to_value: "in_progress",
-    meta: { note, commitment_at: commitment },
+    meta: {
+      note,
+      commitment_at: commitment,
+      ...(changed ? { previous_commitment_at: previousCommitment, previous_note: row.solution_note } : {}),
+    },
   });
+  if (changed) {
+    try {
+      const [contact, actor] = await Promise.all([
+        loadContact(db, row.workspace_id, row.contact_id),
+        userDisplayName(db, params.actorId),
+      ]);
+      await notifySupervisors(
+        db,
+        row,
+        {
+          type: "commitment_changed",
+          title: `${actor} cambió la fecha compromiso: ${contactName(contact)}`,
+          body: `Antes ${previousCommitment ?? "sin fecha"} · ahora ${commitment}. ${note}`.slice(0, 500),
+          link: caseLink(row.contact_id, row.id),
+        },
+        { exclude: [params.actorId] },
+      );
+    } catch (err) {
+      console.error("[cases] notify commitment change", err);
+    }
+  }
   return { ok: true, commitmentAt: commitment };
 }

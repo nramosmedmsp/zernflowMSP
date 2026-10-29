@@ -553,7 +553,16 @@ export function CaseCard({
               }
               className="w-72"
             >
-              {nextCustom ? (
+              {active.solutionStatus === "in_progress" ? (
+                <div className="space-y-1 p-1">
+                  <p className={menuHeading}>Compromiso con el cliente</p>
+                  <p className="px-2 text-xs leading-snug text-muted-foreground">
+                    Hay una solución en proceso y esta fecha es el compromiso. No se quita ni se mueve desde aquí: usa{" "}
+                    <span className="font-medium text-foreground">Actualizar solución</span> para cambiarla (queda en el
+                    historial y se avisa al supervisor).
+                  </p>
+                </div>
+              ) : nextCustom ? (
                 <NextActionForm
                   caseView={active}
                   saving={busy === "next"}

@@ -10,6 +10,7 @@ import { runEventRules } from "./effects";
 import { emitStageChanged } from "./events";
 import {
   GENERIC_ERROR,
+  clearComplaintFlag,
   caseLink,
   contactName,
   firstOpenStageId,
@@ -31,6 +32,8 @@ import { isSupervisorInDb, notifySupervisors } from "./supervisors";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor } from "./visibility";
 
 export const CASE_CLOSED_MESSAGE = "La gestión ya está cerrada.";
+export const COMMITMENT_LOCKED_MESSAGE =
+  "Hay una solución en proceso: su fecha es el compromiso con el cliente. Para cambiarla usa «Actualizar solución».";
 export const MAX_NOTE_LENGTH = 5000;
 export const MAX_NEXT_ACTION_NOTE_LENGTH = 500;
 
@@ -116,6 +119,7 @@ export async function classifyCase(
     actorIsSupervisor?: boolean;
     flowChain?: readonly string[];
   },
+  now: Date = new Date(),
 ): Promise<EngineResult<{ rerouted: boolean }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
@@ -161,6 +165,26 @@ export async function classifyCase(
     }
   }
 
+  // Control de reclamos: el plazo de la solución empieza a correr desde que la
+  // gestión entra a un tipo con plazo (no desde que se abrió), y al cambiar de
+  // un tipo protegido o con plazo se borra lo que quedó de la solución, el
+  // pedido de cierre y las alertas.
+  const hadSolutionState =
+    row.solution_status !== null || row.close_request !== null || row.deadline_alerted_at !== null;
+  const solutionTouched = !!previousType?.protected || !!previousType?.solution_deadline_hours || !!type.solution_deadline_hours;
+  const solutionReset = solutionTouched
+    ? {
+        solution_status: null,
+        solution_note: null,
+        solution_at: null,
+        solution_by: null,
+        solution_clock_at: type.solution_deadline_hours ? now.toISOString() : null,
+        deadline_alerted_at: null,
+        commitment_alerted_at: null,
+        close_request: null,
+      }
+    : {};
+
   const { error } = await db
     .from("cases")
     .update({
@@ -168,13 +192,23 @@ export async function classifyCase(
       stage_id: patch.stage_id,
       category_id: null,
       ...(rerouted ? { team_id: patch.team_id ?? null, assignee_id: null } : {}),
+      ...solutionReset,
     })
     .eq("id", row.id);
   if (error) return { error: GENERIC_ERROR };
 
+  // Una gestión que pasa a un tipo protegido atiende el aviso de reclamo del contacto.
+  if (type.protected) await clearComplaintFlag(db, row.workspace_id, row.contact_id);
+
   const base = { workspace_id: row.workspace_id, case_id: row.id, contact_id: row.contact_id, actor_id: params.actorId };
   await logActivity(db, [
-    { ...base, type: "case_classified", from_value: row.case_type_id, to_value: type.id },
+    {
+      ...base,
+      type: "case_classified",
+      from_value: row.case_type_id,
+      to_value: type.id,
+      ...(solutionTouched && hadSolutionState ? { meta: { solution_reset: true } } : {}),
+    },
     ...(rerouted
       ? [
           { ...base, type: "team_changed" as const, from_value: row.team_id, to_value: patch.team_id ?? null, meta: { reason: "classified" } },
@@ -446,6 +480,13 @@ export async function setNextAction(
 ): Promise<EngineResult<{ nextActionAt: string | null }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
+
+  // Control de reclamos: con una solución en proceso la fecha es el compromiso
+  // con el cliente. No se quita ni se mueve desde "Próximo contacto": se
+  // actualiza la solución (queda en el historial y se avisa al supervisor).
+  if (row.solution_status === "in_progress") {
+    return { error: COMMITMENT_LOCKED_MESSAGE };
+  }
 
   const at = params.at ? parseInstant(params.at) : null;
   if (params.at && !at) return { error: "La fecha del próximo contacto no es válida." };

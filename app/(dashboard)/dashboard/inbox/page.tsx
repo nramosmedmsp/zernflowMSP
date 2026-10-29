@@ -38,7 +38,7 @@ export default async function InboxPage() {
         .limit(MAX_ACTIVE_CASES),
       supabase
         .from("case_types")
-        .select("id, name, color, archived_at")
+        .select("id, name, color, archived_at, protected, solution_deadline_hours")
         .eq("workspace_id", workspace.id)
         .order("position", { ascending: true }),
       supabase
@@ -85,6 +85,8 @@ export default async function InboxPage() {
       name: t.name,
       color: t.color,
       archived: t.archived_at !== null,
+      protected: t.protected ?? false,
+      solutionDeadlineHours: t.solution_deadline_hours ?? null,
       stages: (stages ?? [])
         .filter((s) => s.case_type_id === t.id)
         .map((s) => ({ id: s.id, name: s.name, color: s.color, kind: s.kind, archived: s.archived_at !== null })),
