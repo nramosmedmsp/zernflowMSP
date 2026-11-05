@@ -156,7 +156,7 @@ function AutoTemplateEditor({
     <div className="space-y-3 rounded-lg border border-border p-4">
       <SectionTitle
         title="Plantilla al activarse"
-        hint="Cuando una gestión de este tipo se activa (llega su día), se envía esta plantilla de WhatsApp al contacto, aunque nunca haya escrito. La gestión pasa a la segunda etapa abierta. Si el envío falla, se avisa al responsable."
+        hint="Cuando una gestión de este tipo se activa (llega su día), se envía esta plantilla de WhatsApp al contacto, aunque nunca haya escrito. La gestión pasa a la segunda etapa abierta, salvo que su primera etapa ya diga «enviado» o «contactado» (entonces se queda ahí hasta que el cliente responda y alguien la mueva). Si el envío falla, se avisa al responsable."
       />
 
       {current && (

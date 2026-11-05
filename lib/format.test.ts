@@ -24,6 +24,12 @@ describe("constants", () => {
 });
 
 describe("formatDate", () => {
+  it("M-4: una fecha de calendario sin hora no retrocede un día en Lima", () => {
+    expect(formatDate("2026-10-30")).toBe("30 oct 2026");
+    expect(formatDate("2026-01-01")).toBe("1 ene 2026");
+    expect(formatDateTime("2026-10-30")).toBe("30 oct 2026, 12:00");
+  });
+
   it("formats day, short month without dot, and year", () => {
     expect(formatDate(AFTERNOON)).toBe("18 oct 2026");
   });

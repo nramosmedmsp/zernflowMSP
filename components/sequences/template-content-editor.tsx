@@ -156,7 +156,7 @@ export function TemplateContentEditor({ workspaceId, value, onChange, disabled }
   }
 
   const preview = selected && value ? renderTemplatePreview(selected, value.params) : null;
-  const selectedKey = value ? `${value.template_name}|${value.language}` : "";
+  const selectedKey = value?.template_name ? `${value.template_name}|${value.language}` : "";
 
   return (
     <div className="space-y-3">
@@ -184,7 +184,7 @@ export function TemplateContentEditor({ workspaceId, value, onChange, disabled }
         aria-label="Plantilla de WhatsApp"
       >
         <option value="">{loadingTemplates ? "Cargando..." : "Elige una plantilla aprobada..."}</option>
-        {value && !selected && !loadingTemplates && (
+        {value?.template_name && !selected && !loadingTemplates && (
           <option value={selectedKey}>
             {value.template_name} ({value.language})
           </option>

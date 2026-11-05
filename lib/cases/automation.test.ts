@@ -830,3 +830,33 @@ describe("R2-12: sin avisos de madrugada si todos están ausentes", () => {
     expect(notifications("case_unassigned")).toHaveLength(0);
   });
 });
+
+// ── M-7: la plantilla de Recompra no marca "Interesado" ───────────────────
+
+describe("M-7: plantilla automática de Recompra (E-commerce)", () => {
+  const AT = "2026-10-19T14:30:00.000Z";
+
+  beforeEach(async () => {
+    await setup("ecommerce");
+    fake.rows("contacts")[0].phone = "+51 987 654 321";
+  });
+
+  function recompraCase(): string {
+    const type = fake.rows("case_types").find((t) => t.name === "Recompra")!;
+    type.auto_template = { template_name: "recompra", language: "es", params: ["{nombre}"] };
+    const first = fake.rows("case_stages").find((s) => s.case_type_id === type.id && s.name === "Recordatorio enviado")!;
+    const [row] = fake.seed("cases", [
+      { workspace_id: WS, contact_id: contactId, case_type_id: type.id, stage_id: first.id, status: "open", assignee_id: ANA, opened_at: AT },
+    ]);
+    return row.id as string;
+  }
+
+  it("envía la plantilla pero deja la gestión en «Recordatorio enviado» y no dispara el flujo de la etapa Interesado", async () => {
+    const caseId = recompraCase();
+    const m = messenger();
+    expect((await sendAutoTemplate(db(), { caseId, at: AT, messenger: m })).status).toBe("sent");
+    expect(m.sendTemplate).toHaveBeenCalledTimes(1);
+    expect(stageName(caseById(caseId))).toBe("Recordatorio enviado");
+    expect(emitted("case_stage_changed")).toHaveLength(0);
+  });
+});

@@ -82,8 +82,11 @@ export const OWNER_ONLY_MAIL_MESSAGE = "Solo el Dueño puede ver y cambiar la co
 export const CREATE_WORKSPACE_DENIED_MESSAGE =
   "Solo el Dueño de un espacio de trabajo puede crear otros espacios.";
 
-export const EXISTING_ACCOUNT_MESSAGE =
-  "Esa persona ya tiene una cuenta. Envíale una invitación para que la acepte.";
+export const EXISTING_ACCOUNT_PRIVILEGED_MESSAGE =
+  "Esa persona ya tiene una cuenta y es Dueño o Administrador de otro espacio de trabajo, así que no se puede agregar desde aquí.";
+
+export const EXISTING_ACCOUNT_LOOKUP_MESSAGE =
+  "Esa persona ya tiene una cuenta, pero no pudimos encontrarla para agregarla. Inténtalo de nuevo.";
 
 /** Solo el Dueño ve y cambia el SMTP de la instalación (los Administradores no). */
 export function canManageMailSettings(role: string | null | undefined): boolean {

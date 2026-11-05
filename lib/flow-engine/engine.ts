@@ -36,6 +36,7 @@ import { cancelActiveSessions, cancelOtherWaitingSessions, findWaitingSession, s
 import { computeFlowWindowOpen, decideSendMode, messageHasContent, parseNodeTemplate, SKIP_REASON_LABELS } from "./send-mode";
 import { executeCaseAction, findTargetCase, loadCaseSnapshot } from "./nodes/case-actions";
 import { addSystemNote } from "@/lib/cases/changes";
+import { logActivity } from "@/lib/cases/io";
 import { sendFlowTemplate } from "./nodes/send-template";
 import { checkHttpTarget, HTTP_NODE_TIMEOUT_MS, readTextCapped } from "./http-guard";
 import { seedContactVariables } from "./contact-variables";
@@ -1089,6 +1090,14 @@ async function executeHumanTakeover(
     .from("conversations")
     .update({ is_automation_paused: true })
     .eq("id", context.conversationId);
+  // B-19: queda en el historial del contacto por qué se pausó el bot.
+  await logActivity(supabase, {
+    workspace_id: context.workspaceId,
+    type: "automation_paused",
+    contact_id: context.contactId,
+    conversation_id: context.conversationId,
+    meta: { source: "flow", flow_id: context.flowId },
+  });
 
   // Mark session
   await supabase
@@ -1113,6 +1122,17 @@ async function executeSubscription(
     .from("contacts")
     .update({ is_subscribed: action === "subscribe" })
     .eq("id", context.contactId);
+  // B-19: la baja por flujo deja rastro (después nadie sabría por qué dejó de
+  // recibir difusiones).
+  if (action !== "subscribe") {
+    await logActivity(supabase, {
+      workspace_id: context.workspaceId,
+      type: "contact_unsubscribed",
+      contact_id: context.contactId,
+      conversation_id: context.conversationId,
+      meta: { source: "flow", flow_id: context.flowId },
+    });
+  }
 }
 
 function executeABSplit(data: ABSplitNodeData): string {

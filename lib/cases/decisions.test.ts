@@ -144,3 +144,27 @@ describe("nextNoReplyThreshold (sin cambios)", () => {
     expect(nextNoReplyThreshold({ ...base, stampedOutboundAt: base.lastOutboundAt, stampedMinutes: 30, now: new Date("2026-10-19T17:00:00.000Z") })).toBe(120);
   });
 });
+
+describe("nextAutoTemplateStageId: primera etapa ya «enviado» (M-7)", () => {
+  it("no avanza desde «Recordatorio enviado» ni desde «Contactado»", () => {
+    const stages = (first: string) => [
+      { id: "s1", position: 1, name: first },
+      { id: "s2", position: 2, name: "Interesado" },
+    ];
+    expect(nextAutoTemplateStageId(stages("Recordatorio enviado"), "s1")).toBeNull();
+    expect(nextAutoTemplateStageId(stages("Recordatorio enviado"), null)).toBeNull();
+    expect(nextAutoTemplateStageId(stages("Contactado"), "s1")).toBeNull();
+  });
+
+  it("sí avanza desde una etapa de «por hacer» como «Por vencer»", () => {
+    expect(
+      nextAutoTemplateStageId(
+        [
+          { id: "s1", position: 1, name: "Por vencer" },
+          { id: "s2", position: 2, name: "Contactado" },
+        ],
+        "s1",
+      ),
+    ).toBe("s2");
+  });
+});

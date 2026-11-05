@@ -264,6 +264,7 @@ export type ActivityType =
   | "next_action_set"
   | "automation_paused"
   | "automation_resumed"
+  | "contact_unsubscribed"
   | "config_changed"
   // Fase 2 (00021)
   | "off_hours_reply_sent"
@@ -467,6 +468,11 @@ export interface Database {
           phone: string | null;
           /** Fecha clave (YYYY-MM-DD): última compra, vencimiento de membresía... */
           key_date: string | null;
+          /** 00036: cuándo una persona confirmó el tipo (null = sin confirmar). */
+          contact_type_confirmed_at: string | null;
+          contact_type_confirmed_by: string | null;
+          /** 00036: "Preguntar después" (la pregunta del chat no sale hasta esta fecha). */
+          contact_type_prompt_snoozed_until: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -485,6 +491,9 @@ export interface Database {
           source?: Json;
           phone?: string | null;
           key_date?: string | null;
+          contact_type_confirmed_at?: string | null;
+          contact_type_confirmed_by?: string | null;
+          contact_type_prompt_snoozed_until?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -501,6 +510,9 @@ export interface Database {
           source?: Json;
           phone?: string | null;
           key_date?: string | null;
+          contact_type_confirmed_at?: string | null;
+          contact_type_confirmed_by?: string | null;
+          contact_type_prompt_snoozed_until?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -1070,6 +1082,7 @@ export interface Database {
           status_at?: string | null;
           error_code?: number | null;
           error_text?: string | null;
+          sent_by_node_id?: string | null;
         };
         Relationships: [
           {
@@ -1579,6 +1592,8 @@ export interface Database {
           color: string | null;
           position: number;
           is_default: boolean;
+          /** 00036: texto corto del menú del tipo (hasta 200 caracteres). */
+          description: string | null;
           archived_at: string | null;
           created_at: string;
           updated_at: string;
@@ -1590,6 +1605,7 @@ export interface Database {
           color?: string | null;
           position?: number;
           is_default?: boolean;
+          description?: string | null;
           archived_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1599,6 +1615,7 @@ export interface Database {
           color?: string | null;
           position?: number;
           is_default?: boolean;
+          description?: string | null;
           archived_at?: string | null;
           updated_at?: string;
         };

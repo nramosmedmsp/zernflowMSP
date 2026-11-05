@@ -6,6 +6,7 @@
 import { CASE_NOT_FOUND } from "./access";
 import { checkClose, closeCase, type CloseCaseInput } from "./close";
 import { parseInstant } from "./dates";
+import { formatDateTime } from "@/lib/format";
 import type { RuleEffects } from "./effects";
 import {
   GENERIC_ERROR,
@@ -324,7 +325,11 @@ export async function registerSolutionInProgress(
   // Actualizar una solución ya registrada mueve el compromiso: queda anotado
   // lo anterior y se avisa a los supervisores (no a quien lo hizo).
   const previousCommitment = row.solution_status === "in_progress" ? row.next_action_at : null;
-  const changed = row.solution_status === "in_progress" && previousCommitment !== commitment;
+  // M-9: se comparan instantes (con un minuto de margen), no textos: la base
+  // devuelve «…+00:00» y el formulario «….000Z» para la misma fecha.
+  const changed =
+    row.solution_status === "in_progress" &&
+    (!previousCommitment || Math.abs(new Date(previousCommitment).getTime() - at) >= 60_000);
   await logActivity(db, {
     workspace_id: row.workspace_id,
     type: "solution_registered",
@@ -351,7 +356,7 @@ export async function registerSolutionInProgress(
         {
           type: "commitment_changed",
           title: `${actor} cambió la fecha compromiso: ${contactName(contact)}`,
-          body: `Antes ${previousCommitment ?? "sin fecha"} · ahora ${commitment}. ${note}`.slice(0, 500),
+          body: `Antes ${previousCommitment ? formatDateTime(previousCommitment) : "sin fecha"} · ahora ${formatDateTime(commitment)}. ${note}`.slice(0, 500),
           link: caseLink(row.contact_id, row.id),
         },
         { exclude: [params.actorId] },

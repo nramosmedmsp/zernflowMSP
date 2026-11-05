@@ -12,6 +12,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import { isDateString } from "@/lib/cases/dates";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
+import { confirmContactTypeRow, isMissingColumn, recordContactTypeChange, setContactTypeRow } from "@/lib/cases/contact-type";
+import { snoozeUntil } from "@/lib/cases/contact-type-model";
 import {
   actorSeesContact,
   loadContactCaseSummaries,
@@ -20,7 +22,19 @@ import {
 } from "@/lib/cases/visibility";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { normalizePhone } from "@/components/contacts/contact-labels";
+import { normalizeImportPhone, senderIdFromPhone } from "@/lib/import/phone";
 import { ilikePattern } from "@/components/cases/case-filters";
+
+/**
+ * Teléfono en el formato de la importación y el webhook ("+51987654321"): un
+ * celular peruano de 9 dígitos recibe +51. Si no se puede llevar a ese formato
+ * (por ejemplo un número local corto) se conserva el texto limpio tal cual.
+ */
+function canonicalPhone(value: string): { value: string; linkable: boolean } {
+  const canonical = normalizeImportPhone(value);
+  if (canonical.ok && canonical.value) return { value: canonical.value, linkable: true };
+  return { value, linkable: false };
+}
 
 export type ContactActionResult<T extends object = object> = ({ ok: true } & T) | { error: string };
 
@@ -67,6 +81,7 @@ interface ContactAccess {
     team_id: string | null;
     phone: string | null;
     key_date: string | null;
+    contact_type_confirmed_at?: string | null;
   };
 }
 
@@ -77,7 +92,8 @@ async function withContact(contactId: unknown): Promise<ContactAccess | { error:
   if ("error" in s) return s;
   const { data: contact } = await s.db
     .from("contacts")
-    .select("id, contact_type_id, owner_id, team_id, phone, key_date")
+    // select * a propósito: tolera que falten las columnas de 00036 (código desplegado antes que la migración).
+    .select("*")
     .eq("id", contactId)
     .eq("workspace_id", s.workspaceId)
     .maybeSingle();
@@ -163,14 +179,49 @@ export async function createContact(input: {
   const s = await session();
   if ("error" in s) return s;
 
-  const digits = phone.value.replace(/\D/g, "");
-  const { data: same } = await s.db
+  const typed = phone.value;
+  const canonical = canonicalPhone(typed);
+  const digits = canonical.value.replace(/\D/g, "");
+  // Variantes con las que pudo guardarse antes (con o sin +51, tal como se escribió).
+  const typedDigits = typed.replace(/\D/g, "");
+  const variants = [...new Set([canonical.value, typed, digits, `+${digits}`, typedDigits, `+${typedDigits}`])];
+  let { data: same } = await s.db
     .from("contacts")
     .select("id, display_name, phone, email, owner_id, team_id")
     .eq("workspace_id", s.workspaceId)
-    .in("phone", [phone.value, digits, `+${digits}`])
+    .in("phone", variants)
     .limit(1)
     .maybeSingle();
+
+  // Canales de WhatsApp activos: el vínculo (contact_channels) es lo que usa el
+  // webhook para reconocer al cliente cuando escribe.
+  const { data: channels } = await s.db
+    .from("channels")
+    .select("id")
+    .eq("workspace_id", s.workspaceId)
+    .eq("platform", "whatsapp")
+    .eq("is_active", true);
+  const channelIds = (channels ?? []).map((c) => c.id);
+  const senderId = senderIdFromPhone(canonical.value);
+
+  if (!same && canonical.linkable && channelIds.length > 0) {
+    const { data: link } = await s.db
+      .from("contact_channels")
+      .select("contact_id")
+      .in("channel_id", channelIds)
+      .eq("platform_sender_id", senderId)
+      .limit(1)
+      .maybeSingle();
+    if (link) {
+      const { data: linked } = await s.db
+        .from("contacts")
+        .select("id, display_name, phone, email, owner_id, team_id")
+        .eq("workspace_id", s.workspaceId)
+        .eq("id", link.contact_id)
+        .maybeSingle();
+      same = linked;
+    }
+  }
   if (same) {
     const summaries = await loadContactCaseSummaries(s.db, same.id);
     if (!actorSeesContact(s.actor, same, summaries)) {
@@ -197,7 +248,7 @@ export async function createContact(input: {
     .insert({
       workspace_id: s.workspaceId,
       display_name: name,
-      phone: phone.value,
+      phone: canonical.value,
       owner_id: s.userId,
       team_id: team,
       contact_type_id: def?.id ?? null,
@@ -209,6 +260,17 @@ export async function createContact(input: {
     console.error("[contacts] create", error?.message);
     return { error: GENERIC_ERROR };
   }
+
+  if (canonical.linkable && channelIds.length > 0) {
+    const { error: linkError } = await s.db.from("contact_channels").insert(
+      channelIds.map((channelId) => ({
+        contact_id: created.id,
+        channel_id: channelId,
+        platform_sender_id: senderId,
+      })),
+    );
+    if (linkError) console.error("[contacts] create link", linkError.message);
+  }
   return {
     ok: true,
     existed: false,
@@ -218,7 +280,12 @@ export async function createContact(input: {
 
 // ── Cambios de la ficha ────────────────────────────────────────────────────
 
-/** Tipo de contacto: cualquiera que vea el contacto. null lo quita. */
+/**
+ * Tipo de contacto: cualquiera que vea el contacto. null lo quita.
+ * Un cambio a mano CONFIRMA el tipo (quién y cuándo) y queda en el historial
+ * con source 'manual'. Elegir el mismo tipo que ya tiene (por ejemplo "Es
+ * nuevo · Prospecto" en la pregunta del chat) solo lo confirma.
+ */
 export async function updateContactType(
   contactId: string,
   contactTypeId: string | null,
@@ -227,7 +294,14 @@ export async function updateContactType(
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
   const { s, contact } = ctx;
-  if (contact.contact_type_id === contactTypeId) return { ok: true };
+  const now = new Date().toISOString();
+
+  if (contact.contact_type_id === contactTypeId) {
+    if (!contact.contact_type_confirmed_at) {
+      await confirmContactTypeRow(s.db, { workspaceId: s.workspaceId, contactId: contact.id, by: s.userId, at: now });
+    }
+    return { ok: true };
+  }
 
   if (contactTypeId) {
     const { data: type } = await s.db
@@ -238,18 +312,46 @@ export async function updateContactType(
       .maybeSingle();
     if (!type || type.archived_at) return { error: "El tipo de contacto no existe o está archivado." };
   }
-  const failure = await updateContact(ctx, { contact_type_id: contactTypeId });
-  if (failure) return failure;
-  await logActivity(s.db, {
-    workspace_id: s.workspaceId,
-    type: "contact_type_changed",
-    contact_id: contact.id,
-    actor_id: s.userId,
-    from_value: contact.contact_type_id,
-    to_value: contactTypeId,
-    meta: { reason: "manual" },
+  const saved = await setContactTypeRow(s.db, {
+    workspaceId: s.workspaceId,
+    contactId: contact.id,
+    contactTypeId,
+    confirm: { at: now, by: s.userId },
+  });
+  if (!saved.ok) return { error: GENERIC_ERROR };
+  await recordContactTypeChange(s.db, {
+    workspaceId: s.workspaceId,
+    contactId: contact.id,
+    actorId: s.userId,
+    from: contact.contact_type_id,
+    to: contactTypeId,
+    source: "manual",
+    reason: null,
   });
   return { ok: true };
+}
+
+/**
+ * "Preguntar después": la pregunta del chat no vuelve a salir para este
+ * contacto durante 7 días. Cualquiera que vea el contacto.
+ */
+export async function snoozeContactTypePrompt(contactId: string): Promise<ContactActionResult<{ until: string }>> {
+  const ctx = await withContact(contactId);
+  if ("error" in ctx) return ctx;
+  const { s, contact } = ctx;
+  // Un tipo ya confirmado no tiene nada que posponer.
+  if (contact.contact_type_confirmed_at) return { ok: true, until: contact.contact_type_confirmed_at };
+  const until = snoozeUntil(new Date());
+  const { error } = await s.db
+    .from("contacts")
+    .update({ contact_type_prompt_snoozed_until: until })
+    .eq("id", contact.id)
+    .eq("workspace_id", s.workspaceId);
+  if (error) {
+    if (!isMissingColumn(error)) console.error("[contacts] snooze", error.message);
+    return { error: GENERIC_ERROR };
+  }
+  return { ok: true, until };
 }
 
 /** Fecha clave ("YYYY-MM-DD"): cualquiera que vea el contacto. null la quita. */
@@ -273,8 +375,12 @@ export async function updateContactPhone(
   contactId: string,
   phone: string | null,
 ): Promise<ContactActionResult<{ phone: string | null }>> {
-  const normalized = normalizePhone(phone);
-  if (!normalized.ok) return { error: normalized.error };
+  const checked = normalizePhone(phone);
+  if (!checked.ok) return { error: checked.error };
+  const normalized = {
+    ...checked,
+    value: checked.value === null ? null : canonicalPhone(checked.value).value,
+  };
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
   if (ctx.contact.phone !== normalized.value) {

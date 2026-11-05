@@ -26,6 +26,7 @@ import { resolveTargetTeamId } from "./routing";
 import { resumeIdlePausedBots } from "./bot-resume";
 import { alertUnhandledComplaints } from "./complaint";
 import { solutionDueAt } from "./protection";
+import { runContactInactivity } from "./contact-inactivity";
 
 const BATCH = 50;
 
@@ -48,6 +49,8 @@ export interface CaseTaskStats {
   complaintAlerts: number;
   /** Bots reanudados por llevar 24 h sin mensaje humano y sin gestión abierta. */
   botsResumed: number;
+  /** Tipo de contacto: contactos pasados a inactivos por no comprar en N días (una vez al día). */
+  contactsInactivated: number;
   stoppedEarly: boolean;
 }
 
@@ -674,6 +677,7 @@ export async function runCaseTasks(
     commitmentAlerts: 0,
     complaintAlerts: 0,
     botsResumed: 0,
+    contactsInactivated: 0,
     stoppedEarly: false,
   };
 
@@ -764,6 +768,14 @@ export async function runCaseTasks(
       async () => {
         const r = await resumeIdlePausedBots(db, { deadline: opts.deadline, now: opts.now });
         stats.botsResumed = r.resumed;
+        stats.stoppedEarly ||= r.stoppedEarly;
+      },
+    ],
+    [
+      "contact_inactivity",
+      async () => {
+        const r = await runContactInactivity(db, { deadline: opts.deadline, now: opts.now });
+        stats.contactsInactivated = r.moved;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],

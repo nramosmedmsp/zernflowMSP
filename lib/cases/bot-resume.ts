@@ -21,22 +21,28 @@ export async function resumeIdlePausedBots(
   let resumed = 0;
   let stoppedEarly = false;
 
-  for (let from = 0; from < MAX_PER_RUN; from += PAGE) {
+  // B-21: se pagina por cursor (id mayor que el último visto), no por posición:
+  // las conversaciones que se reanudan salen del filtro y la posición saltaría.
+  let after: string | null = null;
+  for (let seen = 0; seen < MAX_PER_RUN; seen += PAGE) {
     if (Date.now() >= opts.deadline) {
       stoppedEarly = true;
       break;
     }
-    const { data: page, error } = await db
+    let query = db
       .from("conversations")
       .select("id, workspace_id, contact_id")
       .eq("is_automation_paused", true)
       .order("id", { ascending: true })
-      .range(from, from + PAGE - 1);
+      .limit(PAGE);
+    if (after) query = query.gt("id", after);
+    const { data: page, error } = await query;
     if (error) {
       console.error("[cases cron] bot resume list", error.message);
       break;
     }
     if (!page || page.length === 0) break;
+    after = page[page.length - 1].id;
 
     for (const conv of page) {
       const { count } = await db

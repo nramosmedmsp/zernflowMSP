@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { groupCasesByContact, type InboxCase, type InboxConversation } from "./inbox-model";
+import { groupCasesByContact, type ContactRow, type InboxCase, type InboxConversation } from "./inbox-model";
 import {
   CASES_REFRESH_INTERVAL_MS,
   CASES_REFRESH_MIN_GAP_MS,
@@ -82,6 +82,22 @@ export function useInboxData({
       .in("status", ["open", "scheduled"]);
     setCases((prev) => [...prev.filter((c) => c.contact_id !== contactId), ...((data ?? []) as InboxCase[])]);
   }, []);
+
+  /** Cambia en la lista los datos del contacto (p. ej. su tipo) sin esperar a recargar la página. */
+  const patchContact = useCallback((contactId: string, patch: Partial<ContactRow>) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.contact_id === contactId && c.contacts ? { ...c, contacts: { ...c.contacts, ...patch } } : c)),
+    );
+  }, []);
+
+  /** Vuelve a leer el contacto (tipo y confirmación pueden cambiar por una regla o por otra persona). */
+  const refreshContact = useCallback(
+    async (contactId: string) => {
+      const { data } = await createClient().from("contacts").select("*").eq("id", contactId).maybeSingle();
+      if (data) patchContact(contactId, data);
+    },
+    [patchContact],
+  );
 
   // M-19: la gestión que se reasignó a otro asesor deja de llegarle a este por
   // Realtime (la RLS ya no se la muestra). Se vuelven a pedir las activas al
@@ -213,5 +229,7 @@ export function useInboxData({
     refreshContactCases,
     refreshActiveCases,
     markConversationRead,
+    patchContact,
+    refreshContact,
   };
 }

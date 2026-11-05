@@ -48,6 +48,11 @@ export function draftHasRanges(draft: HoursDraft): boolean {
   return WEEKDAYS.some((d) => draft[d].length > 0);
 }
 
+/** B-8: ¿algún tramo empieza y termina a la misma hora? (no se puede guardar). */
+export function draftHasInvalidRange(draft: HoursDraft): boolean {
+  return WEEKDAYS.some((d) => draft[d].some((r) => r[0] === r[1]));
+}
+
 /** Copia los tramos de un día a otros (reemplaza lo que tuvieran). */
 export function copyDay(draft: HoursDraft, from: Weekday, to: readonly Weekday[]): HoursDraft {
   const next: HoursDraft = { ...draft };

@@ -341,7 +341,14 @@ export async function closeCase(
     keyDate: keyDate ?? contact.key_date,
     overrides: { scheduleAt: input.overrides?.schedule_at, skipSchedule: input.overrides?.skip_schedule },
   });
-  const effects = await applyRulePlan(db, { plan, caseRow: closed, contact, actorId: input.actorId, keyDate });
+  const effects = await applyRulePlan(db, {
+    plan,
+    caseRow: closed,
+    contact,
+    actorId: input.actorId,
+    keyDate,
+    wonCount: prepared.kind === "won" ? prepared.wonCount : null,
+  });
 
   await resumeAutomationIfIdle(db, row.workspace_id, row.contact_id);
 

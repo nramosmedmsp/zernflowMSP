@@ -11,6 +11,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import { scheduleCasesForKeyDate } from "@/lib/cases";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
+import { confirmContactTypesRows, recordContactTypeChanges } from "@/lib/cases/contact-type";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { MAX_IMPORT_ROWS } from "@/lib/import/mapping";
 import { normalizeImportPhone, senderIdFromPhone } from "@/lib/import/phone";
@@ -379,13 +380,19 @@ export async function processImportBatch(input: {
   const toCreate = validated.filter((v) => v.status === "create");
   const toUpdate = validated.filter((v) => v.status === "update");
   const touched: { contactId: string; row: ValidatedRow }[] = [];
+  // Cambios de tipo que trae el archivo: quedan en el historial (origen 'importación') y confirman el tipo.
+  const typeChanges: { contactId: string; from: string | null; to: string }[] = [];
 
   // Crear: en bloque; si el bloque falla, de a una para aislar la fila mala.
   for (const part of chunks(toCreate, CHUNK)) {
     const payload = part.map((r) => contactPayload(r, workspaceId, batch.file_name));
     const { data, error } = await db.from("contacts").insert(payload).select("id");
     if (!error && data && data.length === part.length) {
-      data.forEach((c, i) => touched.push({ contactId: c.id, row: part[i] }));
+      data.forEach((c, i) => {
+        touched.push({ contactId: c.id, row: part[i] });
+        const to = part[i].contact.contactTypeId;
+        if (to) typeChanges.push({ contactId: c.id, from: null, to });
+      });
       result.created += part.length;
       continue;
     }
@@ -397,6 +404,8 @@ export async function processImportBatch(input: {
         result.errors.push({ line: part[i].line, message: "No se pudo crear el contacto." });
       } else {
         touched.push({ contactId: one.data.id, row: part[i] });
+        const to = part[i].contact.contactTypeId;
+        if (to) typeChanges.push({ contactId: one.data.id, from: null, to });
         result.created++;
       }
     }
@@ -413,6 +422,16 @@ export async function processImportBatch(input: {
     if (c.teamId) patch.team_id = c.teamId;
     if (c.ownerId) patch.owner_id = c.ownerId;
     if (c.keyDate) patch.key_date = c.keyDate;
+    let previousType: string | null = null;
+    if (c.contactTypeId) {
+      const { data: before } = await db
+        .from("contacts")
+        .select("contact_type_id")
+        .eq("id", r.existingId as string)
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+      previousType = before?.contact_type_id ?? null;
+    }
     if (Object.keys(patch).length > 0) {
       const { error } = await db
         .from("contacts")
@@ -426,7 +445,28 @@ export async function processImportBatch(input: {
       }
     }
     touched.push({ contactId: r.existingId as string, row: r });
+    if (c.contactTypeId) typeChanges.push({ contactId: r.existingId as string, from: previousType, to: c.contactTypeId });
     result.updated++;
+  }
+
+  // Historial del tipo (solo donde cambió) y confirmación de los que el archivo trae con tipo.
+  if (typeChanges.length > 0) {
+    const stamp = new Date().toISOString();
+    await recordContactTypeChanges(
+      db,
+      typeChanges
+        .filter((t) => t.from !== t.to)
+        .map((t) => ({
+          workspaceId,
+          contactId: t.contactId,
+          actorId: userId,
+          from: t.from,
+          to: t.to,
+          source: "import" as const,
+          reason: "importación",
+        })),
+    );
+    await confirmContactTypesRows(db, { workspaceId, contactIds: typeChanges.map((t) => t.contactId), by: userId, at: stamp });
   }
 
   // Etiquetas.

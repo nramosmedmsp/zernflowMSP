@@ -5,6 +5,7 @@
 // `lib/actions/case-config.ts` (que son la fuente de verdad: validan en el
 // servidor), la interfaz (para avisar antes) y las pruebas de vitest.
 
+import { DESCRIPTION_MAX } from "@/lib/cases/contact-type-model";
 import type {
   CaseRouting,
   CaseRuleAction,
@@ -95,6 +96,17 @@ export interface ContactTypeConfig {
   isDefault: boolean;
   archived: boolean;
   updatedAt: string;
+  /** Texto corto del menú del chip (00036). */
+  description: string | null;
+  /** Contactos que tienen hoy este tipo. */
+  contactCount: number;
+}
+
+/** Ajuste "pasar a inactivo a quien no compra hace N días" (workspaces.settings.contact_type_inactivity). */
+export interface InactivityConfig {
+  enabled: boolean;
+  typeId: string | null;
+  days: number;
 }
 
 export interface TeamOption {
@@ -108,6 +120,7 @@ export interface CaseConfigData {
   keyDateLabel: string;
   caseTypes: CaseTypeConfig[];
   contactTypes: ContactTypeConfig[];
+  inactivity: InactivityConfig;
   /** Equipos activos (para el destino fijo). */
   teams: TeamOption[];
 }
@@ -225,6 +238,15 @@ export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const name = raw.trim().replace(/\s+/g, " ");
   return name.length >= 1 && name.length <= MAX_NAME_LENGTH ? name : null;
+}
+
+/** Descripción corta de un tipo: vacía = null; undefined si pasa del máximo. */
+export function cleanDescription(raw: unknown): string | null | undefined {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "string") return undefined;
+  const text = raw.trim().replace(/\s+/g, " ");
+  if (text === "") return null;
+  return text.length <= DESCRIPTION_MAX ? text : undefined;
 }
 
 /** Comparación por nombre: sin mayúsculas, tildes ni espacios de más. */

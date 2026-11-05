@@ -779,6 +779,56 @@ describe("A-7: la fecha compromiso no se quita ni se mueve con «Próximo contac
   });
 });
 
+describe("M-8/M-9: fechas en formatos distintos", () => {
+  it("M-9: actualizar solo el texto de la solución, con la misma fecha en otro formato, no avisa que cambió el compromiso", async () => {
+    const dbForm = "2026-10-21T15:00:00+00:00";
+    const c = openPostventa({ solution_status: "in_progress", solution_note: "Reenvío", next_action_at: dbForm });
+    const r = await registerSolutionInProgress(
+      db(),
+      { caseId: c.id as string, note: "Reenvío con courier", commitmentAt: "2026-10-21T15:00:00.000Z", actorId: ANA },
+      NOW,
+    );
+    expect(r).toMatchObject({ ok: true });
+    expect(notes("commitment_changed")).toHaveLength(0);
+    expect(activity("solution_registered", c.id as string)[0].meta ?? {}).not.toHaveProperty("previous_commitment_at");
+    expect(row("cases", c.id).solution_note).toBe("Reenvío con courier");
+  });
+
+  it("M-9: cuando la fecha sí cambia el aviso muestra la hora de Lima, no el formato técnico", async () => {
+    const c = openPostventa({ solution_status: "in_progress", solution_note: "Reenvío", next_action_at: "2026-10-21T15:00:00+00:00" });
+    await registerSolutionInProgress(
+      db(),
+      { caseId: c.id as string, note: "Cambio de lote", commitmentAt: "2026-10-23T20:00:00.000Z", actorId: ANA },
+      NOW,
+    );
+    const [n] = notes("commitment_changed");
+    expect(n.body).toContain("Antes 21 oct 2026, 10:00 · ahora 23 oct 2026, 15:00.");
+    expect(n.body).not.toMatch(/T\d\d:\d\d/);
+  });
+
+  it("M-8: se puede editar solo la nota de un próximo contacto ya vencido (misma fecha en otro formato)", async () => {
+    const c = openPostventa({
+      next_action_at: "2026-10-19T20:14:22.823+00:00",
+      next_action_note: "Llamar",
+      next_action_notified_at: "2026-10-19T20:20:00.000Z",
+    });
+    // El formulario manda la misma fecha sin segundos.
+    const r = await setNextAction(db(), { caseId: c.id as string, at: "2026-10-19T20:14:00.000Z", note: "Llamar por el cambio", actorId: ANA }, NOW);
+    expect(r).toMatchObject({ ok: true });
+    expect(row("cases", c.id)).toMatchObject({
+      next_action_at: "2026-10-19T20:14:22.823+00:00",
+      next_action_note: "Llamar por el cambio",
+      next_action_notified_at: "2026-10-19T20:20:00.000Z",
+    });
+  });
+
+  it("M-8: una fecha pasada distinta de la actual se sigue rechazando", async () => {
+    const c = openPostventa({ next_action_at: "2026-10-19T20:14:22.823+00:00" });
+    const r = await setNextAction(db(), { caseId: c.id as string, at: "2026-10-19T10:00:00.000Z", note: "x", actorId: ANA }, NOW);
+    expect(r).toMatchObject({ error: expect.stringContaining("ya pasaron") });
+  });
+});
+
 describe("M-4: cambiar el tipo de la gestión reinicia o limpia el control de la solución", () => {
   it("una Venta de hace 3 días que pasa a Postventa cuenta el plazo desde el cambio", async () => {
     const [sale] = fake.seed("cases", [
@@ -836,16 +886,23 @@ describe("M-4: cambiar el tipo de la gestión reinicia o limpia el control de la
   });
 });
 
-describe("M-3: la ventana de 7 días de Postventa no reabre con cualquier mensaje", () => {
+describe("M-3/M-2: la ventana de 7 días de Postventa reabre con cualquier mensaje", () => {
   const at = NOW.toISOString();
 
-  it("un mensaje normal pasadas 24 h abre una gestión nueva y no reabre la Postventa", async () => {
-    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(3), closed_by: ANA });
-    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "gracias, quiero otra proteína" });
+  it("M-2: un mensaje que no parece reclamo, dentro de los 7 días, también reabre la Postventa y avisa", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(2), closed_by: ANA });
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "Hola, el pedido llegó con el pote abollado" });
+    expect(r).toMatchObject({ caseId: closed.id, reopened: true, opened: false });
+    expect(row("cases", closed.id).status).toBe("open");
+    expect(notes("protected_reopened").length).toBeGreaterThan(0);
+  });
+
+  it("pasada la ventana de 7 días un mensaje abre una gestión nueva y no reabre la Postventa", async () => {
+    const closed = openPostventa({ status: "resolved", closed_at: daysAgo(8), closed_by: ANA });
+    const r = await handleInbound(db(), { workspaceId: WS, contactId, conversationId, at, text: "llegó dañado otra vez" });
     expect(r).toMatchObject({ opened: true, reopened: false });
     expect(r!.caseId).not.toBe(closed.id);
     expect(row("cases", closed.id).status).toBe("resolved");
-    expect(notes("protected_reopened")).toHaveLength(0);
   });
 
   it("un mensaje que parece reclamo dentro de la ventana la reabre", async () => {

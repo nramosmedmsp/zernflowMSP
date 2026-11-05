@@ -10,7 +10,7 @@ const BATCH = 500;
 const MAX_BATCHES = 10;
 
 /**
- * GET /api/cron/media-cleanupcon la cabecera Authorization: Bearer CRON_SECRET (una vez al día)
+ * GET /api/cron/media-cleanup con la cabecera Authorization: Bearer CRON_SECRET (una vez al día)
  *
  * Borra las fotos, PDF y audios de los chats que cumplieron 2 meses y los marca
  * como vencidos: el chat muestra "Archivo vencido". Los archivos de las

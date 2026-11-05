@@ -26,6 +26,15 @@ import { getWorkspace } from "@/lib/workspace";
 import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
+import {
+  DESCRIPTION_MAX,
+  INACTIVITY_MAX_DAYS,
+  INACTIVITY_MIN_DAYS,
+  INACTIVITY_RUN_KEY,
+  INACTIVITY_SETTINGS_KEY,
+  normalizeInactivityDays,
+  parseInactivitySettings,
+} from "@/lib/cases/contact-type-model";
 import type {
   CaseRouting,
   CaseTypeAutoTemplate,
@@ -52,6 +61,7 @@ import {
   closeStageProblem,
   cleanKeyDateLabel,
   cleanName,
+  cleanDescription,
   decideRemoval,
   diffFields,
   hasDuplicateName,
@@ -269,7 +279,7 @@ async function loadWorkspaceRules(db: Db, workspaceId: string): Promise<RuleConf
   return (data ?? []).map((r) => toRule(r as RuleRow));
 }
 
-async function loadConfig(db: Db, workspaceId: string): Promise<CaseConfigData> {
+async function loadConfig(db: Db, workspaceId: string, countDb: Db = db): Promise<CaseConfigData> {
   const [ws, types, contactTypes, teams] = await Promise.all([
     db.from("workspaces").select("settings").eq("id", workspaceId).maybeSingle(),
     db.from("case_types").select("*").eq("workspace_id", workspaceId).order("position", { ascending: true }),
@@ -300,6 +310,13 @@ async function loadConfig(db: Db, workspaceId: string): Promise<CaseConfigData> 
   ] as const) {
     if (res) must(res, what);
   }
+
+  // Contactos por tipo (con el cliente de servicio: el conteo no debe depender de la visibilidad de quien mira).
+  const counts = new Map<string, number>(
+    await Promise.all(
+      (contactTypes.data ?? []).map(async (c): Promise<[string, number]> => [c.id, await countContactsOfType(countDb, workspaceId, c.id)]),
+    ),
+  );
 
   const settings = asObject(ws.data?.settings);
   const label = typeof settings.key_date_label === "string" ? settings.key_date_label : "";
@@ -342,14 +359,17 @@ async function loadConfig(db: Db, workspaceId: string): Promise<CaseConfigData> 
       isDefault: c.is_default,
       archived: c.archived_at !== null,
       updatedAt: c.updated_at,
+      description: c.description ?? null,
+      contactCount: counts.get(c.id) ?? 0,
     })),
+    inactivity: parseInactivitySettings(settings),
     teams: (teams.data ?? []).map((t) => ({ id: t.id, name: t.name })),
   };
 }
 
 /** Toda la configuración de gestiones y tipos de contacto del espacio (solo administradores). */
 export async function getCaseConfig(): Promise<ConfigResult<{ data: CaseConfigData }>> {
-  return run(async (s) => ({ ok: true, data: await loadConfig(s.db, s.workspaceId) }));
+  return run(async (s) => ({ ok: true, data: await loadConfig(s.db, s.workspaceId, await service()) }));
 }
 
 // ── Carga con verificación de pertenencia ──────────────────────────────────
@@ -1379,6 +1399,7 @@ export async function removeRule(id: string): Promise<ConfigResult> {
 interface ContactTypeRow {
   id: string;
   name: string;
+  description?: string | null;
   color: string | null;
   position: number;
   is_default: boolean;
@@ -1426,7 +1447,13 @@ export async function createContactType(input: { name: string; color?: string | 
   });
 }
 
-export async function updateContactType(input: { id: string; name?: string; color?: string | null }): Promise<ConfigResult> {
+export async function updateContactType(input: {
+  id: string;
+  name?: string;
+  color?: string | null;
+  /** Texto corto del menú del chip; vacío lo quita. */
+  description?: string | null;
+}): Promise<ConfigResult> {
   return run(async (s) => {
     const row = await ownedContactType(s, input?.id);
     if (!row) return { error: CONTACT_TYPE_NOT_FOUND };
@@ -1444,6 +1471,12 @@ export async function updateContactType(input: { id: string; name?: string; colo
       if (color === undefined) return { error: "El color no es válido." };
       patch.color = color;
       before.color = row.color;
+    }
+    if (input.description !== undefined) {
+      const description = cleanDescription(input.description);
+      if (description === undefined) return { error: `La descripción admite hasta ${DESCRIPTION_MAX} caracteres.` };
+      patch.description = description;
+      before.description = row.description ?? null;
     }
     const changes = diffFields(before, patch);
     if (Object.keys(changes).length === 0) return { ok: true };
@@ -1600,6 +1633,54 @@ export async function removeContactType(id: string): Promise<ConfigResult<{ outc
     if ((data ?? []).length === 0) throw new Error("contact_types: sin permiso");
     await audit(s, "contact_type_deleted", "contact_type", { entityId: row.id, name: row.name });
     return { ok: true, outcome, message: removalMessage(outcome, what) };
+  });
+}
+
+// ── Inactividad automática ─────────────────────────────────────────────────
+
+/**
+ * "Pasar a {tipo} a quien no compra hace {N} días". Se guarda en
+ * `workspaces.settings.contact_type_inactivity`; la tarea diaria del cron
+ * (lib/cases/contact-inactivity.ts) la aplica. Al guardar se reinicia el
+ * "ya corrió hoy" para que el cambio rija de inmediato.
+ */
+export async function saveContactTypeInactivity(input: {
+  enabled: boolean;
+  typeId: string | null;
+  days: number;
+}): Promise<ConfigResult> {
+  return run(async (s) => {
+    if (typeof input?.enabled !== "boolean") return { error: INVALID };
+    const days = normalizeInactivityDays(input.days);
+    if (days === null) {
+      return { error: `Los días deben ser un número entero entre ${INACTIVITY_MIN_DAYS} y ${INACTIVITY_MAX_DAYS}.` };
+    }
+    if (input.typeId !== null && !isId(input.typeId)) return { error: INVALID };
+    if (input.enabled) {
+      if (!input.typeId) return { error: "Elige a qué tipo pasan los contactos que dejan de comprar." };
+      const row = await ownedContactType(s, input.typeId);
+      if (!row) return { error: CONTACT_TYPE_NOT_FOUND };
+      if (row.archived_at !== null) return { error: "Ese tipo de contacto está archivado. Elige otro." };
+    }
+    const { data: ws } = must(await s.db.from("workspaces").select("settings").eq("id", s.workspaceId).maybeSingle(), "workspaces");
+    if (!ws) return { error: "No se encontró el espacio de trabajo." };
+    const settings = asObject(ws.settings);
+    const before = parseInactivitySettings(settings);
+    const value = { enabled: input.enabled, type_id: input.typeId, days };
+    const next = {
+      ...settings,
+      [INACTIVITY_SETTINGS_KEY]: value,
+      [INACTIVITY_RUN_KEY]: { day: null, cursor: null },
+    };
+    const saveError = await mergeWorkspaceSettings(s.db, s.workspaceId, settings, next);
+    if (saveError === "sin permiso") return { error: ADMIN_ONLY_MESSAGE };
+    if (saveError) throw new Error(`update workspaces: ${saveError}`);
+    await audit(s, "contact_type_inactivity_changed", "workspace", {
+      from: before.enabled ? `${before.days} días` : "apagado",
+      to: input.enabled ? `${days} días` : "apagado",
+      meta: { type_id: input.typeId, days, enabled: input.enabled },
+    });
+    return { ok: true };
   });
 }
 

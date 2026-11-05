@@ -5,6 +5,7 @@ import {
   NO_TEMPLATE_REASON,
   NO_TEXT_REASON,
   decideStepSend,
+  validateSequenceSteps,
 } from "./sequence-step";
 import type { TemplateMessageContent } from "@/lib/types/database";
 
@@ -69,5 +70,39 @@ describe("decideStepSend", () => {
       template: TEMPLATE,
       viaFallback: true,
     });
+  });
+});
+
+describe("validateSequenceSteps: variables de plantilla (M-6)", () => {
+  const withParams = (params: string[]): TemplateMessageContent => ({ ...TEMPLATE, params });
+
+  it("rechaza un paso de plantilla con alguna variable vacía", () => {
+    expect(validateSequenceSteps([{ type: "template", template: withParams(["{nombre}", ""]) }])).toBe(
+      "El paso 1 usa una plantilla: completa todas sus variables.",
+    );
+    expect(validateSequenceSteps([{ type: "template", template: withParams(["{nombre}", "   "]) }])).toMatch(/variables/);
+  });
+
+  it("acepta la plantilla con todas sus variables o sin variables", () => {
+    expect(validateSequenceSteps([{ type: "template", template: withParams(["{nombre}", "{empresa}"]) }])).toBeNull();
+    expect(validateSequenceSteps([{ type: "template", template: withParams([]) }])).toBeNull();
+  });
+
+  it("también revisa la plantilla alternativa de un paso de mensaje", () => {
+    expect(
+      validateSequenceSteps([{ type: "message", content: "Hola", template: withParams(["{nombre}", ""]) }]),
+    ).toMatch(/paso 1.*variables/);
+    expect(
+      validateSequenceSteps([{ type: "message", content: "Hola", template: withParams(["{nombre}"]) }]),
+    ).toBeNull();
+  });
+
+  it("M-5: un paso en modo alternativa sin plantilla elegida no se puede activar", () => {
+    const empty = { kind: "template", template_name: "", language: "", params: [] } as TemplateMessageContent;
+    expect(validateSequenceSteps([{ type: "message", content: "Hola", template: empty }])).toMatch(
+      /plantilla alternativa/,
+    );
+    // El paso de solo mensaje (sin plantilla) sigue siendo válido.
+    expect(validateSequenceSteps([{ type: "message", content: "Hola", template: null }])).toBeNull();
   });
 });

@@ -10,8 +10,15 @@ vi.mock("@/lib/supabase/server", () => ({ createServiceClient: async () => state
 vi.mock("@/lib/cases", () => ({ stampBotOutbound: vi.fn(async () => {}) }));
 vi.mock("@/lib/cases/messaging", () => ({
   zernioMessenger: () => ({
-    sendText: async (input: { text: string }) => {
+    sendText: async (input: { text: string; lateAccountId?: string }) => {
       state.sent.push({ text: input.text });
+      // Canal de prueba: el mensajero real guarda el mensaje en `messages`.
+      if (input.lateAccountId?.startsWith("demo-")) {
+        const [row] = (state.db as FakeDb).seed("messages", [
+          { conversation_id: "cv-1", direction: "outbound", text: input.text, status: "sent", platform_message_id: "demo-x" },
+        ]);
+        return { ok: true, messageId: row.id };
+      }
       return { ok: true, messageId: `m-${state.sent.length}` };
     },
     sendTemplate: async (input: { templateName: string }) => {
@@ -217,5 +224,13 @@ describe("secuencias robustas (tanda 7B)", () => {
     const conversation = fake.rows("conversations")[0];
     expect(conversation.last_message_preview).toBe("Hola Ana, ¿cómo vas con tu rutina?");
     expect(conversation.last_message_at).toBeTruthy();
+  });
+
+  it("B-18: en un canal de prueba el paso no se guarda dos veces y queda marcado como de la secuencia", async () => {
+    fake.rows("channels")[0].late_account_id = "demo-acc";
+    await processSequenceSteps();
+    const messages = fake.rows("messages");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ sent_by_node_id: "sequence:Bienvenida", text: "Hola Ana, ¿cómo vas con tu rutina?" });
   });
 });

@@ -80,6 +80,19 @@ const NODE_LABELS: Record<string, string> = {
   removeTag: "Quitar etiqueta",
   httpRequest: "Solicitud HTTP",
   setCustomField: "Campo personalizado",
+  // B-12: las mismas etiquetas de la paleta del lienzo.
+  condition: "Condición",
+  delay: "Espera",
+  smartDelay: "Espera inteligente",
+  abSplit: "Prueba A/B",
+  aiResponse: "Respuesta con IA",
+  humanTakeover: "Atención humana",
+  subscribe: "Suscribir",
+  unsubscribe: "Desuscribir",
+  classifyCase: "Clasificar gestión",
+  changeStage: "Cambiar etapa",
+  assignTeam: "Asignar a equipo",
+  distributeCase: "Repartir a asesor",
 };
 
 function labelOf(node: FlowNodeLike): string {
@@ -201,7 +214,9 @@ export function validateFlowGraph(
     if (type === "case_opened" || type === "case_stage_changed" || type === "case_closed" || type === "client_no_reply") {
       // Sin tipo (o etapa) el disparador se activa con cualquier gestión: una plantilla instalada
       // en un espacio sin ese tipo lo deja así y el aviso del editor se pierde al cambiar de equipo (R2-B22).
-      if (!text(d.caseTypeId) && !text(rec(d.config).case_type_id)) {
+      // B-22: «Solo gestiones sin clasificar» ya limita el disparador, no avisa.
+      const onlyUnclassified = d.onlyUnclassified === true || rec(d.config).only_unclassified === true;
+      if (!text(d.caseTypeId) && !text(rec(d.config).case_type_id) && !(type === "case_opened" && onlyUnclassified)) {
         add({
           severity: "warning",
           code: "case_trigger_no_type",

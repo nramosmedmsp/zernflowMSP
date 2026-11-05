@@ -285,18 +285,25 @@ function activityPiece(
       };
     case "contact_type_changed": {
       const reason = str(meta.reason);
+      const source = str(meta.source);
+      const text = str(meta.reason_text);
+      const detail =
+        source === "inactividad"
+          ? `Automático: ${text ?? "inactividad"}`
+          : source === "import"
+            ? "Al importar"
+            : source === "rule" || reason === "rule"
+              ? `Por una regla de la gestión${text ? ` (${text})` : ""}`
+              : source === "sistema" || reason === "default"
+                ? "Tipo por defecto"
+                : source === "manual" || reason === "manual"
+                  ? "Cambio manual"
+                  : null;
       return {
         kind: "contact",
         tone: "default",
         title: `Tipo de contacto: ${lookup(lk.contactTypes, from, "Sin tipo")} → ${lookup(lk.contactTypes, to, "Sin tipo")}`,
-        detail:
-          reason === "rule"
-            ? "Por una regla de la gestión"
-            : reason === "default"
-              ? "Tipo por defecto"
-              : reason === "manual"
-                ? "Cambio manual"
-                : null,
+        detail,
       };
     }
     case "owner_changed": {
@@ -376,7 +383,15 @@ function activityPiece(
         kind: "system",
         tone: "muted",
         title: "Se pausó el bot en la conversación",
-        detail: str(meta.source) === "inbox" ? "Desde la bandeja" : null,
+        detail:
+          str(meta.source) === "inbox" ? "Desde la bandeja" : str(meta.source) === "flow" ? "Por un flujo (atención humana)" : null,
+      };
+    case "contact_unsubscribed":
+      return {
+        kind: "system",
+        tone: "muted",
+        title: "El contacto se dio de baja de los mensajes",
+        detail: str(meta.source) === "flow" ? "Por un flujo" : null,
       };
     case "automation_resumed": {
       const source = str(meta.source);

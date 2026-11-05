@@ -67,6 +67,9 @@ describe("cleanSpellWord", () => {
     expect(cleanSpellWord("  Optimum ")).toEqual({ ok: true, word: "Optimum" });
     expect(cleanSpellWord("pre-workout")).toEqual({ ok: true, word: "pre-workout" });
     expect(cleanSpellWord("dos palabras").ok).toBe(false);
+    // B-10: una sola letra no es una palabra para el diccionario; "kg" sí.
+    expect(cleanSpellWord("x")).toEqual({ ok: false, error: "La palabra debe tener al menos 2 letras." });
+    expect(cleanSpellWord("kg")).toEqual({ ok: true, word: "kg" });
     expect(cleanSpellWord("100g").ok).toBe(false);
     expect(cleanSpellWord("").ok).toBe(false);
   });

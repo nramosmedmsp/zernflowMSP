@@ -78,3 +78,23 @@ describe("reanudación automática del bot a las 24 h", () => {
     expect(fake.rows("activity")).toHaveLength(1);
   });
 });
+
+describe("B-21: paginación por cursor", () => {
+  it("con más de una página de chats pausados reanuda todos, sin saltarse los que quedan tras reanudar los primeros", async () => {
+    const total = 230;
+    const ids = Array.from({ length: total }, (_, i) => `cv-${String(i).padStart(4, "0")}`);
+    fake.rows("conversations").length = 0;
+    fake.seed(
+      "conversations",
+      ids.map((id) => ({ id, workspace_id: WS, contact_id: `ct-${id}`, channel_id: "ch-1", is_automation_paused: true })),
+    );
+    fake.seed(
+      "messages",
+      ids.map((id) => human("2026-10-20T10:00:00Z", id)),
+    );
+    const r = await run();
+    expect(r.resumed).toBe(total);
+    expect(fake.rows("conversations").every((c) => c.is_automation_paused === false)).toBe(true);
+  });
+});
+

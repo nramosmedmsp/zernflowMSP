@@ -7,6 +7,7 @@ import {
   cleanHolidayName,
   copyDay,
   describeDay,
+  draftHasInvalidRange,
   draftFromHours,
   draftToPayload,
   emptyDraft,
@@ -194,5 +195,15 @@ describe("feriados", () => {
         all.map((h) => h.date),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("B-8: tramos inválidos", () => {
+  it("detecta un tramo cuyo inicio y fin son iguales", () => {
+    const ok = { ...emptyDraft(), mon: [["09:00", "18:00"]] as TimeRange[] };
+    const bad = { ...ok, tue: [["09:00", "09:00"]] as TimeRange[] };
+    expect(draftHasInvalidRange(emptyDraft())).toBe(false);
+    expect(draftHasInvalidRange(ok)).toBe(false);
+    expect(draftHasInvalidRange(bad)).toBe(true);
   });
 });

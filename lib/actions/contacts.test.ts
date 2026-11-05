@@ -186,11 +186,11 @@ describe("fecha clave y teléfono", () => {
 
   it("guarda el teléfono limpio y lo valida", async () => {
     as(ANA);
-    expect(await updateContactPhone(contactId, "  +51  999 888 777 ")).toEqual({ ok: true, phone: "+51 999 888 777" });
-    expect(contactRow().phone).toBe("+51 999 888 777");
+    expect(await updateContactPhone(contactId, "  +51  999 888 777 ")).toEqual({ ok: true, phone: "+51999888777" });
+    expect(contactRow().phone).toBe("+51999888777");
     expect(await updateContactPhone(contactId, "abc")).toMatchObject({ error: expect.any(String) });
     expect(await updateContactPhone(contactId, "123")).toMatchObject({ error: expect.any(String) });
-    expect(contactRow().phone).toBe("+51 999 888 777");
+    expect(contactRow().phone).toBe("+51999888777");
     expect(await updateContactPhone(contactId, "")).toEqual({ ok: true, phone: null });
     expect(contactRow().phone).toBeNull();
   });
@@ -227,11 +227,46 @@ describe("crear contacto (B-38)", () => {
   it("cualquier miembro registra un cliente nuevo y queda como su responsable", async () => {
     as(BETO);
     const res = await createContact({ name: "  Luis   Ramos ", phone: "987 654 321" });
-    expect(res).toMatchObject({ ok: true, existed: false, contact: { displayName: "Luis Ramos", phone: "987 654 321" } });
+    expect(res).toMatchObject({ ok: true, existed: false, contact: { displayName: "Luis Ramos", phone: "+51987654321" } });
     expect(fake.rows("contacts").find((c) => c.display_name === "Luis Ramos")).toMatchObject({
       owner_id: BETO,
       workspace_id: WS,
     });
+  });
+
+  it("M-3: guarda el teléfono normalizado y lo vincula a los canales de WhatsApp activos", async () => {
+    as(BETO);
+    const channel = randomUUID();
+    fake.seed("channels", [
+      { id: channel, workspace_id: WS, platform: "whatsapp", is_active: true },
+      { id: randomUUID(), workspace_id: WS, platform: "whatsapp", is_active: false },
+      { id: randomUUID(), workspace_id: WS, platform: "instagram", is_active: true },
+    ]);
+    const res = await createContact({ name: "Tomás Manual", phone: "+51 911 222 333" });
+    expect(res).toMatchObject({ ok: true, existed: false, contact: { phone: "+51911222333" } });
+    const id = (res as { contact: { id: string } }).contact.id;
+    expect(fake.rows("contact_channels")).toEqual([
+      expect.objectContaining({ contact_id: id, channel_id: channel, platform_sender_id: "51911222333" }),
+    ]);
+    // Lo mismo escrito de otra forma es el mismo cliente, no un duplicado.
+    const before = fake.rows("contacts").length;
+    expect(await createContact({ name: "Tomás Repetido", phone: "911222333" })).toMatchObject({ ok: true, existed: true });
+    expect(fake.rows("contacts")).toHaveLength(before);
+    expect(fake.rows("contact_channels")).toHaveLength(1);
+  });
+
+  it("M-3: reconoce a un cliente que ya escribió por WhatsApp (solo vínculo) en vez de duplicarlo", async () => {
+    as(OWNER);
+    const channel = randomUUID();
+    fake.seed("channels", [{ id: channel, workspace_id: WS, platform: "whatsapp", is_active: true }]);
+    fake.seed("contact_channels", [{ contact_id: contactId, channel_id: channel, platform_sender_id: "51987000111" }]);
+    const before = fake.rows("contacts").length;
+    expect(await createContact({ name: "María", phone: "987000111" })).toMatchObject({
+      ok: true,
+      existed: true,
+      contact: { id: contactId },
+    });
+    expect(fake.rows("contacts")).toHaveLength(before);
   });
 
   it("valida nombre y teléfono en español", async () => {

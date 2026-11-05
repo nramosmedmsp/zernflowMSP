@@ -14,6 +14,8 @@ import {
   type ContactActionResult,
 } from "@/lib/actions/contacts";
 import { normalizePhone } from "@/components/contacts/contact-labels";
+import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
+import type { ContactTypeInfo, ContactTypeOption } from "@/lib/cases/contact-type-model";
 
 interface TagItem {
   id: string;
@@ -32,7 +34,9 @@ export interface ContactProfileProps {
   phone: string | null;
   keyDateLabel: string;
   sourceText: string;
-  contactTypes: { id: string; name: string; archived: boolean }[];
+  contactTypes: ContactTypeOption[];
+  /** Confirmación, quién y cuándo, y los últimos cambios del tipo. */
+  typeInfo: ContactTypeInfo;
   teams: { id: string; name: string }[];
   members: { userId: string; name: string }[];
   tags: TagItem[];
@@ -103,7 +107,7 @@ export function ContactProfile(props: ContactProfileProps) {
     return true;
   }
 
-  const selectableTypes = props.contactTypes.filter((t) => !t.archived || t.id === typeId);
+  const currentType = props.contactTypes.find((t) => t.id === typeId) ?? null;
   const memberName = (id: string) => props.members.find((m) => m.userId === id)?.name ?? "Alguien";
   const availableTags = props.allTags.filter((t) => !tags.some((x) => x.id === t.id));
 
@@ -164,21 +168,14 @@ export function ContactProfile(props: ContactProfileProps) {
   return (
     <div className="space-y-3 rounded-lg border border-border p-4">
       <Row label="Tipo de contacto" state={states.type}>
-        <select
-          aria-label="Tipo de contacto"
-          value={typeId}
-          onChange={(e) => onType(e.target.value)}
-          disabled={states.type?.status === "saving"}
-          className={FIELD_CLASS}
-        >
-          <option value="">Sin tipo</option>
-          {selectableTypes.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-              {t.archived ? " (archivado)" : ""}
-            </option>
-          ))}
-        </select>
+        <ContactTypeBlock
+          current={currentType}
+          options={props.contactTypes}
+          info={props.typeInfo}
+          personName={memberName}
+          busy={states.type?.status === "saving"}
+          onSelect={(value) => onType(value)}
+        />
       </Row>
 
       <Row label="Responsable" state={states.owner}>

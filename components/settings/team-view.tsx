@@ -245,7 +245,7 @@ export function TeamView({
       if ("error" in result) {
         toast.error(result.error);
       } else {
-        toast.success("Usuario creado");
+        toast.success(result.outcome === "readded" ? "Persona agregada de nuevo al espacio" : "Usuario creado");
         setMembers((prev) => [...prev, result.member]);
         setFullName("");
         setEmail("");
