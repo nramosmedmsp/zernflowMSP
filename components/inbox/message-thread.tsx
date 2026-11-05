@@ -23,10 +23,34 @@ import { useThreadMessages } from "./use-thread-messages";
 import { useNow } from "./use-now";
 import { MessageMedia } from "./message-media";
 import { MediaLightbox, type LightboxImage } from "./media-lightbox";
+import { ContactTypePicker, ContactTypeQuestion } from "@/components/contacts/contact-type-ui";
+import type { ContactTypeOption } from "@/lib/cases/contact-type-model";
+
+/** Línea de sistema en el chat (p. ej. el cambio automático del tipo de contacto). */
+export interface ThreadSystemEvent {
+  id: string;
+  at: string;
+  text: string;
+}
+
+/** Tipo de contacto del chat: chip del encabezado, pregunta única y avisos de cambios automáticos. */
+export interface ThreadContactType {
+  current: ContactTypeOption | null;
+  /** Tipos activos, en orden. */
+  options: ContactTypeOption[];
+  busy: boolean;
+  /** Mostrar la pregunta «¿Ya nos compró antes?». */
+  ask: boolean;
+  onChange: (typeId: string) => void | Promise<void>;
+  onSnooze: () => void | Promise<void>;
+  /** Cambios automáticos (regla, inactividad, importación) como líneas del chat. */
+  events: ThreadSystemEvent[];
+}
 
 type TimelineItem =
   | { kind: "message"; at: string; message: InboxMessage }
-  | { kind: "note"; at: string; note: CaseNote };
+  | { kind: "note"; at: string; note: CaseNote }
+  | { kind: "system"; at: string; event: ThreadSystemEvent };
 
 /** Distancia al final (px) para considerar que el asesor está leyendo lo último. */
 const NEAR_BOTTOM_PX = 120;
@@ -256,8 +280,22 @@ function NoteBubble({ note, members }: { note: CaseNote; members: InboxMember[] 
   );
 }
 
+/** Aviso del sistema, centrado y discreto. */
+function SystemLine({ event }: { event: ThreadSystemEvent }) {
+  return (
+    <div className="flex justify-center py-1">
+      <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-50 px-3 py-1 text-[11px] font-medium text-violet-800 ring-1 ring-violet-200 dark:bg-violet-950/40 dark:text-violet-200 dark:ring-violet-900/60">
+        <span className="h-2 w-2 shrink-0 rounded-full bg-violet-600" />
+        <span className="min-w-0">{event.text}</span>
+        <span className="shrink-0 font-normal text-violet-700/70 dark:text-violet-300/70">· {formatTime(event.at)}</span>
+      </span>
+    </div>
+  );
+}
+
 function itemKey(item: TimelineItem): string {
-  return item.kind === "message" ? item.message.id : `note-${item.note.id}`;
+  if (item.kind === "message") return item.message.id;
+  return item.kind === "note" ? `note-${item.note.id}` : `system-${item.event.id}`;
 }
 
 /**
@@ -283,6 +321,7 @@ export function MessageThread({
   isDemo = false,
   canSimulate = false,
   isAdmin = false,
+  contactType = null,
 }: {
   conversation: InboxConversation | null;
   /** Envíos de la bandeja de este chat que aún no aparecen en la lista de Zernio. */
@@ -311,6 +350,8 @@ export function MessageThread({
   canSimulate?: boolean;
   /** Dueño o Administrador (diccionario de la tienda). */
   isAdmin?: boolean;
+  /** Tipo de contacto del chat (chip, pregunta y líneas automáticas); null mientras carga. */
+  contactType?: ThreadContactType | null;
 }) {
   const toast = useToast();
   const [simulateOpen, setSimulateOpen] = useState(false);
@@ -365,12 +406,13 @@ export function MessageThread({
       ...serverMessages.map((message) => ({ kind: "message" as const, at: message.created_at, message })),
       ...pending.map((message) => ({ kind: "message" as const, at: message.created_at, message })),
       ...notes.map((note) => ({ kind: "note" as const, at: note.created_at, note })),
+      ...(contactType?.events ?? []).map((event) => ({ kind: "system" as const, at: event.at, event })),
     ];
     return items
       .map((item, index) => ({ item, index, t: new Date(item.at).getTime() || 0 }))
       .sort((a, b) => a.t - b.t || a.index - b.index)
       .map(({ item }) => item);
-  }, [serverMessages, outbox, notes]);
+  }, [serverMessages, outbox, notes, contactType?.events]);
 
   // Dónde empiezan los no leídos: se fija con la primera carga y no se mueve.
   const [firstUnreadId, setFirstUnreadId] = useState<string | null>(null);
@@ -529,6 +571,14 @@ export function MessageThread({
                 {conversation.contacts?.display_name ?? "Desconocido"}
               </p>
               {isDemo && <DemoBadge />}
+              {contactType && (
+                <ContactTypePicker
+                  current={contactType.current}
+                  options={contactType.options}
+                  busy={contactType.busy}
+                  onSelect={contactType.onChange}
+                />
+              )}
             </div>
             <p className="truncate text-[11px] text-muted-foreground">
               {platformLabel(conversation.platform)}
@@ -581,6 +631,16 @@ export function MessageThread({
           )}
         </div>
       </div>
+
+      {contactType?.ask && (
+        <ContactTypeQuestion
+          contactName={conversation.contacts?.display_name ?? null}
+          options={contactType.options}
+          busy={contactType.busy}
+          onAnswer={contactType.onChange}
+          onSnooze={contactType.onSnooze}
+        />
+      )}
 
       {caseSlot}
 
@@ -651,8 +711,10 @@ export function MessageThread({
                         onRetry={onRetry}
                         onOpenImage={setLightbox}
                       />
-                    ) : (
+                    ) : item.kind === "note" ? (
                       <NoteBubble note={item.note} members={members} />
+                    ) : (
+                      <SystemLine event={item.event} />
                     )}
                   </div>
                 );

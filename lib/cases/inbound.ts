@@ -4,6 +4,7 @@
 import type { Json } from "@/lib/types/database";
 import { assignCase, type AssignOutcome } from "./assign";
 import { pickSuggestedCaseTypeId, resolveReopenStageId } from "./decisions";
+import { recordContactTypeChange } from "./contact-type";
 import { runEventRules } from "./effects";
 import { emitCaseOpened, emitStageChanged } from "./events";
 import { businessSecondsBetween } from "./hours";
@@ -328,13 +329,14 @@ export async function handleInbound(
           .select("id");
         if (set && set.length > 0) {
           contactTypeId = def.id;
-          await logActivity(db, {
-            workspace_id: contact.workspace_id,
-            type: "contact_type_changed",
-            contact_id: contact.id,
-            from_value: null,
-            to_value: def.id,
-            meta: { reason: "default" },
+          await recordContactTypeChange(db, {
+            workspaceId: contact.workspace_id,
+            contactId: contact.id,
+            actorId: null,
+            from: null,
+            to: def.id,
+            source: "sistema",
+            reason: "se asignó solo al llegar",
           });
         }
       }

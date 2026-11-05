@@ -23,7 +23,7 @@ function chunks<T>(list: T[], size: number): T[][] {
 export default async function InboxPage() {
   const { user, workspace, role, supabase } = await getWorkspace();
 
-  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult, { data: channels }, { data: stages }] =
+  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult, { data: channels }, { data: stages }, { data: contactTypes }] =
     await Promise.all([
       supabase
         .from("conversations")
@@ -57,6 +57,8 @@ export default async function InboxPage() {
         .select("id, case_type_id, name, color, kind, archived_at, case_types!inner(workspace_id)")
         .eq("case_types.workspace_id", workspace.id)
         .order("position", { ascending: true }),
+      // Tipos de contacto de una vez para el chip de la lista y del chat (select * tolera que falte 00036).
+      supabase.from("contact_types").select("*").eq("workspace_id", workspace.id).order("position", { ascending: true }),
     ]);
 
   // Chats de contactos con gestiones activas que no están entre los recientes.
@@ -100,6 +102,14 @@ export default async function InboxPage() {
         .map((s) => ({ id: s.id, name: s.name, color: s.color, kind: s.kind, archived: s.archived_at !== null })),
     })),
     teams: teams ?? [],
+    contactTypes: (contactTypes ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      color: t.color,
+      description: t.description ?? null,
+      isDefault: t.is_default,
+      archived: t.archived_at !== null,
+    })),
     demoChannelIds: (channels ?? []).filter((c) => isDemoChannel(c)).map((c) => c.id),
     members: members.map((m) => ({
       userId: m.userId,

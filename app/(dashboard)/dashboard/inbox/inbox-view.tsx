@@ -11,6 +11,7 @@ import { CaseCard } from "@/components/inbox/case-card";
 import { ComplaintBannerConnected, showComplaintBanner } from "@/components/inbox/complaint-banner";
 import { useInboxData } from "@/components/inbox/use-inbox-data";
 import { useContactCases } from "@/components/inbox/use-contact-cases";
+import { useContactTypeThread } from "@/components/inbox/use-contact-type";
 import { useCaseNotes } from "@/components/inbox/use-case-notes";
 import type { InboxCase, InboxConversation, InboxMeta, InboxRow } from "@/components/inbox/inbox-model";
 import { createClient } from "@/lib/supabase/client";
@@ -52,7 +53,15 @@ export function InboxView({
   const toast = useToast();
   const searchParams = useSearchParams();
   const data = useInboxData({ workspaceId, initialConversations, initialCases });
-  const { conversations, casesByContact, ensureContactConversations, refreshContactCases, markConversationRead } = data;
+  const {
+    conversations,
+    casesByContact,
+    ensureContactConversations,
+    refreshContactCases,
+    markConversationRead,
+    patchContact,
+    refreshContact,
+  } = data;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
@@ -180,8 +189,9 @@ export function InboxView({
   const reloadContactCases = contactCases.reload;
   const handleCaseChanged = useCallback(async () => {
     if (!contactId) return;
-    await Promise.all([reloadContactCases(), refreshContactCases(contactId)]);
-  }, [contactId, reloadContactCases, refreshContactCases]);
+    // El contacto también: una regla de venta o un cambio de tipo hecho en el panel actualiza el chip de la lista.
+    await Promise.all([reloadContactCases(), refreshContactCases(contactId), refreshContact(contactId)]);
+  }, [contactId, reloadContactCases, refreshContactCases, refreshContact]);
 
   // No leídos al abrir el chat: el hilo marca dónde empiezan los nuevos.
   const unread = selected?.unread_count ?? 0;
@@ -257,7 +267,15 @@ export function InboxView({
   }
 
   const me = meta.members.find((m) => m.userId === meta.userId);
-  const meInfo = { userId: meta.userId, name: me?.name ?? "" };
+  const meInfo = useMemo(() => ({ userId: meta.userId, name: me?.name ?? "" }), [meta.userId, me?.name]);
+  const contactType = useContactTypeThread({
+    conversation: selected,
+    casesData,
+    types: meta.contactTypes ?? [],
+    me: meInfo,
+    patchContact,
+    reload: handleCaseChanged,
+  });
   const teamName = activeCase?.teamId ? meta.teams.find((t) => t.id === activeCase.teamId)?.name ?? null : null;
 
   return (
@@ -395,6 +413,7 @@ export function InboxView({
               isDemo={!!selected && (meta.demoChannelIds ?? []).includes(selected.channel_id)}
               canSimulate={meta.isAdmin}
               isAdmin={meta.isAdmin}
+              contactType={contactType}
             />
           )}
         </div>

@@ -19,6 +19,8 @@ import {
   type CasePermissions,
 } from "@/lib/cases/access";
 import { isDateString } from "@/lib/cases/dates";
+import { loadContactTypeInfo } from "@/lib/cases/contact-type";
+import type { ContactTypeInfo, ContactTypeOption } from "@/lib/cases/contact-type-model";
 import {
   claimPriority,
   isCaseSupervisor,
@@ -148,6 +150,8 @@ export interface ContactCasesView {
     ownerId: string | null;
     teamId: string | null;
     keyDate: string | null;
+    /** Tipo de contacto: confirmación, "Preguntar después", si ya compró y últimos cambios. */
+    typeInfo: ContactTypeInfo;
   };
   /** Gestión activa en el chat (la pedida, o la abierta más reciente, priorizando la mía). */
   activeCaseId: string | null;
@@ -157,7 +161,9 @@ export interface ContactCasesView {
   recentClosed: CaseView[];
   /** Tipos activos más los archivados que usan estas gestiones, ordenados. */
   caseTypes: CaseTypeOption[];
-  contactTypes: { id: string; name: string; color: string | null; isDefault: boolean }[];
+  contactTypes: ContactTypeOption[];
+  /** Tipo actual del contacto aunque esté archivado (los de arriba son solo los activos). */
+  currentContactType: ContactTypeOption | null;
   teams: { id: string; name: string; isDefault: boolean }[];
   keyDateLabel: string | null;
   me: { userId: string; role: WorkspaceRole | null; isAdmin: boolean; supervisedTeamIds: string[] };
@@ -371,7 +377,8 @@ export async function getContactCases(
 
   const { data: contact } = await s.db
     .from("contacts")
-    .select("id, display_name, contact_type_id, owner_id, team_id, key_date")
+    // select * a propósito: tolera que falten las columnas de 00036.
+    .select("*")
     .eq("id", contactId)
     .eq("workspace_id", s.workspaceId)
     .maybeSingle();
@@ -400,14 +407,23 @@ export async function getContactCases(
         .order("position", { ascending: true }),
       s.db
         .from("contact_types")
-        .select("id, name, color, is_default")
+        .select("*")
         .eq("workspace_id", s.workspaceId)
-        .is("archived_at", null)
         .order("position", { ascending: true }),
     ]);
 
   const activeCases = active ?? [];
   if (!actorSeesContact(s.actor, contact, activeCases)) return { error: "No se encontró el contacto." };
+
+  const typeOptions: ContactTypeOption[] = (contactTypes ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    color: t.color,
+    description: t.description ?? null,
+    isDefault: t.is_default,
+    archived: t.archived_at !== null,
+  }));
+  const typeInfo = await loadContactTypeInfo(s.db, contact.id, contact);
 
   const permsOf = (row: CaseRow) =>
     casePermissions(s.actor, {
@@ -535,12 +551,14 @@ export async function getContactCases(
         ownerId: contact.owner_id,
         teamId: contact.team_id,
         keyDate: contact.key_date,
+        typeInfo,
       },
       activeCaseId,
       cases: views,
       recentClosed: closedCases.map((row) => toCaseView(row, permsOf(row), supervisesOf(row), null, schedules)),
       caseTypes,
-      contactTypes: (contactTypes ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color, isDefault: t.is_default })),
+      contactTypes: typeOptions.filter((t) => !t.archived),
+      currentContactType: typeOptions.find((t) => t.id === contact.contact_type_id) ?? null,
       teams: s.actor.teams,
       keyDateLabel,
       me: {

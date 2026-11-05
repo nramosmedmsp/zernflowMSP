@@ -12,6 +12,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import { isDateString } from "@/lib/cases/dates";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
+import { confirmContactTypeRow, isMissingColumn, recordContactTypeChange, setContactTypeRow } from "@/lib/cases/contact-type";
+import { snoozeUntil } from "@/lib/cases/contact-type-model";
 import {
   actorSeesContact,
   loadContactCaseSummaries,
@@ -79,6 +81,7 @@ interface ContactAccess {
     team_id: string | null;
     phone: string | null;
     key_date: string | null;
+    contact_type_confirmed_at?: string | null;
   };
 }
 
@@ -89,7 +92,8 @@ async function withContact(contactId: unknown): Promise<ContactAccess | { error:
   if ("error" in s) return s;
   const { data: contact } = await s.db
     .from("contacts")
-    .select("id, contact_type_id, owner_id, team_id, phone, key_date")
+    // select * a propósito: tolera que falten las columnas de 00036 (código desplegado antes que la migración).
+    .select("*")
     .eq("id", contactId)
     .eq("workspace_id", s.workspaceId)
     .maybeSingle();
@@ -276,7 +280,12 @@ export async function createContact(input: {
 
 // ── Cambios de la ficha ────────────────────────────────────────────────────
 
-/** Tipo de contacto: cualquiera que vea el contacto. null lo quita. */
+/**
+ * Tipo de contacto: cualquiera que vea el contacto. null lo quita.
+ * Un cambio a mano CONFIRMA el tipo (quién y cuándo) y queda en el historial
+ * con source 'manual'. Elegir el mismo tipo que ya tiene (por ejemplo "Es
+ * nuevo · Prospecto" en la pregunta del chat) solo lo confirma.
+ */
 export async function updateContactType(
   contactId: string,
   contactTypeId: string | null,
@@ -285,7 +294,14 @@ export async function updateContactType(
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
   const { s, contact } = ctx;
-  if (contact.contact_type_id === contactTypeId) return { ok: true };
+  const now = new Date().toISOString();
+
+  if (contact.contact_type_id === contactTypeId) {
+    if (!contact.contact_type_confirmed_at) {
+      await confirmContactTypeRow(s.db, { workspaceId: s.workspaceId, contactId: contact.id, by: s.userId, at: now });
+    }
+    return { ok: true };
+  }
 
   if (contactTypeId) {
     const { data: type } = await s.db
@@ -296,18 +312,46 @@ export async function updateContactType(
       .maybeSingle();
     if (!type || type.archived_at) return { error: "El tipo de contacto no existe o está archivado." };
   }
-  const failure = await updateContact(ctx, { contact_type_id: contactTypeId });
-  if (failure) return failure;
-  await logActivity(s.db, {
-    workspace_id: s.workspaceId,
-    type: "contact_type_changed",
-    contact_id: contact.id,
-    actor_id: s.userId,
-    from_value: contact.contact_type_id,
-    to_value: contactTypeId,
-    meta: { reason: "manual" },
+  const saved = await setContactTypeRow(s.db, {
+    workspaceId: s.workspaceId,
+    contactId: contact.id,
+    contactTypeId,
+    confirm: { at: now, by: s.userId },
+  });
+  if (!saved.ok) return { error: GENERIC_ERROR };
+  await recordContactTypeChange(s.db, {
+    workspaceId: s.workspaceId,
+    contactId: contact.id,
+    actorId: s.userId,
+    from: contact.contact_type_id,
+    to: contactTypeId,
+    source: "manual",
+    reason: null,
   });
   return { ok: true };
+}
+
+/**
+ * "Preguntar después": la pregunta del chat no vuelve a salir para este
+ * contacto durante 7 días. Cualquiera que vea el contacto.
+ */
+export async function snoozeContactTypePrompt(contactId: string): Promise<ContactActionResult<{ until: string }>> {
+  const ctx = await withContact(contactId);
+  if ("error" in ctx) return ctx;
+  const { s, contact } = ctx;
+  // Un tipo ya confirmado no tiene nada que posponer.
+  if (contact.contact_type_confirmed_at) return { ok: true, until: contact.contact_type_confirmed_at };
+  const until = snoozeUntil(new Date());
+  const { error } = await s.db
+    .from("contacts")
+    .update({ contact_type_prompt_snoozed_until: until })
+    .eq("id", contact.id)
+    .eq("workspace_id", s.workspaceId);
+  if (error) {
+    if (!isMissingColumn(error)) console.error("[contacts] snooze", error.message);
+    return { error: GENERIC_ERROR };
+  }
+  return { ok: true, until };
 }
 
 /** Fecha clave ("YYYY-MM-DD"): cualquiera que vea el contacto. null la quita. */

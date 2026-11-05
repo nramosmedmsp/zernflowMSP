@@ -3,6 +3,7 @@
 // probarla con vitest (inbox-model.test.ts).
 
 import { limaDateOf } from "@/lib/cases/dates";
+import type { ContactTypeOption } from "@/lib/cases/contact-type-model";
 import {
   claimBadge,
   claimPriority,
@@ -56,6 +57,8 @@ export interface InboxMeta {
   demoChannelIds?: string[];
   /** Horarios para contar el plazo de la solución en horas hábiles (R2-10); ausente = reloj. */
   solutionSchedules?: SolutionSchedules | null;
+  /** Tipos de contacto del espacio (con los archivados, marcados): chip en la lista y el chat sin pedirlos uno a uno. */
+  contactTypes?: ContactTypeOption[];
 }
 
 /** De quién son los chats que se ven ("Ver"). */

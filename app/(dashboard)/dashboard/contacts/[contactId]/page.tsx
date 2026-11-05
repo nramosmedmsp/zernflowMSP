@@ -18,6 +18,7 @@ import { contactInitial, describeSource, keyDateLabel } from "@/components/conta
 import { buildTimeline, type TimelineLookups } from "@/components/contacts/timeline";
 import { formatDateTime } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
+import { loadContactTypeInfo } from "@/lib/cases/contact-type";
 
 const CONVERSATION_STATUS_LABELS: Record<string, string> = {
   open: "Abierta",
@@ -78,7 +79,7 @@ export default async function ContactDetailPage({
     supabase.from("tags").select("id, name, color").eq("workspace_id", workspace.id).order("name"),
     supabase
       .from("contact_types")
-      .select("id, name, archived_at")
+      .select("*")
       .eq("workspace_id", workspace.id)
       .order("position", { ascending: true }),
     supabase
@@ -152,6 +153,7 @@ export default async function ContactDetailPage({
   });
 
   const formatDate = (dateStr: string | null): string => (dateStr ? formatDateTime(dateStr) : "Nunca");
+  const typeInfo = await loadContactTypeInfo(supabase, contact.id, contact);
 
   return (
     <div className="flex h-full flex-col">
@@ -236,8 +238,12 @@ export default async function ContactDetailPage({
                 contactTypes={(contactTypesRes.data ?? []).map((t) => ({
                   id: t.id,
                   name: t.name,
+                  color: t.color,
+                  description: t.description ?? null,
+                  isDefault: t.is_default,
                   archived: t.archived_at !== null,
                 }))}
+                typeInfo={typeInfo}
                 teams={teamsRes.data ?? []}
                 members={members.map((m) => ({ userId: m.userId, name: m.name }))}
                 tags={tags}

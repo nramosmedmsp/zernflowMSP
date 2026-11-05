@@ -376,6 +376,7 @@ export function ListRow({
   name,
   lead,
   extra,
+  below,
   canUp,
   canDown,
   onUp,
@@ -389,6 +390,8 @@ export function ListRow({
   name: string;
   lead?: ReactNode;
   extra?: ReactNode;
+  /** Una línea propia bajo la fila (p. ej. una descripción). */
+  below?: ReactNode;
   canUp: boolean;
   canDown: boolean;
   onUp: () => void;
@@ -450,6 +453,7 @@ export function ListRow({
           </button>
         )}
       </div>
+      {below}
     </li>
   );
 }

@@ -1,6 +1,8 @@
 // Ejecución de reglas de gestión y efectos sobre el contacto y el bot.
 
 import { firstOpenStageId, logActivity, type CaseRow, type ContactRow, type Db } from "./io";
+import { recordContactTypeChange } from "./contact-type";
+import { ruleReasonText } from "./contact-type-model";
 import { parseRule, planRules, type ParsedRule, type RuleEventContext, type RulePlan } from "./rules";
 
 /** Reglas activas de un tipo, en orden. */
@@ -133,6 +135,8 @@ export async function applyRulePlan(
     actorId: string | null;
     /** Fecha clave pedida al cerrar (ya validada), si una regla la pidió. */
     keyDate?: string | null;
+    /** Ventas ganadas del contacto contando esta: el motivo del cambio ("2.ª compra ganada"). */
+    wonCount?: number | null;
   },
 ): Promise<RuleEffects> {
   const { plan, caseRow, contact, actorId } = params;
@@ -161,15 +165,17 @@ export async function applyRulePlan(
         console.error("[cases] contact type", error.message);
       } else {
         effects.contactType = { from: contact.contact_type_id, to: type.id };
-        await logActivity(db, {
-          workspace_id: ws,
-          type: "contact_type_changed",
-          contact_id: contact.id,
-          case_id: caseRow.id,
-          actor_id: actorId,
-          from_value: contact.contact_type_id,
-          to_value: type.id,
-          meta: { reason: "rule" },
+        // Historial (tanda 9): lo hizo la regla, no una persona; quien cerró la venta queda en triggered_by.
+        await recordContactTypeChange(db, {
+          workspaceId: ws,
+          contactId: contact.id,
+          caseId: caseRow.id,
+          actorId: null,
+          from: contact.contact_type_id,
+          to: type.id,
+          source: "rule",
+          reason: ruleReasonText(params.wonCount),
+          triggeredBy: actorId,
         });
       }
     }

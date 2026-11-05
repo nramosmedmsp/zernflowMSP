@@ -39,6 +39,7 @@ import {
 import type { Database, Platform } from "@/lib/types/database";
 import { useContactCases } from "./use-contact-cases";
 import { inputClass, selectClass } from "./ui";
+import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
 import { useToast } from "@/components/ui/toast";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
@@ -366,7 +367,8 @@ export function ContactPanel({
   const ownerName = ownerId ? members.find((m) => m.userId === ownerId)?.name ?? "Otra persona" : "Sin responsable";
   const teamName = teamId ? cases?.teams.find((t) => t.id === teamId)?.name ?? "Equipo archivado" : "Sin equipo";
   const contactTypes = cases?.contactTypes ?? [];
-  const currentType = contactTypes.find((t) => t.id === contact?.contact_type_id) ?? null;
+  const currentType = cases?.currentContactType ?? null;
+  const personName = (id: string) => members.find((m) => m.userId === id)?.name ?? "Otra persona";
   const availableTags = workspaceTags.filter((t) => !details?.tags.some((x) => x.id === t.id));
 
   return (
@@ -411,19 +413,21 @@ export function ContactPanel({
                 {contact.email}
               </p>
             )}
+            {/* Tipo de contacto: arriba de la ficha, con desde cuándo, quién y los últimos cambios. */}
+            {cases ? (
+              <ContactTypeBlock
+                className="mt-3 w-full"
+                current={currentType}
+                options={contactTypes}
+                info={cases.contact.typeInfo}
+                personName={personName}
+                busy={saving === "type"}
+                onSelect={(typeId) => void updateContact("type", (id) => updateContactType(id, typeId))}
+              />
+            ) : (
+              <div className="mt-3 h-[72px] w-full animate-pulse rounded-lg border border-border bg-muted/30" aria-hidden />
+            )}
             <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
-              {currentType && (
-                <span
-                  className="rounded-full border border-border px-2.5 py-0.5 text-[10px] font-medium"
-                  style={
-                    currentType.color
-                      ? { backgroundColor: `${currentType.color}20`, borderColor: `${currentType.color}40`, color: currentType.color }
-                      : undefined
-                  }
-                >
-                  {currentType.name}
-                </span>
-              )}
               <span
                 className={cn(
                   "rounded-full px-2.5 py-0.5 text-[10px] font-medium",
@@ -454,33 +458,6 @@ export function ContactPanel({
               saving={saving === "phone"}
               onSave={(phone) => updateContact("phone", (id) => updateContactPhone(id, phone))}
             />
-
-            {/* Contact type */}
-            <div>
-              <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
-                <ContactIcon className="h-3 w-3" />
-                Tipo de contacto
-                {saving === "type" && <Loader2 className="h-3 w-3 animate-spin" />}
-              </h4>
-              {contactTypes.length > 0 ? (
-                <select
-                  value={contact.contact_type_id ?? ""}
-                  disabled={saving !== null}
-                  onChange={(e) => void updateContact("type", (id) => updateContactType(id, e.target.value || null))}
-                  className={cn(selectClass, "mt-1 w-full text-sm")}
-                  aria-label="Tipo de contacto"
-                >
-                  <option value="">Sin tipo</option>
-                  {contactTypes.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <p className="mt-1 text-sm">{currentType?.name ?? "Sin tipo"}</p>
-              )}
-            </div>
 
             {/* Owner */}
             <div>

@@ -285,18 +285,25 @@ function activityPiece(
       };
     case "contact_type_changed": {
       const reason = str(meta.reason);
+      const source = str(meta.source);
+      const text = str(meta.reason_text);
+      const detail =
+        source === "inactividad"
+          ? `Automático: ${text ?? "inactividad"}`
+          : source === "import"
+            ? "Al importar"
+            : source === "rule" || reason === "rule"
+              ? `Por una regla de la gestión${text ? ` (${text})` : ""}`
+              : source === "sistema" || reason === "default"
+                ? "Tipo por defecto"
+                : source === "manual" || reason === "manual"
+                  ? "Cambio manual"
+                  : null;
       return {
         kind: "contact",
         tone: "default",
         title: `Tipo de contacto: ${lookup(lk.contactTypes, from, "Sin tipo")} → ${lookup(lk.contactTypes, to, "Sin tipo")}`,
-        detail:
-          reason === "rule"
-            ? "Por una regla de la gestión"
-            : reason === "default"
-              ? "Tipo por defecto"
-              : reason === "manual"
-                ? "Cambio manual"
-                : null,
+        detail,
       };
     }
     case "owner_changed": {

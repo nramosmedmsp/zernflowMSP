@@ -32,6 +32,7 @@ import {
   type InboxScope,
   type InboxState,
 } from "./inbox-model";
+import { ContactTypeChip } from "@/components/contacts/contact-type-ui";
 import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
@@ -141,6 +142,7 @@ export function ConversationList({
 
   const demoChannelIds = useMemo(() => new Set(meta.demoChannelIds ?? []), [meta.demoChannelIds]);
   const typeById = useMemo(() => new Map(meta.caseTypes.map((t) => [t.id, t])), [meta.caseTypes]);
+  const contactTypeById = useMemo(() => new Map((meta.contactTypes ?? []).map((t) => [t.id, t])), [meta.contactTypes]);
   const platforms = useMemo(
     () => [...new Set(conversations.map((c) => c.platform))].sort() as Platform[],
     [conversations],
@@ -511,6 +513,12 @@ export function ConversationList({
                       </span>
                     )}
                   </div>
+
+                  {conversation.contacts?.contact_type_id && contactTypeById.has(conversation.contacts.contact_type_id) && (
+                    <div className="mt-1">
+                      <ContactTypeChip type={contactTypeById.get(conversation.contacts.contact_type_id) ?? null} small />
+                    </div>
+                  )}
                 </div>
               </button>
             );
