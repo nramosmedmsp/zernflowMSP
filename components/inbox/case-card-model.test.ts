@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SolutionCaseInput } from "@/lib/cases/protection";
 import {
+  canPickAnyStage,
+  caseGuide,
   closeMenuItems,
   closedHeadline,
   rejectionLine,
@@ -319,5 +321,50 @@ describe("cabecera de cerrada y rechazo de cierre (B-28, B-29)", () => {
   it("el asesor ve el comentario del supervisor", () => {
     expect(rejectionLine("Llama al cliente antes")).toContain("«Llama al cliente antes»");
     expect(rejectionLine(null)).toContain("rechazó cerrar");
+  });
+});
+
+describe("caseGuide (Guía de la gestión)", () => {
+  const withGuide = [
+    { ...stage("s1", "Nuevo interesado"), guideText: "Saluda.", nextSteps: [{ stageId: "s2", action: null, label: "Ya sé qué busca" }], requires: null },
+    { ...stage("s2", "Asesorando"), guideText: null, nextSteps: [], requires: null },
+    { ...stage("s3", "Esperando pago"), guideText: "Espera el pago.", nextSteps: [], requires: "category" as const },
+    { ...stage("w", "Pagado", "won"), guideText: null, nextSteps: [], requires: null },
+    { ...stage("l", "No compró", "lost"), guideText: null, nextSteps: [], requires: null },
+  ];
+
+  it("muestra el texto configurado, los pasos y el cierre del recorrido", () => {
+    const g = caseGuide({ stages: withGuide }, "s1");
+    expect(g.now).toBe("Saluda.");
+    expect(g.hasGuideText).toBe(true);
+    expect(g.steps.map((s) => `${s.name}:${s.state}`)).toEqual(["Nuevo interesado:current", "Asesorando:next", "Esperando pago:next"]);
+    expect(g.finalsLabel).toBe("Pagado / No compró");
+    expect(g.exits.map((e) => e.label)).toEqual(["Ya sé qué busca"]);
+    expect(g.backStage).toBeNull();
+  });
+
+  it("sin configurar ofrece la siguiente etapa y los cierres, y un texto genérico", () => {
+    const g = caseGuide({ stages: withGuide }, "s2");
+    expect(g.hasGuideText).toBe(false);
+    expect(g.now).toContain("Asesorando");
+    expect(g.exits.map((e) => e.label)).toEqual(["Esperando pago", "Pagado", "No compró"]);
+    expect(g.backStage).toEqual({ id: "s1", name: "Nuevo interesado" });
+    expect(g.nextStageId).toBe("s3");
+  });
+
+  it("expone lo que pide la etapa y no inventa cierre si no hay etapas finales", () => {
+    expect(caseGuide({ stages: withGuide }, "s3").requires).toBe("category");
+    expect(caseGuide({ stages: withGuide.slice(0, 3) }, "s3").finalsLabel).toBeNull();
+  });
+
+  it("trunca la lista de cierres larga", () => {
+    const many = [...withGuide, { ...stage("x", "Otro", "lost"), guideText: null, nextSteps: [], requires: null }, { ...stage("y", "Otro 2", "lost"), guideText: null, nextSteps: [], requires: null }];
+    expect(caseGuide({ stages: many }, "s1").finalsLabel).toBe("Pagado / No compró / Otro …");
+  });
+
+  it("solo un asesor con orden estricto no puede elegir cualquier etapa", () => {
+    expect(canPickAnyStage(false, false)).toBe(true);
+    expect(canPickAnyStage(true, false)).toBe(false);
+    expect(canPickAnyStage(true, true)).toBe(true);
   });
 });

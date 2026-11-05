@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
-import { addItem, archiveItem, getStageUsage, removeItem, reorderItems, restoreItem, updateItem } from "@/lib/actions/case-config";
+import { AlertTriangle, ChevronDown, Compass } from "lucide-react";
+import { addItem, archiveItem, getStageUsage, removeItem, reorderItems, restoreItem, updateCaseType, updateItem } from "@/lib/actions/case-config";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   STAGE_KINDS,
@@ -19,6 +19,7 @@ import {
   ListRow,
   Modal,
   SectionTitle,
+  Switch,
   inputClass,
   primaryButtonClass,
   secondaryButtonClass,
@@ -26,6 +27,7 @@ import {
 } from "./shared";
 import type { StageKind } from "@/lib/types/database";
 import { cn } from "@/lib/utils";
+import { StageGuideEditor } from "./stage-guide-editor";
 
 interface Removal {
   stage: StageConfig;
@@ -65,6 +67,7 @@ export function StagesTab({ type, run, busy, notify }: TabProps) {
   const [removal, setRemoval] = useState<Removal | null>(null);
   const [moveTo, setMoveTo] = useState("");
   const [kindChange, setKindChange] = useState<KindChange | null>(null);
+  const [guideOpenId, setGuideOpenId] = useState<string | null>(null);
 
   const sorted = [...type.stages].sort((a, b) => a.position - b.position);
   const active = sorted.filter((s) => !s.archived);
@@ -136,7 +139,20 @@ export function StagesTab({ type, run, busy, notify }: TabProps) {
     <div className="space-y-5">
       <SectionTitle
         title="Etapas"
-        hint="Cada gestión avanza por las etapas abiertas y termina en una de cierre: ganada, perdida o resuelta."
+        hint="Cada gestión avanza por las etapas abiertas y termina en una de cierre: ganada, perdida o resuelta. En «Guía» de cada etapa escribes qué hacer ahí y a dónde se puede ir."
+      />
+
+      <Switch
+        checked={type.strictOrder}
+        disabled={busy}
+        onChange={(strictOrder) =>
+          run(
+            () => updateCaseType({ id: type.id, strictOrder }),
+            strictOrder ? "Orden estricto activado para asesores." : "Orden estricto desactivado.",
+          )
+        }
+        label="Orden estricto para asesores"
+        hint="Si lo activas, un asesor solo puede pasar a los pasos siguientes de cada etapa (o volver un paso). Supervisores, administradores y la automatización pueden mover la gestión a cualquier etapa. Apagado, el asesor ve la guía pero también puede elegir cualquier etapa."
       />
 
       {!hasOpen && (
@@ -167,13 +183,32 @@ export function StagesTab({ type, run, busy, notify }: TabProps) {
               />
             }
             extra={
-              <KindSelect
-                value={s.kind}
-                disabled={busy}
-                label={`Clase de ${s.name}`}
-                onChange={(kind) => startKindChange(s, kind)}
-              />
+              <>
+                <KindSelect
+                  value={s.kind}
+                  disabled={busy}
+                  label={`Clase de ${s.name}`}
+                  onChange={(kind) => startKindChange(s, kind)}
+                />
+                {s.kind === "open" && (
+                  <button
+                    type="button"
+                    onClick={() => setGuideOpenId(guideOpenId === s.id ? null : s.id)}
+                    aria-expanded={guideOpenId === s.id}
+                    className={cn(
+                      secondaryButtonClass,
+                      "px-2 py-1 text-xs",
+                      (s.guideText || s.nextSteps.length > 0 || s.requires) && "border-primary/40 text-primary",
+                    )}
+                  >
+                    <Compass className="h-3.5 w-3.5" />
+                    Guía
+                    <ChevronDown className={cn("h-3 w-3 transition-transform", guideOpenId === s.id && "rotate-180")} />
+                  </button>
+                )}
+              </>
             }
+            below={guideOpenId === s.id && s.kind === "open" ? <StageGuideEditor stage={s} type={type} run={run} busy={busy} /> : undefined}
             canUp={i > 0}
             canDown={i < active.length - 1}
             onUp={() => reorder(s.id, "up")}

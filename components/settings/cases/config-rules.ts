@@ -6,6 +6,7 @@
 // servidor), la interfaz (para avisar antes) y las pruebas de vitest.
 
 import { DESCRIPTION_MAX } from "@/lib/cases/contact-type-model";
+import type { NextStep } from "@/lib/cases/guide";
 import type {
   CaseRouting,
   CaseRuleAction,
@@ -13,6 +14,7 @@ import type {
   CaseRuleTrigger,
   OutcomeKind,
   StageKind,
+  StageRequirement,
 } from "@/lib/types/database";
 
 // ── Datos que viajan del servidor a la interfaz ────────────────────────────
@@ -26,6 +28,10 @@ export interface StageConfig {
   kind: StageKind;
   archived: boolean;
   updatedAt: string;
+  /** Guía de la gestión (00037). */
+  guideText: string | null;
+  nextSteps: NextStep[];
+  requires: StageRequirement | null;
 }
 
 export interface CategoryConfig {
@@ -80,6 +86,8 @@ export interface CaseTypeConfig {
   protected: boolean;
   solutionDeadlineHours: number | null;
   reopenWindowDays: number | null;
+  /** Orden estricto para asesores (00037). */
+  strictOrder: boolean;
   archived: boolean;
   updatedAt: string;
   stages: StageConfig[];

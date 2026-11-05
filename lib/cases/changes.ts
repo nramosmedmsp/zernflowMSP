@@ -26,6 +26,7 @@ import {
   type Db,
   type EngineResult,
 } from "./io";
+import { checkRequirements, checkStrictOrder, loadGuideStages } from "./guide";
 import { typeLockMessage } from "./protection";
 import { resolveTargetTeamId } from "./routing";
 import { isSupervisorInDb, notifySupervisors } from "./supervisors";
@@ -48,7 +49,14 @@ function isError(value: unknown): value is { error: string } {
   return !!value && typeof value === "object" && "error" in value;
 }
 
-/** Cambia la etapa (solo etapas abiertas: para cerrar se usa closeCase). */
+/**
+ * Cambia la etapa (solo etapas abiertas: para cerrar se usa closeCase).
+ *
+ * `guide` solo lo pasan las acciones de la interfaz (lib/actions/cases.ts):
+ * aplica la guía de la gestión (orden estricto para asesores, categoría
+ * pedida por la etapa) y deja registrado el salto de un supervisor. Los flujos,
+ * las reglas y el cron no lo pasan, así que nunca quedan limitados.
+ */
 export async function changeStage(
   db: Db,
   params: {
@@ -57,6 +65,7 @@ export async function changeStage(
     actorId: string | null;
     /** Flujos que ya corrieron en esta cadena de eventos (evita bucles; ver case-triggers.ts). */
     flowChain?: readonly string[];
+    guide?: { canSupervise: boolean; jump?: boolean };
   },
 ): Promise<EngineResult> {
   const row = await activeCase(db, params.caseId);
@@ -73,6 +82,35 @@ export async function changeStage(
   if (!stage || stage.archived_at) return { error: "La etapa no pertenece a este tipo de gestión." };
   if (stage.kind !== "open") return { error: "Para ganar, perder o resolver la gestión usa Cerrar." };
 
+  if (params.guide) {
+    const [type, stages] = await Promise.all([
+      loadCaseType(db, row.workspace_id, row.case_type_id),
+      loadGuideStages(db, row.case_type_id),
+    ]);
+    const current = stages.find((st) => st.id === row.stage_id);
+    const needsCategory = current?.requires === "category" && !row.category_id;
+    const hasCategories = needsCategory
+      ? ((await db.from("case_categories").select("id").eq("case_type_id", row.case_type_id).is("archived_at", null).limit(1)).data ?? []).length > 0
+      : false;
+    const blocked =
+      checkStrictOrder({
+        strict: !!type?.strict_order,
+        canSupervise: params.guide.canSupervise,
+        stages,
+        currentStageId: row.stage_id,
+        targetStageId: stage.id,
+      }) ??
+      checkRequirements({
+        canSupervise: params.guide.canSupervise,
+        stages,
+        currentStageId: row.stage_id,
+        targetStageId: stage.id,
+        categoryId: row.category_id,
+        hasCategories,
+      });
+    if (blocked) return { error: blocked };
+  }
+
   const { error } = await db.from("cases").update({ stage_id: stage.id }).eq("id", row.id);
   if (error) return { error: GENERIC_ERROR };
 
@@ -84,6 +122,8 @@ export async function changeStage(
     actor_id: params.actorId,
     from_value: row.stage_id,
     to_value: stage.id,
+    // Un supervisor que salta a una etapa fuera de los pasos de la guía queda registrado.
+    ...(params.guide?.jump && params.guide.canSupervise ? { meta: { jump: true } } : {}),
   });
   emitStageChanged(db, row, row.stage_id, stage.id, params.flowChain);
   await runEventRules(db, {

@@ -245,6 +245,9 @@ export type CaseRuleParams = SetContactTypeParams | ScheduleCaseParams | AskKeyD
 export type SavedReplyScope = "workspace" | "team" | "personal";
 
 /** activity.type */
+/** 00037: lo que una etapa pide antes de avanzar. */
+export type StageRequirement = "category" | "solution" | "note";
+
 export type ActivityType =
   | "case_opened"
   | "case_scheduled"
@@ -1653,6 +1656,8 @@ export interface Database {
           solution_deadline_hours: number | null;
           /** 00029: días tras el cierre en que un mensaje del cliente la reabre (null = 24 h). */
           reopen_window_days: number | null;
+          /** 00037: orden estricto para asesores en la guía de la gestión. */
+          strict_order: boolean;
           archived_at: string | null;
           created_at: string;
           updated_at: string;
@@ -1676,6 +1681,7 @@ export interface Database {
           protected?: boolean;
           solution_deadline_hours?: number | null;
           reopen_window_days?: number | null;
+          strict_order?: boolean;
           archived_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1697,6 +1703,7 @@ export interface Database {
           protected?: boolean;
           solution_deadline_hours?: number | null;
           reopen_window_days?: number | null;
+          strict_order?: boolean;
           archived_at?: string | null;
           updated_at?: string;
         };
@@ -1726,6 +1733,12 @@ export interface Database {
           position: number;
           kind: StageKind;
           archived_at: string | null;
+          /** 00037: texto «Ahora:» de la guía de la gestión (hasta 200 caracteres). */
+          guide_text: string | null;
+          /** 00037: pasos siguientes [{ stage_id?, action?, label? }]; null = predeterminado. */
+          next_steps: Json | null;
+          /** 00037: lo que se pide en la etapa antes de avanzar. */
+          requires: StageRequirement | null;
           created_at: string;
           updated_at: string;
         };
@@ -1737,6 +1750,9 @@ export interface Database {
           position?: number;
           kind?: StageKind;
           archived_at?: string | null;
+          guide_text?: string | null;
+          next_steps?: Json | null;
+          requires?: StageRequirement | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1746,6 +1762,9 @@ export interface Database {
           position?: number;
           kind?: StageKind;
           archived_at?: string | null;
+          guide_text?: string | null;
+          next_steps?: Json | null;
+          requires?: StageRequirement | null;
           updated_at?: string;
         };
         Relationships: [

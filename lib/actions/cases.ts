@@ -30,6 +30,7 @@ import {
   type SolutionSchedules,
 } from "@/lib/cases/protection";
 import { loadSolutionSchedules } from "@/lib/cases/hours";
+import { toGuideStage, type NextStep } from "@/lib/cases/guide";
 import { GENERIC_ERROR, type CaseRow, type Db } from "@/lib/cases/io";
 import { actorSeesContact, loadContactCaseSummaries, loadWorkspaceActor, type WorkspaceActor } from "@/lib/cases/visibility";
 import { isOutcomeKind } from "@/lib/cases/rules";
@@ -52,6 +53,7 @@ import type {
   MemberAvailability,
   OutcomeKind,
   StageKind,
+  StageRequirement,
   TeamRole,
   WorkspaceRole,
 } from "@/lib/types/database";
@@ -137,7 +139,21 @@ export interface CaseTypeOption {
   /** Horas desde que se abre para registrar la solución (null = sin plazo). */
   solutionDeadlineHours: number | null;
   reopenWindowDays: number | null;
-  stages: { id: string; name: string; color: string | null; kind: StageKind; archived: boolean }[];
+  /** Guía de la gestión: un asesor solo avanza por los pasos configurados (los supervisores quedan exentos). */
+  strictOrder: boolean;
+  stages: {
+    id: string;
+    name: string;
+    color: string | null;
+    kind: StageKind;
+    archived: boolean;
+    /** Texto «Ahora:» de la guía. */
+    guideText: string | null;
+    /** Pasos siguientes configurados (vacío = predeterminado: la siguiente abierta y las finales). */
+    nextSteps: NextStep[];
+    /** Lo que pide la etapa antes de avanzar. */
+    requires: StageRequirement | null;
+  }[];
   categories: { id: string; name: string; isHighPriority: boolean; archived: boolean }[];
   outcomeReasons: { id: string; name: string; kind: OutcomeKind; archived: boolean }[];
 }
@@ -444,7 +460,8 @@ export async function getContactCases(
     ? await Promise.all([
         s.db
           .from("case_stages")
-          .select("id, case_type_id, name, color, kind, position, archived_at")
+          // select * a propósito: tolera que falten las columnas de 00037.
+          .select("*")
           .in("case_type_id", typeIds)
           .order("position", { ascending: true }),
         s.db
@@ -472,9 +489,22 @@ export async function getContactCases(
     protected: t.protected ?? false,
     solutionDeadlineHours: t.solution_deadline_hours ?? null,
     reopenWindowDays: t.reopen_window_days ?? null,
+    strictOrder: t.strict_order ?? false,
     stages: (stages ?? [])
       .filter((x) => x.case_type_id === t.id)
-      .map((x) => ({ id: x.id, name: x.name, color: x.color, kind: x.kind, archived: x.archived_at !== null })),
+      .map((x) => {
+        const g = toGuideStage(x);
+        return {
+          id: x.id,
+          name: x.name,
+          color: x.color,
+          kind: x.kind,
+          archived: x.archived_at !== null,
+          guideText: g.guideText,
+          nextSteps: g.nextSteps,
+          requires: g.requires,
+        };
+      }),
     categories: (categories ?? [])
       .filter((x) => x.case_type_id === t.id)
       .map((x) => ({ id: x.id, name: x.name, isHighPriority: x.is_high_priority, archived: x.archived_at !== null })),
@@ -673,12 +703,27 @@ export async function setConversationBotPaused(
   return "error" in result ? result : { ok: true, paused: result.paused };
 }
 
-/** Cambia a otra etapa abierta del tipo. */
-export async function changeCaseStage(caseId: string, stageId: string): Promise<CaseActionResult> {
+/**
+ * Cambia a otra etapa abierta del tipo (Guía de la gestión). Con el orden
+ * estricto del tipo, un asesor solo va a los pasos configurados o vuelve un
+ * paso: lo exige el servidor. `jump` (menú «Saltar a…», solo supervisor o
+ * administrador) deja en el historial que se saltó a esa etapa.
+ */
+export async function changeCaseStage(
+  caseId: string,
+  stageId: string,
+  options?: { jump?: boolean },
+): Promise<CaseActionResult> {
   if (!isId(stageId)) return { error: INVALID };
   const ctx = await withCase(caseId, (p) => p.canEdit);
   if ("error" in ctx) return ctx;
-  return engine.changeStage(ctx.s.db, { caseId: ctx.access.row.id, stageId, actorId: ctx.s.userId });
+  const canSupervise = isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id);
+  return engine.changeStage(ctx.s.db, {
+    caseId: ctx.access.row.id,
+    stageId,
+    actorId: ctx.s.userId,
+    guide: { canSupervise, jump: options?.jump === true },
+  });
 }
 
 /** Fija o quita la categoría. */
@@ -882,7 +927,7 @@ export async function closeCase(
   return engine.closeOrRequestClose(
     ctx.s.db,
     { ...parsed, caseId: ctx.access.row.id, actorId: ctx.s.userId },
-    { actorIsSupervisor: isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id) },
+    { actorIsSupervisor: isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id), guide: true },
   );
 }
 

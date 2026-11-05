@@ -1,18 +1,16 @@
 "use client";
 
-// Tarjeta de gestión en la cabecera del chat (docs/FASE-1-TECNICO.md 4.1), en
-// dos filas: (1) qué es y quién lo tiene, con las acciones (tipo, responsable,
-// próximo contacto, Cerrar, ⋯) y (2) en qué va (etapas y categoría). Todas las
-// escrituras pasan por las acciones de lib/actions/cases.ts.
+// Tarjeta de gestión en la cabecera del chat (docs/FASE-1-TECNICO.md 4.1): una
+// fila de chips (tipo, responsable, próximo contacto, ⋯) y debajo la «Guía de la
+// gestión» (case-guide.tsx): en qué paso va, qué hacer ahora y el siguiente paso.
+// Todas las escrituras pasan por las acciones de lib/actions/cases.ts.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
-  AlertTriangle,
   ArrowRightLeft,
   BriefcaseBusiness,
   CalendarClock,
   Check,
-  CheckCircle2,
   ChevronDown,
   Hand,
   History,
@@ -24,17 +22,13 @@ import {
   Repeat,
   Undo2,
   UserRound,
-  X,
 } from "lucide-react";
 import {
   approveCloseRequest,
   assignCase,
-  changeCaseStage,
   classifyCase,
   postponeCase,
-  registerSolutionInProgress,
   rejectCloseRequest,
-  setCaseCategory,
   setNextAction,
   takeCase,
   transferCase,
@@ -48,23 +42,16 @@ import { formatDate, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { CaseHistoryDialog } from "./case-history";
-import { CloseCaseDialog } from "./close-case-dialog";
+import { CaseGuidePanel } from "./case-guide";
 import { NewCaseDialog } from "./new-case-dialog";
 import {
-  closeMenuItems,
-  closeOptions,
   closeRequestLine,
   rejectionLine,
   closedHeadline,
   nextContactChip,
   nextContactOptions,
-  solutionBanner,
-  stageSteps,
   typeChangeLock,
-  type CloseOption,
-  type SolutionTone,
 } from "./case-card-model";
-import { SolutionForm, clearSolutionDraft } from "./solution-form";
 import { memberName, type InboxMember } from "./inbox-model";
 import { Popover, inputClass, primaryButtonClass, secondaryButtonClass, selectClass } from "./ui";
 import { useNow } from "./use-now";
@@ -78,12 +65,6 @@ const menuItem =
 const menuHeading = "px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase text-muted-foreground";
 
 const HEX = /^#[0-9a-f]{6}$/i;
-
-const BANNER_TONE: Record<SolutionTone, string> = {
-  amber: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200",
-  red: "border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
-  ok: "border-green-200 bg-green-50 text-green-800 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300",
-};
 
 function TypeDot({ color }: { color: string | null }) {
   return (
@@ -111,15 +92,12 @@ export function CaseCard({
   const [busy, setBusy] = useState<string | null>(null);
   const toast = useToast();
   const now = useNow();
-  const [closing, setClosing] = useState<CloseOption | null>(null);
   const [creating, setCreating] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
   const [nextOpen, setNextOpen] = useState(false);
   const [nextCustom, setNextCustom] = useState(false);
-  const [closeOpen, setCloseOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [solutionOpen, setSolutionOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -158,9 +136,7 @@ export function CaseCard({
     setNextOpen(false);
     setNextCustom(false);
   }, []);
-  const closeCloseMenu = useCallback(() => setCloseOpen(false), []);
   const closeMore = useCallback(() => setMoreOpen(false), []);
-  const closeSolution = useCallback(() => setSolutionOpen(false), []);
   const closeReject = useCallback(() => setRejectOpen(false), []);
 
   const newCaseButton = data.canOpenCase && (
@@ -188,20 +164,6 @@ export function CaseCard({
       {historyOpen && active && (
         <CaseHistoryDialog caseId={active.id} data={data} members={members} onClose={() => setHistoryOpen(false)} />
       )}
-      {closing && active && (
-        <CloseCaseDialog
-          caseView={active}
-          caseType={caseType}
-          initialStageId={closing.stageId}
-          onCancel={() => setClosing(null)}
-          onClosed={async (message, problem) => {
-            setClosing(null);
-            if (problem) toast.error(message);
-            else toast.success(message);
-            await onChanged();
-          }}
-        />
-      )}
     </>
   );
 
@@ -219,24 +181,10 @@ export function CaseCard({
   const perms = active.permissions;
   const isClosed = active.status !== "open" && active.status !== "scheduled";
   const types = data.caseTypes.filter((t) => !t.archived || t.id === active.caseTypeId);
-  const categories = (caseType?.categories ?? []).filter((c) => !c.archived || c.id === active.categoryId);
-  const steps = caseType ? stageSteps(caseType.stages, active.stageId) : [];
   const canClassify = perms.canEdit && busy === null;
   // Control de reclamos: un tipo protegido solo lo cambia el supervisor.
   const typeLock = typeChangeLock(caseType, active.canSupervise);
   const request = active.closeRequest;
-  const banner =
-    !isClosed && caseType && now !== null
-      ? solutionBanner(
-          {
-            typeName: caseType.name,
-            deadlineHours: caseType.solutionDeadlineHours,
-            case: active,
-          },
-          new Date(now),
-        )
-      : null;
-
   // Personas a las que puedo asignar: administrador a cualquiera; supervisor
   // a las del equipo de la gestión (o del contacto).
   const scopeTeam = active.teamId ?? data.contact.teamId;
@@ -608,54 +556,6 @@ export function CaseCard({
             <div className="ml-auto flex items-center gap-1.5">
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Guardando" />}
 
-              {perms.canClose && (
-                <Popover
-                  open={closeOpen}
-                  onClose={closeCloseMenu}
-                  align="right"
-                  className={caseType?.protected && !active.canSupervise ? "w-64" : "w-52"}
-                  trigger={
-                    <button
-                      onClick={() => setCloseOpen((v) => !v)}
-                      disabled={busy !== null}
-                      className={chipButton}
-                      title="Cerrar la gestión"
-                      aria-label="Cerrar gestión"
-                    >
-                      Cerrar
-                      <ChevronDown className="h-3 w-3" />
-                    </button>
-                  }
-                >
-                  <p className={menuHeading}>Cerrar como…</p>
-                  {closeMenuItems(closeOptions(caseType?.stages), {
-                    isProtected: !!caseType?.protected,
-                    canSupervise: active.canSupervise,
-                    hasPendingRequest: !!request,
-                  }).map(({ option: o, label, needsApproval, disabledReason }) => (
-                    <button
-                      key={o.stageId ?? o.kind}
-                      className={menuItem}
-                      disabled={!!disabledReason}
-                      title={disabledReason ?? (needsApproval ? "Un supervisor tiene que aprobar este cierre" : undefined)}
-                      onClick={() => {
-                        setCloseOpen(false);
-                        setClosing(o);
-                      }}
-                    >
-                      {o.tone === "positive" ? (
-                        <Check className="h-3.5 w-3.5 text-green-600" aria-hidden />
-                      ) : (
-                        <X className="h-3.5 w-3.5 text-red-600" aria-hidden />
-                      )}
-                      <span className={o.tone === "positive" ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}>
-                        {label}
-                      </span>
-                    </button>
-                  ))}
-                </Popover>
-              )}
-
               {hasMore && (
                 <Popover
                   open={moreOpen}
@@ -716,85 +616,18 @@ export function CaseCard({
         )}
       </div>
 
-      {/* Fila 2: en qué va */}
-      {!isClosed && caseType && (steps.length > 0 || categories.length > 0) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          {steps.length > 0 && (
-            <StageStepper
-              steps={steps}
-              disabled={!perms.canEdit || busy !== null}
-              onPick={(id) => void run("stage", () => changeCaseStage(active.id, id), "Etapa actualizada.")}
-            />
-          )}
-          {categories.length > 0 && (
-            <label className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-              Categoría:
-              <select
-                value={active.categoryId ?? ""}
-                disabled={!perms.canEdit || busy !== null}
-                onChange={(e) => void run("category", () => setCaseCategory(active.id, e.target.value || null), "Categoría actualizada.")}
-                className={cn(selectClass, "max-w-60 font-normal text-foreground")}
-                aria-label="Categoría"
-              >
-                <option value="">Sin categoría</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                    {c.isHighPriority ? " (prioridad)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-        </div>
-      )}
-
-      {/* Control de reclamos: plazo de la solución */}
-      {banner && (
-        <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2.5 py-1.5 text-[11px]", BANNER_TONE[banner.tone])}>
-          {banner.tone === "ok" ? (
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          ) : (
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          )}
-          <span className="min-w-0 flex-1 basis-48 break-words font-medium">{banner.text}</span>
-          {perms.canEdit && (
-            <Popover
-              open={solutionOpen}
-              onClose={closeSolution}
-              align="right"
-              className="w-80"
-              trigger={
-                <button
-                  onClick={() => setSolutionOpen((v) => !v)}
-                  disabled={busy !== null}
-                  className={cn(chipButton, "font-medium text-foreground")}
-                >
-                  {banner.actionLabel}
-                </button>
-              }
-            >
-              <SolutionForm
-                caseId={active.id}
-                initialNote={active.solutionNote}
-                initialCommitment={active.solutionStatus === "in_progress" ? active.nextActionAt : null}
-                now={now}
-                saving={busy === "solution"}
-                onSave={async (note, commitmentAt) => {
-                  const ok = await run(
-                    "solution",
-                    () => registerSolutionInProgress(active.id, note, commitmentAt),
-                    "Solución registrada.",
-                  );
-                  if (ok) {
-                    clearSolutionDraft(active.id);
-                    setSolutionOpen(false);
-                  }
-                }}
-              />
-            </Popover>
-          )}
-        </div>
+      {/* Guía de la gestión: en qué va, qué hacer ahora y el siguiente paso */}
+      {!isClosed && caseType && (
+        <CaseGuidePanel
+          data={data}
+          active={active}
+          caseType={caseType}
+          now={now}
+          busy={busy}
+          run={run}
+          onChanged={onChanged}
+          notify={(message, problem) => (problem ? toast.error(message) : toast.success(message))}
+        />
       )}
 
       {/* El supervisor rechazó el pedido de cierre: el asesor ve por qué */}
@@ -876,68 +709,6 @@ export function CaseCard({
         <p className="truncate text-[11px] text-muted-foreground">Nota: {active.nextActionNote}</p>
       )}
       {dialogs}
-    </div>
-  );
-}
-
-/** Etapas abiertas del tipo como chips conectados; la actual se muestra en el centro. */
-function StageStepper({
-  steps,
-  disabled,
-  onPick,
-}: {
-  steps: ReturnType<typeof stageSteps>;
-  disabled: boolean;
-  onPick: (stageId: string) => void;
-}) {
-  const scroller = useRef<HTMLDivElement>(null);
-  const currentId = steps.find((s) => s.state === "current")?.id ?? null;
-
-  useEffect(() => {
-    const box = scroller.current;
-    const el = currentId ? box?.querySelector<HTMLElement>(`[data-step="${currentId}"]`) : null;
-    if (!box || !el) return;
-    box.scrollLeft = Math.max(0, el.offsetLeft - box.clientWidth / 2 + el.offsetWidth / 2);
-  }, [currentId, steps.length]);
-
-  return (
-    <div className="flex min-w-0 max-w-full items-center gap-1.5">
-      <span className="shrink-0 text-[11px] font-medium text-muted-foreground">Etapa:</span>
-      <div
-        ref={scroller}
-        role="group"
-        aria-label="Etapa"
-        className="relative flex min-w-0 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {steps.map((step, i) => (
-          <div key={step.id} className="flex shrink-0 items-center">
-            {i > 0 && (
-              <span
-                aria-hidden
-                className={cn("h-px w-2.5", step.state === "next" ? "bg-border" : "bg-primary/50")}
-              />
-            )}
-            <button
-              data-step={step.id}
-              onClick={() => step.state !== "current" && onPick(step.id)}
-              disabled={disabled}
-              aria-current={step.state === "current" ? "step" : undefined}
-              title={step.state === "current" ? `Etapa actual: ${step.name}` : `Mover a «${step.name}»`}
-              className={cn(
-                "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] disabled:cursor-not-allowed",
-                step.state === "current" &&
-                  "border-primary bg-primary font-medium text-primary-foreground disabled:opacity-100",
-                step.state === "past" &&
-                  "border-transparent bg-muted text-muted-foreground hover:bg-accent disabled:opacity-60",
-                step.state === "next" && "border-border bg-background hover:bg-accent disabled:opacity-60",
-              )}
-            >
-              {step.state === "past" && <Check className="h-3 w-3" aria-hidden />}
-              {step.name}
-            </button>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

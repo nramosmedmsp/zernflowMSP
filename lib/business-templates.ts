@@ -13,8 +13,10 @@ import type {
   Json,
   OutcomeKind,
   StageKind,
+  StageRequirement,
 } from "@/lib/types/database";
 import { logActivity, type Db as SupabaseDb } from "@/lib/cases/io";
+import { serializeNextSteps, type NextStep, type StepAction } from "@/lib/cases/guide";
 import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 
 // ── Datos ──────────────────────────────────────────────────────────────────
@@ -25,10 +27,21 @@ export interface TemplateContactType {
   isDefault?: boolean;
 }
 
+/** Un paso siguiente de la guía: a una etapa (por nombre) o una ayuda; `label` es el texto del botón. */
+export interface TemplateNextStep {
+  to?: string;
+  action?: StepAction;
+  label?: string;
+}
+
 export interface TemplateStage {
   name: string;
   kind: StageKind;
   color?: string;
+  /** Guía de la gestión (00037): texto «Ahora:», lo que pide y los pasos siguientes. */
+  guide?: string;
+  requires?: StageRequirement;
+  next?: TemplateNextStep[];
 }
 
 export interface TemplateRule {
@@ -110,10 +123,37 @@ export const BUSINESS_TEMPLATES: Record<BusinessTemplate, BusinessTemplateDef> =
         suggestedFor: ["Prospecto"],
         requireOutcomeReason: true,
         stages: [
-          { name: "Nuevo interesado", kind: "open" },
-          { name: "Asesorando", kind: "open" },
-          { name: "Pedido o enlace de pago enviado", kind: "open" },
-          { name: "Esperando pago", kind: "open" },
+          {
+            name: "Nuevo interesado",
+            kind: "open",
+            guide: "Saluda y pregunta qué producto busca.",
+            next: [{ to: "Asesorando", label: "Ya sé qué busca" }],
+          },
+          {
+            name: "Asesorando",
+            kind: "open",
+            guide: "Recomienda el producto y confirma sabor, tamaño y dirección.",
+            next: [
+              { to: "Pedido o enlace de pago enviado", label: "Ya envié el pedido o enlace de pago" },
+              { to: "No compró" },
+            ],
+          },
+          {
+            name: "Pedido o enlace de pago enviado",
+            kind: "open",
+            guide: "Confirma que el cliente recibió el enlace y cómo va a pagar.",
+            next: [{ to: "Esperando pago" }],
+          },
+          {
+            name: "Esperando pago",
+            kind: "open",
+            guide: "Espera la confirmación del pago (Yape, Plin o transferencia).",
+            next: [
+              { to: "Pagado", label: "Pagó" },
+              { action: "remind_tomorrow", label: "Aún no, recordarle mañana" },
+              { to: "No compró" },
+            ],
+          },
           { name: "Pagado", kind: "won" },
           { name: "No compró", kind: "lost" },
         ],
@@ -125,10 +165,32 @@ export const BUSINESS_TEMPLATES: Record<BusinessTemplate, BusinessTemplateDef> =
         color: "#f59e0b",
         icon: "package",
         stages: [
-          { name: "Nueva", kind: "open" },
-          { name: "En gestión", kind: "open" },
-          { name: "Esperando al cliente", kind: "open" },
-          { name: "Esperando almacén o courier", kind: "open" },
+          {
+            name: "Nueva",
+            kind: "open",
+            guide: "Pregunta qué pasó y elige la categoría.",
+            requires: "category",
+            next: [{ to: "En gestión" }],
+          },
+          {
+            name: "En gestión",
+            kind: "open",
+            guide: "Registra la solución antes del plazo y coordina con almacén o courier.",
+            requires: "solution",
+            next: [{ to: "Esperando al cliente" }, { to: "Esperando almacén o courier" }, { to: "Resuelta" }],
+          },
+          {
+            name: "Esperando al cliente",
+            kind: "open",
+            guide: "Espera la respuesta del cliente; si no responde, recuérdale.",
+            next: [{ to: "En gestión" }, { to: "Resuelta" }, { to: "Sin solución" }],
+          },
+          {
+            name: "Esperando almacén o courier",
+            kind: "open",
+            guide: "Haz seguimiento al almacén o courier y avisa al cliente.",
+            next: [{ to: "En gestión" }, { to: "Resuelta" }],
+          },
           { name: "Resuelta", kind: "resolved" },
           { name: "Sin solución", kind: "lost" },
         ],
@@ -146,7 +208,7 @@ export const BUSINESS_TEMPLATES: Record<BusinessTemplate, BusinessTemplateDef> =
         icon: "message-circle",
         // "Sin etapas intermedias": una abierta y la de cierre.
         stages: [
-          { name: "Abierta", kind: "open" },
+          { name: "Abierta", kind: "open", guide: "Responde la consulta.", next: [{ to: "Resuelta" }] },
           { name: "Resuelta", kind: "resolved" },
         ],
       },
@@ -157,8 +219,18 @@ export const BUSINESS_TEMPLATES: Record<BusinessTemplate, BusinessTemplateDef> =
         isProactive: true,
         requireOutcomeReason: true,
         stages: [
-          { name: "Recordatorio enviado", kind: "open" },
-          { name: "Interesado", kind: "open" },
+          {
+            name: "Recordatorio enviado",
+            kind: "open",
+            guide: "Espera su respuesta; si no contesta, insiste una vez.",
+            next: [{ to: "Interesado" }, { to: "No compró" }],
+          },
+          {
+            name: "Interesado",
+            kind: "open",
+            guide: "Arma el pedido como en una venta.",
+            next: [{ to: "Compró" }, { to: "No compró" }],
+          },
           { name: "Compró", kind: "won" },
           { name: "No compró", kind: "lost" },
         ],
@@ -333,7 +405,15 @@ export interface NewCaseType {
   require_outcome_reason: boolean;
 }
 
-export interface NewStage { case_type_id: string; name: string; kind: StageKind; color: string | null; position: number }
+export interface NewStage {
+  case_type_id: string;
+  name: string;
+  kind: StageKind;
+  color: string | null;
+  position: number;
+  guide_text?: string | null;
+  requires?: StageRequirement | null;
+}
 export interface NewCategory { case_type_id: string; name: string; position: number; is_high_priority: boolean }
 export interface NewReason { case_type_id: string; name: string; kind: OutcomeKind; position: number }
 export interface NewRule {
@@ -350,7 +430,10 @@ export interface TemplateStore {
   load(workspaceId: string): Promise<ExistingConfig>;
   insertContactTypes(rows: NewContactType[]): Promise<{ id: string; name: string }[]>;
   insertCaseTypes(rows: NewCaseType[]): Promise<{ id: string; name: string }[]>;
-  insertStages(rows: NewStage[]): Promise<void>;
+  /** Devuelve las filas creadas (con id) para poder enlazar los pasos siguientes de la guía. */
+  insertStages(rows: NewStage[]): Promise<{ id: string; case_type_id: string; name: string }[] | void>;
+  /** Guía de la gestión (00037): guarda los pasos siguientes de etapas recién creadas. */
+  updateStageSteps?(updates: { id: string; next_steps: Json }[]): Promise<void>;
   /** R2-16: reordena etapas existentes para que las abiertas nuevas queden antes de las de cierre. */
   updateStagePositions?(updates: { id: string; position: number }[]): Promise<void>;
   insertCategories(rows: NewCategory[]): Promise<void>;
@@ -458,6 +541,7 @@ export async function applyTemplateWithStore(
 
   // 3. Etapas, categorías, motivos y reglas de cada tipo.
   const stages: NewStage[] = [];
+  const pendingSteps: { typeId: string; stageName: string; next: TemplateNextStep[] }[] = [];
   const stagePositionUpdates: { id: string; position: number }[] = [];
   const details: string[] = [];
   const stagesByType = new Map<string, string[]>();
@@ -475,7 +559,16 @@ export async function applyTemplateWithStore(
     for (const s of ct.stages) {
       if (stageNames.has(normalizeName(s.name))) continue;
       stageNames.add(normalizeName(s.name));
-      fresh.push({ case_type_id: target.id, name: s.name, kind: s.kind, color: s.color ?? null, position: pos++ });
+      fresh.push({
+        case_type_id: target.id,
+        name: s.name,
+        kind: s.kind,
+        color: s.color ?? null,
+        position: pos++,
+        ...(s.guide ? { guide_text: s.guide } : {}),
+        ...(s.requires ? { requires: s.requires } : {}),
+      });
+      if (s.next && s.next.length > 0) pendingSteps.push({ typeId: target.id, stageName: s.name, next: s.next });
     }
     // R2-16: en un tipo que ya tiene etapas, las abiertas nuevas van antes de las de cierre.
     const existingStages = [...target.stages].sort((a, b) => a.position - b.position);
@@ -569,7 +662,30 @@ export async function applyTemplateWithStore(
   }
 
   if (stagePositionUpdates.length > 0) await store.updateStagePositions?.(stagePositionUpdates);
-  if (stages.length > 0) await store.insertStages(stages);
+  if (stages.length > 0) {
+    const inserted = await store.insertStages(stages);
+    // Guía de la gestión: los pasos siguientes apuntan a ids, que existen recién ahora.
+    if (inserted && store.updateStageSteps && pendingSteps.length > 0) {
+      const idOf = new Map<string, string>();
+      for (const t of caseTypes.values()) {
+        for (const e of t.stages) if (e.id) idOf.set(`${t.id}|${normalizeName(e.name)}`, e.id);
+      }
+      for (const r of inserted) idOf.set(`${r.case_type_id}|${normalizeName(r.name)}`, r.id);
+      const updates: { id: string; next_steps: Json }[] = [];
+      for (const p of pendingSteps) {
+        const id = idOf.get(`${p.typeId}|${normalizeName(p.stageName)}`);
+        if (!id) continue;
+        const steps = p.next.flatMap((n): NextStep[] => {
+          if (n.action) return [{ stageId: null, action: n.action, label: n.label ?? null }];
+          const to = n.to ? idOf.get(`${p.typeId}|${normalizeName(n.to)}`) : undefined;
+          return to ? [{ stageId: to, action: null, label: n.label ?? null }] : [];
+        });
+        const json = serializeNextSteps(steps);
+        if (json) updates.push({ id, next_steps: json });
+      }
+      if (updates.length > 0) await store.updateStageSteps(updates);
+    }
+  }
   if (categories.length > 0) await store.insertCategories(categories);
   if (reasons.length > 0) await store.insertReasons(reasons);
   if (rules.length > 0) await store.insertRules(rules);
@@ -605,6 +721,7 @@ export async function previewTemplateWithStore(
     insertContactTypes: async (rows) => fakeIds(rows),
     insertCaseTypes: async (rows) => fakeIds(rows),
     insertStages: async () => {},
+    updateStageSteps: async () => {},
     insertCategories: async () => {},
     insertReasons: async () => {},
     insertRules: async () => {},
@@ -685,7 +802,14 @@ export function supabaseTemplateStore(db: SupabaseDb): TemplateStore {
       return data ?? [];
     },
     async insertStages(rows) {
-      throwOn((await db.from("case_stages").insert(rows)).error, "insert case_stages");
+      const { data, error } = await db.from("case_stages").insert(rows).select("id, case_type_id, name");
+      throwOn(error, "insert case_stages");
+      return data ?? [];
+    },
+    async updateStageSteps(updates) {
+      for (const u of updates) {
+        throwOn((await db.from("case_stages").update({ next_steps: u.next_steps }).eq("id", u.id)).error, "update case_stages");
+      }
     },
     async updateStagePositions(updates) {
       for (const u of updates) {

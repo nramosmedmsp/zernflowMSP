@@ -111,6 +111,9 @@ describe("formatHistory", () => {
     expect(text(row("stage_changed", { actorId: "ana", fromValue: "pv-new", toValue: "pv-work" }))).toBe(
       "Ana cambió la etapa: Nueva → En gestión",
     );
+    expect(text(row("stage_changed", { actorId: "luis", fromValue: "pv-new", toValue: "pv-work", meta: { jump: true } }))).toBe(
+      "Luis saltó a «En gestión» (venía de «Nueva»)",
+    );
     expect(text(row("assigned", { actorId: "luis", toValue: "ana" }))).toBe("Luis asignó la gestión a Ana");
     expect(text(row("assigned", { actorId: "ana", toValue: "ana" }))).toBe("Ana tomó la gestión");
     expect(text(row("assigned", { toValue: "ana", meta: { via: "auto" } }))).toBe("Se asignó la gestión a Ana");

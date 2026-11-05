@@ -93,7 +93,12 @@ export function formatHistory(rows: readonly CaseHistoryRow[], lookup: HistoryLo
       case "stage_changed": {
         const from = find("stages", r.fromValue);
         const to = find("stages", r.toValue) ?? "otra etapa";
-        text = from ? `${actor} cambió la etapa: ${from} → ${to}` : `${actor} pasó la gestión a ${to}`;
+        text =
+          meta.jump === true
+            ? `${actor} saltó a «${to}»${from ? ` (venía de «${from}»)` : ""}`
+            : from
+              ? `${actor} cambió la etapa: ${from} → ${to}`
+              : `${actor} pasó la gestión a ${to}`;
         break;
       }
       case "assigned": {
