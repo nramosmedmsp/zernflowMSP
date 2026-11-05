@@ -78,3 +78,5 @@ export {
   type CloseOrRequestResult,
 } from "./protected";
 export { isSupervisorInDb, notifySupervisors, supervisorRecipients } from "./supervisors";
+// Guía de la gestión (00037)
+export * from "./guide";

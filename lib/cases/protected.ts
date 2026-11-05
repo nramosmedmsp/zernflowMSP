@@ -21,6 +21,7 @@ import {
   type Db,
   type EngineResult,
 } from "./io";
+import { checkStrictOrder, loadGuideStages } from "./guide";
 import { closeGate, closeRequestToJson, parseCloseRequest } from "./protection";
 import { notifySupervisors } from "./supervisors";
 import type { OutcomeKind } from "@/lib/types/database";
@@ -41,12 +42,25 @@ export type CloseOrRequestResult =
 export async function closeOrRequestClose(
   db: Db,
   input: CloseCaseInput & { actorId: string },
-  options: { actorIsSupervisor: boolean },
+  options: { actorIsSupervisor: boolean; guide?: boolean },
   now: Date = new Date(),
 ): Promise<EngineResult<CloseOrRequestResult>> {
   const checked = await checkClose(db, input);
   if ("error" in checked) return checked;
   const { row, type } = checked;
+
+  // Guía de la gestión: con orden estricto, un asesor solo cierra en los pasos configurados de la etapa actual.
+  // `guide` lo pasa solo la interfaz; los flujos y el cron no pasan por aquí.
+  if (options.guide && type?.strict_order && checked.stageId && row.case_type_id) {
+    const blocked = checkStrictOrder({
+      strict: true,
+      canSupervise: options.actorIsSupervisor,
+      stages: await loadGuideStages(db, row.case_type_id),
+      currentStageId: row.stage_id,
+      targetStageId: checked.stageId,
+    });
+    if (blocked) return { error: blocked };
+  }
 
   const note = input.note?.trim() || null;
   const gate = closeGate({

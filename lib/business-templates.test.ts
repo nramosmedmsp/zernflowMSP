@@ -36,13 +36,13 @@ describe("datos de las plantillas (docs/PLAN-CRM.md 3.3 y 3.4)", () => {
     expect(t.contactTypes.map((c) => c.name)).toEqual(["Prospecto", "Cliente", "Cliente frecuente", "Inactivo"]);
     expect(t.caseTypes.map((c) => c.name)).toEqual(["Venta", "Postventa", "Consulta", "Recompra"]);
     const venta = t.caseTypes[0];
-    expect(venta.stages).toEqual([
-      { name: "Nuevo interesado", kind: "open" },
-      { name: "Asesorando", kind: "open" },
-      { name: "Pedido o enlace de pago enviado", kind: "open" },
-      { name: "Esperando pago", kind: "open" },
-      { name: "Pagado", kind: "won" },
-      { name: "No compró", kind: "lost" },
+    expect(venta.stages.map((s) => `${s.name}:${s.kind}`)).toEqual([
+      "Nuevo interesado:open",
+      "Asesorando:open",
+      "Pedido o enlace de pago enviado:open",
+      "Esperando pago:open",
+      "Pagado:won",
+      "No compró:lost",
     ]);
     expect(venta.suggestedFor).toEqual(["Prospecto"]);
     expect(venta.reasons?.map((r) => r.name)).toEqual([

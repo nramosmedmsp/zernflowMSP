@@ -27,6 +27,13 @@ import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
 import {
+  cleanGuideText,
+  isStageRequirement,
+  serializeNextSteps,
+  toGuideStage,
+  validateNextSteps,
+} from "@/lib/cases/guide";
+import {
   DESCRIPTION_MAX,
   INACTIVITY_MAX_DAYS,
   INACTIVITY_MIN_DAYS,
@@ -45,6 +52,7 @@ import type {
   Json,
   OutcomeKind,
   StageKind,
+  StageRequirement,
 } from "@/lib/types/database";
 import {
   CASE_TYPE_ICONS,
@@ -203,9 +211,13 @@ interface ChildRow {
   kind?: string;
   color?: string | null;
   is_high_priority?: boolean;
+  guide_text?: string | null;
+  next_steps?: unknown;
+  requires?: string | null;
 }
 
 function toStage(r: ChildRow): StageConfig {
+  const g = toGuideStage({ ...r, kind: r.kind as StageKind });
   return {
     id: r.id,
     caseTypeId: r.case_type_id,
@@ -215,6 +227,9 @@ function toStage(r: ChildRow): StageConfig {
     kind: r.kind as StageKind,
     archived: r.archived_at !== null,
     updatedAt: r.updated_at,
+    guideText: g.guideText,
+    nextSteps: g.nextSteps,
+    requires: g.requires,
   };
 }
 function toCategory(r: ChildRow): CategoryConfig {
@@ -339,6 +354,7 @@ async function loadConfig(db: Db, workspaceId: string, countDb: Db = db): Promis
     protected: t.protected ?? false,
     solutionDeadlineHours: t.solution_deadline_hours ?? null,
     reopenWindowDays: t.reopen_window_days ?? null,
+    strictOrder: t.strict_order ?? false,
     archived: t.archived_at !== null,
     updatedAt: t.updated_at,
     stages: (stages?.data ?? []).filter((r) => r.case_type_id === t.id).map((r) => toStage(r as ChildRow)),
@@ -392,6 +408,7 @@ interface TypeRow {
   protected?: boolean;
   solution_deadline_hours?: number | null;
   reopen_window_days?: number | null;
+  strict_order?: boolean;
   auto_template?: unknown;
   archived_at: string | null;
 }
@@ -593,6 +610,8 @@ export interface UpdateCaseTypeInput {
   solutionDeadlineHours?: number | string | null;
   /** Días tras el cierre en que un mensaje del cliente la reabre (vacío = 24 horas). */
   reopenWindowDays?: number | string | null;
+  /** Guía de la gestión: un asesor solo avanza por los pasos configurados (supervisores y automatización exentos). */
+  strictOrder?: boolean;
 }
 
 /** Cambia los datos generales, el destino, los tiempos y los interruptores de un tipo. Solo toca lo que viene. */
@@ -660,6 +679,10 @@ export async function updateCaseType(input: UpdateCaseTypeInput): Promise<Config
       }
       patch.solution_deadline_hours = hours;
       before.solution_deadline_hours = row.solution_deadline_hours ?? null;
+    }
+    if (input.strictOrder !== undefined) {
+      patch.strict_order = input.strictOrder === true;
+      before.strict_order = row.strict_order ?? false;
     }
     if (input.reopenWindowDays !== undefined) {
       const days = parseOptionalPositiveInt(input.reopenWindowDays, MAX_REOPEN_DAYS);
@@ -952,6 +975,12 @@ export interface UpdateItemInput {
   isHighPriority?: boolean;
   /** Confirmó el aviso de cambio de clase (etapas y motivos). */
   confirmedKindChange?: boolean;
+  /** Solo etapas (guía de la gestión): texto «Ahora:» (hasta 200 caracteres), null/vacío lo quita. */
+  guideText?: string | null;
+  /** Solo etapas: pasos siguientes en orden (vacío = predeterminado). */
+  nextSteps?: { stageId?: string | null; action?: string | null; label?: string | null }[];
+  /** Solo etapas: lo que pide la etapa antes de avanzar. */
+  requires?: StageRequirement | null;
 }
 
 export async function updateItem(input: UpdateItemInput): Promise<ConfigResult> {
@@ -982,6 +1011,33 @@ export async function updateItem(input: UpdateItemInput): Promise<ConfigResult> 
       if (color === undefined) return { error: "El color no es válido." };
       patch.color = color;
       before.color = row.color ?? null;
+    }
+    if (list === "stage" && input.guideText !== undefined) {
+      const text = cleanGuideText(input.guideText);
+      if (text && typeof text === "object") return text;
+      patch.guide_text = text;
+      before.guide_text = row.guide_text ?? null;
+    }
+    if (list === "stage" && input.nextSteps !== undefined) {
+      const checked = validateNextSteps({
+        stageId: row.id,
+        steps: input.nextSteps,
+        stages: siblings.map((r) => ({ id: r.id, kind: r.kind as StageKind, archived: r.archived_at !== null })),
+      });
+      if ("error" in checked) return checked;
+      patch.next_steps = serializeNextSteps(checked.steps);
+      before.next_steps = row.next_steps ?? null;
+    }
+    if (list === "stage" && input.requires !== undefined) {
+      if (input.requires !== null && !isStageRequirement(input.requires)) return { error: INVALID };
+      if (input.requires === "category") {
+        const cats = await listChildren(s.db, "case_categories", type.id);
+        if (!cats.some((c) => c.archived_at === null)) {
+          return { error: "Agrega al menos una categoría activa antes de pedirla en esta etapa." };
+        }
+      }
+      patch.requires = input.requires;
+      before.requires = row.requires ?? null;
     }
     if (list === "category" && input.isHighPriority !== undefined) {
       patch.is_high_priority = input.isHighPriority === true;

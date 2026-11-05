@@ -5,7 +5,14 @@
 import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { addDays, limaDateOf, limaDateTimeIso } from "@/lib/cases/dates";
 import { formatSpan, solutionState, typeLockMessage, type SolutionCaseInput } from "@/lib/cases/protection";
-import type { OutcomeKind, StageKind } from "@/lib/types/database";
+import {
+  nextOpenStageId,
+  previousOpenStageId,
+  resolveExits,
+  type GuideExit,
+  type GuideStage,
+} from "@/lib/cases/guide";
+import type { OutcomeKind, StageKind, StageRequirement } from "@/lib/types/database";
 
 interface StageLike {
   id: string;
@@ -38,6 +45,61 @@ export function stageSteps(stages: readonly StageLike[], currentStageId: string 
     name: s.name,
     state: currentIndex < 0 ? "next" : i < currentIndex ? "past" : i === currentIndex ? "current" : "next",
   }));
+}
+
+// ---------------------------------------------------------------- Guía de la gestión
+
+export interface CaseGuide {
+  /** Etapas abiertas con su estado: hechas, la actual y las que vienen. */
+  steps: StageStep[];
+  /** Cierre del recorrido, p. ej. «Pagado / No compró» (null si el tipo no tiene etapas finales). */
+  finalsLabel: string | null;
+  /** Texto «Ahora:» (el configurado o uno genérico). */
+  now: string;
+  hasGuideText: boolean;
+  requires: StageRequirement | null;
+  /** Botones: pasos siguientes configurados o, sin configurar, la siguiente etapa y los cierres. */
+  exits: GuideExit[];
+  /** Etapa a la que lleva «Volver un paso» (null si ya es la primera). */
+  backStage: { id: string; name: string } | null;
+  /** Siguiente etapa abierta en el orden (para las pistas). */
+  nextStageId: string | null;
+}
+
+interface GuideTypeLike {
+  stages: readonly (StageLike & Pick<GuideStage, "guideText" | "nextSteps" | "requires">)[];
+}
+
+const MAX_FINAL_NAMES = 3;
+
+/** Todo lo que la guía de la tarjeta muestra para la etapa actual de una gestión. */
+export function caseGuide(type: GuideTypeLike, currentStageId: string | null): CaseGuide {
+  const stages = type.stages as readonly GuideStage[];
+  const current = stages.find((s) => s.id === currentStageId) ?? null;
+  const finals = stages.filter((s) => s.kind !== "open" && !s.archived);
+  const names = finals.map((s) => s.name);
+  const finalsLabel =
+    names.length === 0
+      ? null
+      : names.length > MAX_FINAL_NAMES
+        ? `${names.slice(0, MAX_FINAL_NAMES).join(" / ")} …`
+        : names.join(" / ");
+  const backId = previousOpenStageId(stages, currentStageId);
+  return {
+    steps: stageSteps(type.stages, currentStageId),
+    finalsLabel,
+    now: current?.guideText ?? (current ? `Estás en «${current.name}». Elige el siguiente paso cuando corresponda.` : "Elige la etapa en la que va esta gestión."),
+    hasGuideText: !!current?.guideText,
+    requires: current?.requires ?? null,
+    exits: current ? resolveExits(stages, currentStageId) : [],
+    backStage: backId ? { id: backId, name: stages.find((s) => s.id === backId)?.name ?? "" } : null,
+    nextStageId: nextOpenStageId(stages, currentStageId),
+  };
+}
+
+/** ¿Puede esta persona elegir cualquier etapa? Sí, salvo un asesor con el orden estricto del tipo. */
+export function canPickAnyStage(strictOrder: boolean, canSupervise: boolean): boolean {
+  return canSupervise || !strictOrder;
 }
 
 // ---------------------------------------------------------------- Cierre
