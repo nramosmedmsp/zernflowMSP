@@ -126,6 +126,8 @@ export function currentCommit(rootDir) {
 }
 
 const DOC_NOTES = {
+  "GUIA-FUNCIONAL.md": "Para personas no técnicas: cómo funciona el CRM (pantallas, gestiones, equipos, roles, reparto, configuración actual de la tienda, preguntas frecuentes).",
+  "GUIA-FLUJOS.md": "Para personas no técnicas: cómo crear y probar flujos (bots) del chat, los nodos, las plantillas, y cómo pedirle a Claude que diseñe un flujo.",
   "PLAN-CRM.md": "Plan general del CRM (versión 2): qué es, qué se construye, qué no y en qué orden. Empieza aquí.",
   "FASE-1-TECNICO.md": "Fase 1: bandeja con gestiones, equipos, permisos y reparto (cómo está hecho).",
   "FASE-2-TECNICO.md": "Fase 2: automatización, horarios, importación de contactos y preparación del gimnasio.",
@@ -149,6 +151,28 @@ export function buildReadme({ rootDir, commit, date, fileCount }) {
   return `# CRM Muscle Shop: guía del código para Claude
 
 Generado el ${date} · commit \`${commit}\` · ${fileCount} archivos.
+
+## Si no eres programador: empieza aquí
+
+Lee primero estas dos guías, escritas en lenguaje simple y fieles al código actual:
+
+1. **\`docs/GUIA-FUNCIONAL.md\`**: cómo funciona el CRM (menús, Bandeja, gestiones, tipos de contacto, equipos y
+   roles, reparto automático, horarios, la configuración actual de la tienda, preguntas frecuentes y glosario).
+2. **\`docs/GUIA-FLUJOS.md\`**: cómo crear flujos del chat (bots): disparadores, todos los nodos, variables,
+   ventana de 24 h y plantillas, publicar, probar, los 10 flujos publicados, las 21 plantillas y un
+   **prompt listo para pedirle a Claude que diseñe un flujo**.
+
+Preguntas de ejemplo para hacerle a Claude con este ZIP cargado:
+
+- «¿Cómo se reparte un chat nuevo?»
+- «¿Qué pasa cuando un asesor cierra una venta como ganada?»
+- «¿Qué ve un asesor y qué ve un supervisor en la Bandeja?»
+- «¿Por qué un cliente no recibió el mensaje del bot pasadas 24 horas?»
+- «Diséñame un flujo para responder cuando el cliente pregunte por envíos a provincia.»
+- «Diséñame un flujo que recuerde a los clientes que dejaron un pedido sin pagar.»
+- «Revisa los flujos de la tienda y dime qué palabras clave podrían chocar.»
+
+El resto de este documento es el mapa técnico, para quien vaya a tocar el código.
 
 ## Qué es esta app
 
@@ -204,8 +228,12 @@ de Muscle Shop (marca, usuarios, correo, despliegue).
 
 ## Primer mensaje sugerido para Claude
 
-> Lee LEEME-PARA-CLAUDE.md y docs/PLAN-CRM.md y explícame, en palabras simples, qué hace esta app, cómo
-> fluye un mensaje de WhatsApp desde el webhook hasta la Bandeja y qué partes serían más riesgosas de cambiar.
+> Lee LEEME-PARA-CLAUDE.md, docs/GUIA-FUNCIONAL.md y docs/GUIA-FLUJOS.md y explícame, en palabras simples,
+> qué hace esta app y cómo se atiende un chat de principio a fin. Después dime qué te gustaría que te aclarara
+> antes de ayudarme a diseñar un flujo del chat.
+
+Para código: «Lee LEEME-PARA-CLAUDE.md y docs/PLAN-CRM.md y explícame cómo fluye un mensaje de WhatsApp desde el
+webhook hasta la Bandeja y qué partes serían más riesgosas de cambiar.»
 `;
 }
 
