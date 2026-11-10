@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Search, MessageSquare, RefreshCw, SlidersHorizontal, UserRound, Clock, AlertCircle } from "lucide-react";
+import { Search, MessageSquare, RefreshCw, SlidersHorizontal, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import { formatRelative } from "@/lib/format";
@@ -19,11 +19,11 @@ import {
   buildRows,
   emptyText,
   filtersForScope,
-  memberName,
   parseStoredView,
   scopeLabel,
   viewHint,
   waitingText,
+  type CaseLine,
   type InboxCase,
   type InboxConversation,
   type InboxFilters,
@@ -37,6 +37,41 @@ import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
 import { useDraftPreviews } from "./use-drafts";
+
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Una gestión activa del chat: "● Postventa · Nueva · Luis   ⏱ vence en 3 h". */
+function CaseLineView({ line }: { line: CaseLine }) {
+  const color = line.typeColor && HEX.test(line.typeColor) ? line.typeColor : "#6b7280";
+  const red = line.deadline?.tone === "red";
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px]",
+        red ? "bg-red-50 ring-1 ring-red-200 dark:bg-red-950/30 dark:ring-red-900/60" : "bg-muted/60",
+      )}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+      <span className="shrink-0 font-semibold" style={{ color }}>
+        {line.typeName}
+      </span>
+      <span className="truncate text-muted-foreground">
+        · {line.stageText} · {line.assigneeText}
+      </span>
+      {line.deadline && (
+        <span
+          className={cn(
+            "ml-auto inline-flex shrink-0 items-center gap-0.5 font-semibold",
+            red ? "text-red-600 dark:text-red-300" : "text-amber-700 dark:text-amber-300",
+          )}
+        >
+          <Clock className="h-2.5 w-2.5" />
+          {line.deadline.label}
+        </span>
+      )}
+    </div>
+  );
+}
 
 /** Alcance y estado que cada persona dejó la última vez (solo en su navegador). */
 const viewStorageKey = (workspaceId: string, userId: string) => `inbox:view:${workspaceId}:${userId}`;
@@ -141,7 +176,6 @@ export function ConversationList({
   }, [viewRead, scope, meta, countByState]);
 
   const demoChannelIds = useMemo(() => new Set(meta.demoChannelIds ?? []), [meta.demoChannelIds]);
-  const typeById = useMemo(() => new Map(meta.caseTypes.map((t) => [t.id, t])), [meta.caseTypes]);
   const contactTypeById = useMemo(() => new Map((meta.contactTypes ?? []).map((t) => [t.id, t])), [meta.contactTypes]);
   const platforms = useMemo(
     () => [...new Set(conversations.map((c) => c.platform))].sort() as Platform[],
@@ -375,8 +409,6 @@ export function ConversationList({
         ) : (
           rows.map((row) => {
             const { conversation, case: c } = row;
-            const type = c?.case_type_id ? typeById.get(c.case_type_id) : null;
-            const stage = type?.stages.find((s) => s.id === c?.stage_id);
             const waiting = c?.waiting_since ?? null;
             return (
               <button
@@ -425,59 +457,13 @@ export function ConversationList({
                     </span>
                   </div>
 
-                  {c ? (
-                    <div className="mt-1 flex flex-wrap items-center gap-1">
-                      <span
-                        className="max-w-[9rem] truncate rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
-                        style={
-                          type?.color
-                            ? { backgroundColor: `${type.color}20`, borderColor: `${type.color}40`, color: type.color }
-                            : undefined
-                        }
-                      >
-                        {type?.name ?? "Sin clasificar"}
-                      </span>
-                      {c.status === "scheduled" ? (
-                        <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
-                          Programada
-                        </span>
-                      ) : (
-                        stage && (
-                          <span className="max-w-[8rem] truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {stage.name}
-                          </span>
-                        )
-                      )}
-                      <span className="inline-flex min-w-0 items-center gap-0.5 text-[10px] text-muted-foreground">
-                        <UserRound className="h-3 w-3 shrink-0" />
-                        <span className="truncate">
-                          {c.assignee_id === meta.userId ? "Yo" : memberName(meta.members, c.assignee_id)}
-                        </span>
-                      </span>
-                      {row.caseCount > 1 && (
-                        <span className="text-[10px] text-muted-foreground">+{row.caseCount - 1}</span>
-                      )}
+                  {/* Una línea por gestión activa del chat, la más urgente primero. */}
+                  {row.lines.length > 0 && (
+                    <div className="mt-1 space-y-1">
+                      {row.lines.map((line) => (
+                        <CaseLineView key={line.id} line={line} />
+                      ))}
                     </div>
-                  ) : null}
-
-                  {row.claim && (
-                    <p
-                      className={cn(
-                        "mt-1 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                        row.claim.kind === "approval"
-                          ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
-                          : "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
-                      )}
-                    >
-                      <AlertCircle className="h-3 w-3" />
-                      {row.claim.kind === "late" ? "Plazo vencido" : row.claim.label}
-                    </p>
-                  )}
-                  {row.otherProtected && (
-                    <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                      <AlertCircle className="h-3 w-3" />
-                      {row.otherProtected} abierta
-                    </p>
                   )}
 
                   {waiting && now !== null && (

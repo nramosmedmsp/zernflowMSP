@@ -5,7 +5,7 @@ import { Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { addDays, limaDateOf } from "@/lib/cases/dates";
 import { listContactActiveCases, openManualCase } from "@/lib/actions/cases";
-import { ParallelCaseWarning, hasSameTypeOpen, type ParallelCase } from "./parallel-case-warning";
+import { ParallelCaseWarning, UNCLASSIFIED_BLOCKED_HINT, hasSameTypeOpen, type ParallelCase } from "./parallel-case-warning";
 import { createContact, searchContacts, type ContactSearchResult } from "@/lib/actions/contacts";
 
 type AssignMode = "me" | "auto" | "person";
@@ -153,6 +153,8 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
   const existing = contact && active?.contactId === contact.id ? active.cases : [];
   const sameTypeAllowed = !!caseTypeId && !!active?.parallelTypeIds.includes(caseTypeId);
   const loadingExisting = !!contact && active?.contactId !== contact.id;
+  // «Sin clasificar» no se ofrece si ya tiene una gestión abierta o programada: se clasifica esa.
+  const noUnclassified = existing.length > 0;
 
   const results = loaded?.list ?? [];
   const searching = loaded?.query !== query;
@@ -164,6 +166,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
     setError(null);
     if (!contact) return setError("Elige un contacto.");
     if (scheduling && !caseTypeId) return setError("Elige el tipo de la gestión que vas a programar.");
+    if (noUnclassified && !caseTypeId) return setError(UNCLASSIFIED_BLOCKED_HINT);
     if (scheduling && date < tomorrow) return setError("La fecha programada debe ser a partir de mañana.");
     if (!scheduling && mode === "person" && !personId) return setError("Elige a quién asignarla.");
     if (hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed)) return setError("Este contacto ya tiene una gestión abierta de ese tipo.");
@@ -288,13 +291,27 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
               onChange={(e) => setCaseTypeId(e.target.value)}
               className={FIELD_CLASS}
             >
-              <option value="">Sin clasificar</option>
+              {noUnclassified ? (
+                <>
+                  <option value="">Elige un tipo…</option>
+                  <option disabled value="__sin_clasificar">
+                    Sin clasificar (no disponible)
+                  </option>
+                </>
+              ) : (
+                <option value="">Sin clasificar</option>
+              )}
               {caseTypes.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
               ))}
             </select>
+            {noUnclassified && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                <span className="font-medium">Sin clasificar:</span> {UNCLASSIFIED_BLOCKED_HINT}
+              </p>
+            )}
           </div>
 
           {/* Fecha */}
@@ -374,7 +391,7 @@ function NewCaseForm({ onClose, caseTypes, members, canAssignOthers, onCreated }
           </button>
           <button
             onClick={submit}
-            disabled={saving || loadingExisting || hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed)}
+            disabled={saving || loadingExisting || (noUnclassified && !caseTypeId) || hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed)}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

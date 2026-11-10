@@ -199,10 +199,37 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
       return (r: Row) => {
         if (op === "eq") return String(r[col]) === value;
         if (op === "is" && value === "null") return (r[col] ?? null) === null;
+        const cell = r[col];
+        const has = cell !== null && cell !== undefined;
+        if (op === "lt") return has && compare(cell, value) < 0;
+        if (op === "lte") return has && compare(cell, value) <= 0;
+        if (op === "gt") return has && compare(cell, value) > 0;
+        if (op === "gte") return has && compare(cell, value) >= 0;
+        if (op === "in") return value.replace(/^\(|\)$/g, "").split(",").includes(String(cell));
         throw new Error(`or(${op}) no soportado`);
       };
     });
     this.filters.push((r) => parts.some((f) => f(r)));
+    return this;
+  }
+  /** `ilike` sin distinguir mayúsculas; `%` y `_` como comodines y `\\` escapa. "rel.campo" mira la fila relacionada. */
+  ilike(col: string, pattern: string) {
+    let source = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i];
+      if (ch === "\\" && i + 1 < pattern.length) source += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      else if (ch === "%") source += ".*";
+      else if (ch === "_") source += ".";
+      else source += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    const re = new RegExp(`^${source}$`, "i");
+    if (col.includes(".")) {
+      const [rel, field] = col.split(".");
+      const fk = `${rel.replace(/s$/, "")}_id`;
+      this.filters.push((r) => re.test(String(this.db.rows(rel).find((x) => x.id === r[fk])?.[field] ?? "")));
+    } else {
+      this.filters.push((r) => re.test(String(r[col] ?? "")));
+    }
     return this;
   }
   neq(col: string, v: unknown) {

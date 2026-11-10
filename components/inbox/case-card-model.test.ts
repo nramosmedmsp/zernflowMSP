@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { SolutionCaseInput } from "@/lib/cases/protection";
 import {
   canPickAnyStage,
+  caseTabs,
+  showCaseTabs,
   caseGuide,
   closeMenuItems,
   closedHeadline,
@@ -366,5 +368,52 @@ describe("caseGuide (Guía de la gestión)", () => {
     expect(canPickAnyStage(false, false)).toBe(true);
     expect(canPickAnyStage(true, false)).toBe(false);
     expect(canPickAnyStage(true, true)).toBe(true);
+  });
+});
+
+describe("pestañas de gestiones del chat", () => {
+  const types = [
+    { id: "pv", name: "Postventa", color: "#ea580c", solutionDeadlineHours: 4, stages: [{ id: "s1", name: "Nueva" }] },
+    { id: "v", name: "Venta", color: "#16a34a", solutionDeadlineHours: null, stages: [{ id: "s2", name: "Nuevo interesado" }] },
+  ];
+  const base = {
+    status: "open",
+    openedAt: "2026-11-10T14:00:00Z",
+    solutionClockAt: null,
+    solutionStatus: null,
+    solutionNote: null,
+    nextActionAt: null,
+    solutionSchedule: null,
+    closeRequest: null,
+  };
+  const now = new Date("2026-11-10T15:00:00Z");
+
+  it("una pestaña por gestión con tipo, etapa y plazo", () => {
+    const tabs = caseTabs(
+      [
+        { ...base, id: "a", caseTypeId: "v", stageId: "s2" },
+        { ...base, id: "b", caseTypeId: "pv", stageId: "s1" },
+        { ...base, id: "c", caseTypeId: null, stageId: null },
+        { ...base, id: "d", caseTypeId: "v", stageId: null, status: "scheduled" },
+      ],
+      types,
+      now,
+    );
+    expect(tabs.map((t) => [t.id, t.typeName, t.stageText])).toEqual([
+      ["a", "Venta", "Nuevo interesado"],
+      ["b", "Postventa", "Nueva"],
+      ["c", "Sin clasificar", "sin etapa"],
+      ["d", "Venta", "Programada"],
+    ]);
+    expect(tabs[0].deadline).toBeNull();
+    expect(tabs[1].deadline).toEqual({ label: "vence en 3 h", tone: "red" });
+  });
+
+  it("solo hay pestañas con 2 o más activas (o una cerrada junto a activas)", () => {
+    expect(showCaseTabs(0, false)).toBe(false);
+    expect(showCaseTabs(1, false)).toBe(false);
+    expect(showCaseTabs(2, false)).toBe(true);
+    expect(showCaseTabs(1, true)).toBe(true);
+    expect(showCaseTabs(0, true)).toBe(false);
   });
 });

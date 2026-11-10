@@ -188,9 +188,9 @@ describe("acciones de gestiones: permisos", () => {
   it("abrir gestión manual: para mí sí; para otro solo supervisor o administrador", async () => {
     const typeId = (name: string) => fake.rows("case_types").find((t) => t.name === name)!.id as string;
     as(ANA);
-    // El contacto ya tiene una gestión abierta (sin clasificar): otra en paralelo pide confirmar.
-    expect(await openManualCase({ contactId, confirmParallel: true })).toMatchObject({ ok: true, status: "open" });
-    expect(await openManualCase({ contactId, assignee: BETO, confirmParallel: true })).toEqual({
+    // El contacto ya tiene una Venta abierta: otra en paralelo (de otro tipo) pide confirmar.
+    expect(await openManualCase({ contactId, caseTypeId: typeId("Consulta"), confirmParallel: true })).toMatchObject({ ok: true, status: "open" });
+    expect(await openManualCase({ contactId, assignee: BETO, caseTypeId: typeId("Postventa"), confirmParallel: true })).toEqual({
       error: "Solo puedes asignar a personas de tu equipo.",
     });
     as(SUP);
@@ -234,6 +234,26 @@ describe("acciones de gestiones: permisos", () => {
     expect("parallelTypeIds" in listed && listed.parallelTypeIds.sort()).toEqual(
       [typeId("Venta"), typeId("Recompra")].sort(),
     );
+  });
+
+  it("«Sin clasificar» no se crea si el contacto ya tiene una gestión abierta o programada, ni confirmando", async () => {
+    as(ANA);
+    const msg = { error: "Ya tiene una gestión abierta: clasifícala en vez de crear otra." };
+    const before = fake.rows("cases").length;
+    // Con una abierta (Venta).
+    expect(await openManualCase({ contactId })).toEqual(msg);
+    expect(await openManualCase({ contactId, confirmParallel: true })).toEqual(msg);
+    // Con una abierta sin clasificar.
+    fake.rows("cases")[0].case_type_id = null;
+    expect(await openManualCase({ contactId, confirmParallel: true })).toEqual(msg);
+    // Solo con una programada.
+    fake.rows("cases")[0].status = "scheduled";
+    expect(await openManualCase({ contactId, confirmParallel: true })).toEqual(msg);
+    expect(fake.rows("cases")).toHaveLength(before);
+    // Con las cerradas sí se puede (no hay gestión activa).
+    fake.rows("cases")[0].status = "won";
+    as(OWNER);
+    expect(await openManualCase({ contactId })).toMatchObject({ ok: true, status: "open" });
   });
 
   it("un contacto sin gestiones abiertas no pide confirmación", async () => {

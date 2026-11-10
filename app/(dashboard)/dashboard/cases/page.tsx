@@ -5,7 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { isAdminRole } from "@/lib/permissions";
 import { parseCaseListParams } from "@/components/cases/case-filters";
 import { CasesView } from "@/components/cases/cases-view";
-import { loadCases } from "./load-cases";
+import { loadCases, loadCasesByClient } from "./load-cases";
 
 export default async function CasesPage({
   searchParams,
@@ -18,7 +18,7 @@ export default async function CasesPage({
   const now = new Date();
 
   // Etapas por join con el tipo (sin esperar a la lista de tipos) y el resto en paralelo.
-  const [typesRes, teamsRes, membersRes, stagesRes] = await Promise.all([
+  const [typesRes, teamsRes, membersRes, stagesRes, contactTypesRes] = await Promise.all([
     supabase
       .from("case_types")
       .select("id, name, color, archived_at, solution_deadline_hours")
@@ -36,6 +36,7 @@ export default async function CasesPage({
       .select("id, case_type_id, name, color, archived_at, position, case_types!inner(workspace_id)")
       .eq("case_types.workspace_id", workspace.id)
       .order("position", { ascending: true }),
+    supabase.from("contact_types").select("id, name, color").eq("workspace_id", workspace.id),
   ]);
 
   const caseTypes = typesRes.data ?? [];
@@ -52,13 +53,16 @@ export default async function CasesPage({
   const isSupervisor = supervisedTeamIds.length > 0;
   const canSeeOthers = isAdmin || isSupervisor;
 
-  const result = await loadCases(supabase, {
-    workspaceId: workspace.id,
-    userId: user.id,
-    canSeeOthers,
-    params,
-    now,
-  });
+  const listArgs = { workspaceId: workspace.id, userId: user.id, canSeeOthers, params, now };
+  const clientResult =
+    params.view === "client"
+      ? await loadCasesByClient(supabase, {
+          ...listArgs,
+          caseTypes: caseTypes.map((t) => ({ id: t.id, solutionDeadlineHours: t.solution_deadline_hours ?? null })),
+          solutionSchedules,
+        })
+      : null;
+  const result = clientResult ? null : await loadCases(supabase, listArgs);
 
   // A quién puede asignar al crear una gestión: administrador, a cualquiera;
   // supervisor, a su equipo; asesor, solo a sí mismo.
@@ -70,10 +74,13 @@ export default async function CasesPage({
 
   return (
     <CasesView
-      rows={result.rows}
-      total={result.total}
-      page={result.page}
-      params={{ ...params, page: result.page }}
+      rows={result?.rows ?? []}
+      clientGroups={clientResult?.groups ?? []}
+      clientTotals={clientResult ? { clients: clientResult.totalClients, cases: clientResult.totalCases, truncated: clientResult.truncated } : null}
+      contactTypes={(contactTypesRes.data ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+      total={clientResult ? clientResult.totalClients : (result?.total ?? 0)}
+      page={clientResult?.page ?? result?.page ?? 1}
+      params={{ ...params, page: clientResult?.page ?? result?.page ?? 1 }}
       nowIso={now.toISOString()}
       solutionSchedules={solutionSchedules}
       caseTypes={caseTypes.map((t) => ({

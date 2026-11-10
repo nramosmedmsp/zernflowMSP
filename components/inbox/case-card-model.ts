@@ -4,7 +4,15 @@
 
 import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { addDays, limaDateOf, limaDateTimeIso } from "@/lib/cases/dates";
-import { formatSpan, solutionState, typeLockMessage, type SolutionCaseInput } from "@/lib/cases/protection";
+import {
+  deadlineChip,
+  formatSpan,
+  solutionState,
+  typeLockMessage,
+  type DeadlineChip,
+  type SolutionCaseInput,
+  type SolutionSchedule,
+} from "@/lib/cases/protection";
 import {
   nextOpenStageId,
   previousOpenStageId,
@@ -410,4 +418,71 @@ export function nextContactOptions(now: Date): NextContactOption[] {
     options.push({ key: "monday", label: "El lunes 9:00", ...morning(addDays(today, toMonday)), when: "el lunes a las 9:00" });
   }
   return options;
+}
+
+// ---------------------------------------------------------------- Pestañas
+
+/** Lo que una pestaña de gestión necesita de la gestión (un CaseView lo cumple). */
+export interface TabCaseInput {
+  id: string;
+  status: string;
+  caseTypeId: string | null;
+  stageId: string | null;
+  openedAt: string | null;
+  solutionClockAt: string | null;
+  solutionStatus: string | null;
+  solutionNote: string | null;
+  nextActionAt: string | null;
+  solutionSchedule: SolutionSchedule | null;
+  closeRequest: unknown | null;
+}
+
+export interface CaseTabModel {
+  id: string;
+  typeName: string;
+  typeColor: string | null;
+  /** Etapa, "Programada" o "sin etapa". */
+  stageText: string;
+  deadline: DeadlineChip | null;
+}
+
+/**
+ * Una pestaña por gestión activa del chat, en el orden recibido. Cuando el chat
+ * tiene 2 o más, la tarjeta de gestión muestra estas pestañas en vez de un
+ * selector; cada una lleva su propia guía y sus propias acciones.
+ */
+export function caseTabs(
+  cases: readonly TabCaseInput[],
+  caseTypes: readonly { id: string; name: string; color: string | null; solutionDeadlineHours: number | null; stages: readonly { id: string; name: string }[] }[],
+  now: Date,
+): CaseTabModel[] {
+  return cases.map((c) => {
+    const type = c.caseTypeId ? caseTypes.find((t) => t.id === c.caseTypeId) : undefined;
+    const stage = type?.stages.find((st) => st.id === c.stageId);
+    return {
+      id: c.id,
+      typeName: type?.name ?? "Sin clasificar",
+      typeColor: type?.color ?? null,
+      stageText: c.status === "scheduled" ? "Programada" : (stage?.name ?? "sin etapa"),
+      deadline: deadlineChip(
+        {
+          status: c.status,
+          openedAt: c.openedAt,
+          solutionClockAt: c.solutionClockAt,
+          solutionStatus: c.solutionStatus,
+          solutionNote: c.solutionNote,
+          nextActionAt: c.nextActionAt,
+          solutionSchedule: c.solutionSchedule,
+          hasCloseRequest: c.closeRequest !== null && c.closeRequest !== undefined,
+        },
+        type?.solutionDeadlineHours ?? null,
+        now,
+      ),
+    };
+  });
+}
+
+/** ¿Se muestran pestañas? Con 2 o más gestiones activas (o una cerrada abierta junto a las activas). */
+export function showCaseTabs(activeCount: number, viewingClosed: boolean): boolean {
+  return activeCount > 1 || (viewingClosed && activeCount > 0);
 }

@@ -19,3 +19,6 @@ export function allowsSameTypeParallel(type: {
   if (type.protected) return false;
   return type.stages.some((s) => !s.archived && (s.kind === "won" || s.kind === "lost"));
 }
+
+/** «Sin clasificar» no se crea a mano si el contacto ya tiene una gestión abierta o programada. */
+export const UNCLASSIFIED_DUPLICATE_MESSAGE = "Ya tiene una gestión abierta: clasifícala en vez de crear otra.";

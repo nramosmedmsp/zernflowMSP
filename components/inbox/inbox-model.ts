@@ -7,8 +7,10 @@ import type { ContactTypeOption } from "@/lib/cases/contact-type-model";
 import {
   claimBadge,
   claimPriority,
+  deadlineChip,
   solutionScheduleFor,
   type ClaimBadge,
+  type DeadlineChip,
   type SolutionCaseInput,
   type SolutionSchedules,
 } from "@/lib/cases/protection";
@@ -350,12 +352,47 @@ export function groupCasesByContact(cases: readonly InboxCase[]): Map<string, In
   return map;
 }
 
+/** Una línea de la fila de la bandeja: una gestión activa del chat (variante A, líneas apiladas). */
+export interface CaseLine {
+  id: string;
+  typeName: string;
+  typeColor: string | null;
+  /** Etapa, o "Programada", o "sin etapa". */
+  stageText: string;
+  /** "Yo", el nombre o "Sin asignar". */
+  assigneeText: string;
+  /** Plazo de la solución: "vence en 3 h", "Plazo vencido"... */
+  deadline: DeadlineChip | null;
+}
+
+/**
+ * Una línea por gestión activa del chat, en el orden de `compareCases` (la más
+ * urgente primero): tipo · etapa · responsable y, si corre, el plazo.
+ */
+export function buildCaseLines(all: readonly InboxCase[], meta: InboxMeta, now: Date): CaseLine[] {
+  const typeOf = new Map(meta.caseTypes.map((t) => [t.id, t]));
+  return all.map((c) => {
+    const type = c.case_type_id ? typeOf.get(c.case_type_id) : undefined;
+    const stage = type?.stages.find((st) => st.id === c.stage_id);
+    return {
+      id: c.id,
+      typeName: type?.name ?? "Sin clasificar",
+      typeColor: type?.color ?? null,
+      stageText: c.status === "scheduled" ? "Programada" : (stage?.name ?? "sin etapa"),
+      assigneeText: c.assignee_id && c.assignee_id === meta.userId ? "Yo" : memberName(meta.members, c.assignee_id),
+      deadline: deadlineChip(solutionInput(c, meta.solutionSchedules), type?.solutionDeadlineHours ?? null, now),
+    };
+  });
+}
+
 export interface InboxRow {
   conversation: InboxConversation;
   /** Gestión que se muestra en la fila (la primera que cumple alcance, estado y filtros). */
   case: InboxCase | null;
   /** Gestiones activas del contacto. */
   caseCount: number;
+  /** Una línea por gestión activa del contacto (la más urgente primero). */
+  lines: CaseLine[];
   /** Marca de control de reclamos de la gestión mostrada (plazo o compromiso vencido, cierre por aprobar). */
   claim?: ClaimBadge | null;
   /** Nombre del tipo protegido (Postventa) cuando el contacto tiene una abierta que no es la mostrada. */
@@ -441,7 +478,7 @@ export function buildRows(
     if (filters.status === "none") {
       // "Sin gestión": chats del contacto sin gestiones abiertas ni programadas.
       if (scope === "all" && state === "all" && all.length === 0 && !hasCaseFilters(filters)) {
-        rows.push({ conversation, case: null, caseCount: 0 });
+        rows.push({ conversation, case: null, caseCount: 0, lines: [] });
       }
       continue;
     }
@@ -452,6 +489,7 @@ export function buildRows(
         conversation,
         case: shown,
         caseCount: all.length,
+        lines: buildCaseLines(all, meta, now),
         claim: claimOf(shown),
         otherProtected: otherProtectedOf(shown, all),
       });
@@ -461,6 +499,7 @@ export function buildRows(
         conversation,
         case: shown,
         caseCount: all.length,
+        lines: buildCaseLines(all, meta, now),
         claim: claimOf(shown),
         otherProtected: otherProtectedOf(shown, all),
       });

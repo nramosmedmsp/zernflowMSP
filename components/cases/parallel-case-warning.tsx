@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
-import { sameTypeConfirmMessage } from "@/lib/cases/parallel";
+import { UNCLASSIFIED_DUPLICATE_MESSAGE, sameTypeConfirmMessage } from "@/lib/cases/parallel";
 
 export interface ParallelCase {
   id: string;
@@ -24,6 +24,9 @@ export function hasSameTypeOpen(
   if (sameTypeAllowed && caseTypeId) return false;
   return existing.some((c) => c.caseTypeId === caseTypeId);
 }
+
+/** Texto de la opción «Sin clasificar» cuando ya hay una gestión abierta o programada (no se ofrece). */
+export const UNCLASSIFIED_BLOCKED_HINT = UNCLASSIFIED_DUPLICATE_MESSAGE;
 
 /**
  * Aviso de «Nueva gestión» cuando el contacto ya tiene gestiones abiertas:
@@ -71,7 +74,7 @@ export function ParallelCaseWarning({
           </li>
         ))}
       </ul>
-      {blocked ? (
+      {!caseTypeId ? null : blocked ? (
         <p className="mt-2 text-xs text-red-600">
           Ya hay una gestión de ese tipo. Ve a esa gestión, o elige otro tipo para abrir una distinta.
         </p>

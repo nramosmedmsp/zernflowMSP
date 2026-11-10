@@ -440,3 +440,75 @@ describe("búsqueda de teléfono y alcance inicial (B-32, B-33)", () => {
     expect(initialScope(meta(), 0)).toBe("mine");
   });
 });
+
+describe("varias gestiones en la fila de la bandeja (líneas apiladas)", () => {
+  const PV = "type-postventa";
+  const VENTA = "type-venta";
+  const m = (): InboxMeta =>
+    meta({
+      isAdmin: true,
+      members: [
+        { userId: ME, name: "Yo mismo", email: null, availability: "available", teams: [] },
+        { userId: OTHER, name: "Luis", email: null, availability: "available", teams: [] },
+      ],
+      caseTypes: [
+        {
+          id: PV,
+          name: "Postventa",
+          color: "#ea580c",
+          archived: false,
+          protected: true,
+          solutionDeadlineHours: 24,
+          stages: [{ id: "st-nueva", name: "Nueva", color: null, kind: "open", archived: false }],
+        },
+        {
+          id: VENTA,
+          name: "Venta",
+          color: "#16a34a",
+          archived: false,
+          solutionDeadlineHours: null,
+          stages: [{ id: "st-ni", name: "Nuevo interesado", color: null, kind: "open", archived: false }],
+        },
+      ],
+    });
+  // Postventa abierta hace 30 h (plazo de 24 h vencido) y una Venta mía.
+  const pv = () =>
+    kase({ id: "pv", contact_id: "c1", case_type_id: PV, stage_id: "st-nueva", assignee_id: OTHER, opened_at: "2026-10-17T09:00:00Z", created_at: "2026-10-17T09:00:00Z" });
+  const venta = () =>
+    kase({ id: "venta", contact_id: "c1", case_type_id: VENTA, stage_id: "st-ni", assignee_id: ME, opened_at: "2026-10-18T14:00:00Z", created_at: "2026-10-18T14:00:00Z" });
+  const sinTipo = () => kase({ id: "st", contact_id: "c1", case_type_id: null, assignee_id: null, created_at: "2026-10-18T14:30:00Z" });
+  const scheduled = () =>
+    kase({ id: "sch", contact_id: "c1", case_type_id: VENTA, status: "scheduled", scheduled_for: "2026-11-01T14:00:00Z", assignee_id: null });
+
+  it("una línea por gestión activa, la más urgente primero, con tipo · etapa · responsable y plazo", () => {
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([venta(), pv()]), "all", "all", EMPTY_FILTERS, m(), NOW);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].caseCount).toBe(2);
+    expect(rows[0].lines).toEqual([
+      {
+        id: "pv",
+        typeName: "Postventa",
+        typeColor: "#ea580c",
+        stageText: "Nueva",
+        assigneeText: "Luis",
+        deadline: { label: "Plazo vencido", tone: "red" },
+      },
+      { id: "venta", typeName: "Venta", typeColor: "#16a34a", stageText: "Nuevo interesado", assigneeText: "Yo", deadline: null },
+    ]);
+  });
+
+  it("Sin clasificar, sin responsable y programadas tienen su texto", () => {
+    const rows = buildRows([conv("x1", "c1")], groupCasesByContact([sinTipo(), scheduled()]), "all", "all", EMPTY_FILTERS, m(), NOW);
+    const byId = Object.fromEntries(rows[0].lines.map((l) => [l.id, l]));
+    expect(byId.st).toMatchObject({ typeName: "Sin clasificar", stageText: "sin etapa", assigneeText: "Sin asignar" });
+    expect(byId.sch).toMatchObject({ typeName: "Venta", stageText: "Programada" });
+    expect(rows[0].lines.map((l) => l.id)).toEqual(["st", "sch"]); // abiertas antes que programadas
+  });
+
+  it("un chat con una sola gestión trae una sola línea; sin gestiones, ninguna", () => {
+    const one = buildRows([conv("x1", "c1")], groupCasesByContact([venta()]), "all", "all", EMPTY_FILTERS, m(), NOW);
+    expect(one[0].lines).toHaveLength(1);
+    const none = buildRows([conv("x2", "c9")], groupCasesByContact([]), "all", "all", EMPTY_FILTERS, m(), NOW);
+    expect(none[0].lines).toEqual([]);
+  });
+});

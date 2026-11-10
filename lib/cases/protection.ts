@@ -174,6 +174,41 @@ export function claimBadge(
   return null;
 }
 
+export interface DeadlineChip {
+  /** "vence en 3 h", "Plazo vencido", "Compromiso vencido" o "Cierre por aprobar". */
+  label: string;
+  /** red = vencido o por vencer pronto; amber = hay margen o requiere aprobación. */
+  tone: "red" | "amber";
+}
+
+/** Faltan menos de estas horas para el plazo: se pinta en rojo. */
+export const DEADLINE_RED_HOURS = 4;
+
+/**
+ * Etiqueta corta del plazo de la solución de una gestión para las filas de
+ * Gestiones (Por cliente) y de la Bandeja. Usa las mismas reglas (horas
+ * hábiles incluidas) que `claimBadge` y `solutionState`. null = nada que mostrar.
+ */
+export function deadlineChip(
+  c: SolutionCaseInput & { hasCloseRequest?: boolean },
+  deadlineHours: number | null | undefined,
+  now: Date,
+): DeadlineChip | null {
+  if (c.status !== "open") return null;
+  if (c.hasCloseRequest) return { label: "Cierre por aprobar", tone: "amber" };
+  const state = solutionState(c, deadlineHours, now);
+  if (state.kind === "overdue") return { label: "Plazo vencido", tone: "red" };
+  if (state.kind === "in_progress" && state.commitmentOverdue) return { label: "Compromiso vencido", tone: "red" };
+  if (state.kind === "pending") {
+    const left = state.businessMsLeft ?? state.msLeft;
+    return {
+      label: `vence en ${formatSpan(left, { round: "up" })}`,
+      tone: left < DEADLINE_RED_HOURS * HOUR_MS ? "red" : "amber",
+    };
+  }
+  return null;
+}
+
 /**
  * Qué tan urgente es una gestión para el asesor por el control de reclamos:
  * 2 = el plazo de la solución o la fecha compromiso ya venció; 1 = corre

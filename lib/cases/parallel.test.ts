@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowsSameTypeParallel, sameTypeConfirmMessage } from "./parallel";
+import { UNCLASSIFIED_DUPLICATE_MESSAGE, allowsSameTypeParallel, sameTypeConfirmMessage } from "./parallel";
 import { PARALLEL_CONFIRM_MESSAGE, SAME_TYPE_OPEN_MESSAGE, parallelOpeningError } from "./open";
 
 const venta = { protected: false, stages: [{ kind: "open" }, { kind: "won" }, { kind: "lost" }] };
@@ -27,7 +27,10 @@ describe("gestiones paralelas del mismo tipo", () => {
     expect(parallelOpeningError(existing, "venta", true)).toBe(SAME_TYPE_OPEN_MESSAGE);
     expect(parallelOpeningError(existing, "otro", false)).toBe(PARALLEL_CONFIRM_MESSAGE);
     expect(parallelOpeningError([], "venta", false)).toBeNull();
-    // Sin clasificar nunca se duplica.
-    expect(parallelOpeningError([{ id: "c2", caseTypeId: null, status: "open" }], null, true, allowed)).toBe(SAME_TYPE_OPEN_MESSAGE);
+    // Sin clasificar nunca se crea si ya hay una gestión (abierta o programada), ni confirmando.
+    expect(parallelOpeningError([{ id: "c2", caseTypeId: null, status: "open" }], null, true, allowed)).toBe(UNCLASSIFIED_DUPLICATE_MESSAGE);
+    expect(parallelOpeningError(existing, null, true)).toBe(UNCLASSIFIED_DUPLICATE_MESSAGE);
+    expect(parallelOpeningError([{ id: "c3", caseTypeId: "venta", status: "scheduled" }], null, true)).toBe(UNCLASSIFIED_DUPLICATE_MESSAGE);
+    expect(parallelOpeningError([], null, false)).toBeNull();
   });
 });

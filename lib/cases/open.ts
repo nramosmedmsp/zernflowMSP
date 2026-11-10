@@ -3,7 +3,7 @@
 import { assignCase, loadAssignmentContext, type AssignOutcome } from "./assign";
 import { resolveTargetTeamId } from "./routing";
 import { parseInstant } from "./dates";
-import { sameTypeConfirmMessage } from "./parallel";
+import { UNCLASSIFIED_DUPLICATE_MESSAGE, sameTypeConfirmMessage } from "./parallel";
 import { runEventRules, scheduleCase } from "./effects";
 import {
   GENERIC_ERROR,
@@ -186,7 +186,9 @@ export const PARALLEL_CONFIRM_MESSAGE =
  * Regla de «Nueva gestión» a mano: una gestión abierta por contacto por
  * defecto. Del mismo tipo (o ambas sin clasificar) se bloquea, salvo que el
  * tipo admita paralelas (`sameTypeAllowed`), y entonces pide confirmación;
- * de otro tipo solo con confirmación expresa. Devuelve el mensaje o null.
+ * de otro tipo solo con confirmación expresa. «Sin clasificar» (tipo nulo) no se
+ * crea nunca si ya hay una gestión abierta o programada, ni confirmando: se
+ * clasifica la que existe. Devuelve el mensaje o null.
  */
 export function parallelOpeningError(
   existing: readonly OpenCaseSummary[],
@@ -195,6 +197,7 @@ export function parallelOpeningError(
   sameType: { allowed: boolean; typeName?: string } = { allowed: false },
 ): string | null {
   if (existing.length === 0) return null;
+  if (caseTypeId === null) return UNCLASSIFIED_DUPLICATE_MESSAGE;
   if (existing.some((c) => c.caseTypeId === caseTypeId)) {
     if (!sameType.allowed || !caseTypeId) return SAME_TYPE_OPEN_MESSAGE;
     return confirmed ? null : sameTypeConfirmMessage(sameType.typeName ?? "gestión");

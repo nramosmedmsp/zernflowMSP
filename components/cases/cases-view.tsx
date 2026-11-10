@@ -10,17 +10,20 @@ import {
   CASES_PAGE_SIZE,
   CASE_STATUS_LABELS,
   CASE_TABS,
+  CASE_VIEWS,
   CLOSED_PERIODS,
   NONE_FILTER,
   buildCasesHref,
   caseRowHref,
+  clientsHeadline,
   formatWaiting,
   pageRangeLabel,
   type CaseListParams,
 } from "@/components/cases/case-filters";
+import { CasesByClient } from "@/components/cases/cases-by-client";
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
 import { startRouteProgress } from "@/components/ui/route-progress";
-import type { CaseListRow } from "@/app/(dashboard)/dashboard/cases/load-cases";
+import type { CaseListRow, ClientGroup } from "@/app/(dashboard)/dashboard/cases/load-cases";
 import { claimBadge, solutionScheduleFor, type SolutionSchedules } from "@/lib/cases/protection";
 import type { CaseStatus } from "@/lib/types/database";
 
@@ -46,7 +49,14 @@ interface PersonOption {
 export interface CasesViewProps {
   /** Horarios para contar el plazo de la solución en horas hábiles (R2-10). */
   solutionSchedules?: SolutionSchedules | null;
+  /** Vista "Por gestión": una fila por gestión. */
   rows: CaseListRow[];
+  /** Vista "Por cliente": una fila por cliente con sus gestiones dentro. */
+  clientGroups?: ClientGroup[];
+  /** Totales de "Por cliente" (null en "Por gestión"). */
+  clientTotals?: { clients: number; cases: number; truncated: boolean } | null;
+  contactTypes?: { id: string; name: string; color: string | null }[];
+  /** Filas a paginar: gestiones (Por gestión) o clientes (Por cliente). */
   total: number;
   page: number;
   params: CaseListParams;
@@ -84,6 +94,9 @@ function ColorBadge({ label, color }: { label: string; color: string | null }) {
 
 export function CasesView(props: CasesViewProps) {
   const { rows, total, page, params, caseTypes, stages, teams, members, assignableMembers, me } = props;
+  const byClient = params.view === "client";
+  const clientGroups = props.clientGroups ?? [];
+  const listLength = byClient ? clientGroups.length : rows.length;
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState(params.q);
@@ -141,9 +154,16 @@ export function CasesView(props: CasesViewProps) {
           <div>
             <h1 className="text-2xl font-bold">Gestiones</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {formatNumber(total)} {total === 1 ? "gestión" : "gestiones"}
+              {byClient && props.clientTotals
+                ? clientsHeadline(props.clientTotals.clients, props.clientTotals.cases)
+                : `${formatNumber(total)} ${total === 1 ? "gestión" : "gestiones"}`}
               {params.tab === "today" && " para hoy"}
             </p>
+            {byClient && props.clientTotals?.truncated && (
+              <p className="mt-1 text-xs text-amber-700">
+                Hay muchas gestiones: se muestran las más recientes. Usa los filtros para acotar.
+              </p>
+            )}
           </div>
           <button
             onClick={() => setDialogOpen(true)}
@@ -169,7 +189,7 @@ export function CasesView(props: CasesViewProps) {
         )}
 
         {/* Pestañas */}
-        <div className="mt-4 flex gap-1 border-b border-border" role="tablist">
+        <div className="mt-4 flex items-end gap-1 border-b border-border" role="tablist">
           {CASE_TABS.map((tab) => (
             <button
               key={tab.key}
@@ -186,6 +206,26 @@ export function CasesView(props: CasesViewProps) {
               {tab.label}
             </button>
           ))}
+          <div
+            className="mb-1.5 ml-auto inline-flex rounded-lg bg-muted p-0.5 text-xs font-medium"
+            role="group"
+            aria-label="Vista de la lista"
+          >
+            {CASE_VIEWS.map((v) => (
+              <button
+                key={v.key}
+                type="button"
+                aria-pressed={params.view === v.key}
+                onClick={() => go({ view: v.key })}
+                className={cn(
+                  "rounded-md px-3 py-1 transition-colors",
+                  params.view === v.key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Filtros */}
@@ -315,7 +355,7 @@ export function CasesView(props: CasesViewProps) {
 
       {/* Tabla */}
       <div className={cn("flex-1 overflow-auto", pending && "opacity-70")}>
-        {rows.length === 0 ? (
+        {listLength === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Briefcase className="h-10 w-10 text-muted-foreground/40" />
             <p className="mt-3 text-sm font-medium text-muted-foreground">No hay gestiones aquí</p>
@@ -327,6 +367,19 @@ export function CasesView(props: CasesViewProps) {
                   : "Las gestiones aparecen cuando alguien escribe a tus canales o las creas a mano."}
             </p>
           </div>
+        ) : byClient ? (
+          <CasesByClient
+            groups={clientGroups}
+            tab={params.tab}
+            now={now}
+            options={{
+              caseTypes,
+              stages,
+              contactTypes: props.contactTypes ?? [],
+              memberName,
+              solutionSchedules: props.solutionSchedules,
+            }}
+          />
         ) : (
           <table className="w-full [&_th]:whitespace-nowrap">
             <thead>
@@ -478,7 +531,7 @@ export function CasesView(props: CasesViewProps) {
       {/* Paginación */}
       {total > 0 && (
         <div className="flex items-center justify-between border-t border-border px-8 py-3 text-sm text-muted-foreground">
-          <span>{pageRangeLabel(page, CASES_PAGE_SIZE, total)}</span>
+          <span>{pageRangeLabel(page, CASES_PAGE_SIZE, total, byClient ? "clientes" : "")}</span>
           <div className="flex items-center gap-2">
             <button
               disabled={page <= 1 || pending}
