@@ -4,14 +4,17 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { CREATE_WORKSPACE_DENIED_MESSAGE, canCreateWorkspace } from "@/lib/team-rules";
 import { rpcCreateWorkspace } from "@/lib/supabase/extra-rpc";
 import { setWorkspaceCookie } from "@/lib/workspace-cookie";
+import { getEffectiveAuthUser } from "@/lib/view-as/state";
+import { isViewAsLocked } from "@/lib/view-as/lock";
+import { VIEW_AS_READ_ONLY_MESSAGE } from "@/lib/view-as/guard";
 
 export async function switchWorkspace(workspaceId: string) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
 
   if (!user) return { error: "Tu sesión expiró. Vuelve a iniciar sesión." };
+  // Durante una vista de "Ver como" el espacio queda fijo.
+  if (await isViewAsLocked()) return { error: VIEW_AS_READ_ONLY_MESSAGE };
 
   // Validate user has access to this workspace
   const { data: membership } = await supabase
@@ -30,11 +33,10 @@ export async function switchWorkspace(workspaceId: string) {
 
 export async function createWorkspace(name: string) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
 
   if (!user) return { error: "Tu sesión expiró. Vuelve a iniciar sesión." };
+  if (await isViewAsLocked()) return { error: VIEW_AS_READ_ONLY_MESSAGE };
 
   const trimmed = name.trim();
   if (!trimmed) return { error: "Escribe un nombre para el espacio de trabajo." };

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { getRealSession } from "@/lib/view-as/state";
+import { isViewAsLocked } from "@/lib/view-as/lock";
+import { VIEW_AS_READ_ONLY_MESSAGE } from "@/lib/view-as/guard";
 import { getWorkspace } from "@/lib/workspace";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { logActivity, type Db } from "@/lib/cases/io";
@@ -26,10 +29,13 @@ async function loadZip(): Promise<Uint8Array | null> {
 }
 
 export async function GET() {
-  const supabase = await createClient();
-  const { data: claimsData } = await supabase.auth.getClaims();
-  if (!claimsData?.claims?.sub) {
+  const real = await getRealSession();
+  if (!real) {
     return NextResponse.json({ error: "Inicia sesión para continuar." }, { status: 401 });
+  }
+  // La descarga deja un registro (escribe): no corre mientras hay una vista de "Ver como".
+  if (await isViewAsLocked()) {
+    return NextResponse.json({ error: VIEW_AS_READ_ONLY_MESSAGE }, { status: 403 });
   }
 
   const { workspace, role, user } = await getWorkspace();

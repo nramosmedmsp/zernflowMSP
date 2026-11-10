@@ -3,6 +3,9 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { inboundFetchPlan, needsProxy } from "@/lib/chat-media";
 import { canRetryMedia, signedUrl, storeInboundMedia } from "@/lib/media-store";
+import { getEffectiveAuthUser } from "@/lib/view-as/state";
+import { isViewAsLocked } from "@/lib/view-as/lock";
+import { VIEW_AS_READ_ONLY_MESSAGE } from "@/lib/view-as/guard";
 
 // Solo estos archivos llevan la clave de Zernio: nunca otra ruta de su API.
 const ZERNIO_MEDIA_PATH = /^\/api\/v1\/whatsapp\/media\/[A-Za-z0-9._-]+$/;
@@ -22,10 +25,10 @@ const REMOTE_COPY_MAX_PER_WINDOW = 30;
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  // Este GET guarda una copia del archivo (escribe): no corre mientras hay una vista de "Ver como".
+  if (await isViewAsLocked()) return NextResponse.json({ error: VIEW_AS_READ_ONLY_MESSAGE }, { status: 403 });
 
   const q = request.nextUrl.searchParams;
   const conversationId = q.get("c");

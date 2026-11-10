@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { conversationMediaPath, validateOutgoingAttachment } from "@/lib/chat-media";
 import { createUploadUrl } from "@/lib/media-store";
+import { getEffectiveAuthUser } from "@/lib/view-as/state";
 
 /**
  * POST /api/v1/media/upload-url { conversationId, mime, size }
@@ -13,9 +14,7 @@ import { createUploadUrl } from "@/lib/media-store";
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const body = await request.json().catch(() => ({}));

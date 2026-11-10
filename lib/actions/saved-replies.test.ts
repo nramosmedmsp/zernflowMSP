@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/lib/workspace", () => ({
   getWorkspace: async () => ({
+    viewAs: { locked: false, active: false, ended: false, info: null },
     user: { id: state.userId },
     workspace: { id: state.workspaceId },
     role: "member",

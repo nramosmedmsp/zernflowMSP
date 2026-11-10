@@ -7,7 +7,8 @@
 
 import { after } from "next/server";
 import { unstable_cache } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createRawServiceClient, createServiceClient } from "@/lib/supabase/server";
+import { viewAsActorOverride } from "@/lib/view-as/rules";
 import { getWorkspace } from "@/lib/workspace";
 import * as engine from "@/lib/cases";
 import {
@@ -193,6 +194,8 @@ export interface CaseMemberView {
   role: WorkspaceRole;
   availability: MemberAvailability;
   teams: { teamId: string; role: TeamRole; caseTypeIds: string[] | null }[];
+  /** "Ver como" por rol: identidad de ejemplo sin cuenta. No asignable; excluir de selectores. */
+  sample?: boolean;
 }
 
 export interface CloseCaseActionInput {
@@ -254,9 +257,10 @@ interface Session {
 }
 
 async function session(): Promise<Session | { error: string }> {
-  const { user, workspace } = await getWorkspace();
+  const { user, workspace, viewAs } = await getWorkspace();
   const db = await createServiceClient();
-  const actor = await loadWorkspaceActor(db, workspace.id, user.id);
+  // "Ver como" por rol: la identidad de ejemplo no tiene filas de membresía.
+  const actor = await loadWorkspaceActor(db, workspace.id, user.id, viewAsActorOverride(viewAs.info));
   if (!actor.role) return { error: "No eres miembro de este espacio de trabajo." };
   return { userId: user.id, workspaceId: workspace.id, db, actor };
 }
@@ -605,7 +609,9 @@ export async function getContactCases(
 /** Nombre y correo de un usuario de Auth, en caché 2 min entre peticiones (evita 1 viaje a Auth por miembro). */
 const authIdentity = unstable_cache(
   async (userId: string) => {
-    const service = await createServiceClient();
+    // Sin candado de "Ver como": una caché de Next no puede leer cookies() y el dato
+    // (nombre y correo de una cuenta) no depende de quién mira.
+    const service = createRawServiceClient();
     const {
       data: { user },
     } = await service.auth.admin.getUserById(userId);
@@ -620,7 +626,7 @@ const authIdentity = unstable_cache(
 /** Miembros del espacio con nombre, disponibilidad y equipos (para asignar y mencionar). */
 export async function listCaseMembers(): Promise<CaseActionResult<{ members: CaseMemberView[] }>> {
   // getWorkspace ya comprobó la sesión y la membresía (y está en caché por petición).
-  const { workspace } = await getWorkspace();
+  const { workspace, viewAs } = await getWorkspace();
   const db = await createServiceClient();
   // Equipos activos del espacio y sus integrantes en una sola consulta (join), en paralelo con los miembros.
   const [{ data: members }, { data: teamMembers }] = await Promise.all([
@@ -632,7 +638,7 @@ export async function listCaseMembers(): Promise<CaseActionResult<{ members: Cas
       .is("teams.archived_at", null),
   ]);
 
-  const result = await Promise.all(
+  const result: CaseMemberView[] = await Promise.all(
     (members ?? []).map(async (m) => {
       const user = await authIdentity(m.user_id);
       return {
@@ -647,6 +653,23 @@ export async function listCaseMembers(): Promise<CaseActionResult<{ members: Cas
       };
     }),
   );
+  // "Ver como" por rol: la identidad de ejemplo no es un miembro real, pero las
+  // pantallas (Bandeja, Gestiones, Métricas, Contactos) la buscan en esta lista
+  // para saber "quién soy". Va marcada `sample` y los selectores de asignación
+  // y menciones la descartan (es solo para mostrar).
+  const sample = viewAs.active ? viewAs.info : null;
+  if (sample && sample.kind === "role") {
+    result.push({
+      userId: sample.targetUserId,
+      name: sample.name,
+      email: null,
+      role: (sample.roleWs ?? "member") as WorkspaceRole,
+      availability: "available",
+      teams:
+        sample.teamId && sample.teamRole ? [{ teamId: sample.teamId, role: sample.teamRole, caseTypeIds: null }] : [],
+      sample: true,
+    });
+  }
   result.sort((a, b) => a.name.localeCompare(b.name, "es"));
   return { ok: true, members: result };
 }

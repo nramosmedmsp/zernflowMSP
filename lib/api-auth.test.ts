@@ -7,7 +7,9 @@ import { FakeDb } from "@/lib/cases/fake-db.test-helper";
 const state = vi.hoisted(() => ({ db: null as unknown, userId: null as string | null, cookie: undefined as string | undefined }));
 
 vi.mock("next/headers", () => ({
-  cookies: async () => ({ get: (name: string) => (name && state.cookie ? { value: state.cookie } : undefined) }),
+  cookies: async () => ({
+    get: (name: string) => (name === "zernflow_workspace_id" && state.cookie ? { value: state.cookie } : undefined),
+  }),
 }));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => {
