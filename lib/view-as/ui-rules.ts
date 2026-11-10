@@ -180,3 +180,9 @@ export function logPeriodSince(period: LogPeriod, now: number): string | null {
   if (period === "all") return null;
   return new Date(now - Number(period) * 86_400_000).toISOString();
 }
+
+/** Segunda línea de "A quién" en el registro: "Vista de ejemplo" si es por rol (la primera línea ya trae rol y equipo). */
+export function viewLogTargetDetail(row: { target_kind: string; target_label: string; target_detail: string | null }): string {
+  if (row.target_kind === "role") return "Vista de ejemplo";
+  return row.target_detail ?? "Persona";
+}

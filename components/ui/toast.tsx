@@ -6,6 +6,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  READ_ONLY_ERROR_DEFER_MS,
+  isToastViewActive,
+  shouldSuppressErrorToastNow,
+} from "@/lib/view-as/toast-filter";
 
 type ToastKind = "success" | "error" | "info";
 
@@ -45,7 +50,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setItems((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const push = useCallback(
+  const show = useCallback(
     (kind: ToastKind, message: string) => {
       const id = nextId.current++;
       setItems((prev) =>
@@ -57,6 +62,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       );
     },
     [dismiss],
+  );
+
+  const push = useCallback(
+    (kind: ToastKind, message: string) => {
+      // En "Ver como" un error puede ser la consecuencia de una escritura
+      // bloqueada: se espera un instante y, si fue así, se descarta (la franja
+      // ya muestra el aviso de solo lectura; dos avisos confunden).
+      if (kind === "error" && isToastViewActive()) {
+        setTimeout(() => {
+          if (!shouldSuppressErrorToastNow()) show(kind, message);
+        }, READ_ONLY_ERROR_DEFER_MS);
+        return;
+      }
+      show(kind, message);
+    },
+    [show],
   );
 
   useEffect(() => {

@@ -13,6 +13,7 @@ import { usePathname } from "next/navigation";
 import { ChevronDown, Eye, Loader2, Lock, Search, UserRound, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
+import { markReadOnlyBlock, setToastViewActive } from "@/lib/view-as/toast-filter";
 import { useViewAs } from "./view-as-context";
 import type { ViewAsOptions, ViewAsPersonOption, ViewAsRoleOption } from "@/lib/view-as/rules";
 import {
@@ -245,7 +246,10 @@ function useViewWatcher(onEnded: () => void) {
   const lastHit = useRef<number | null>(null);
   useEffect(() => {
     if (!active || !info) return;
+    setToastViewActive(true);
     const notify = () => {
+      // Los errores genéricos de la acción bloqueada se descartan (toast.tsx).
+      markReadOnlyBlock();
       const text = noticeRef.current;
       if (!text) return;
       const now = Date.now();
@@ -277,6 +281,7 @@ function useViewWatcher(onEnded: () => void) {
       }
     }, 600);
     return () => {
+      setToastViewActive(false);
       window.fetch = original;
       clearInterval(timer);
     };

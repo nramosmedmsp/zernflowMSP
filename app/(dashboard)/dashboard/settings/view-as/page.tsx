@@ -11,6 +11,7 @@ import {
   isViewInProgress,
   logPeriodSince,
   parseLogPeriod,
+  viewLogTargetDetail,
   viewDurationMs,
 } from "@/lib/view-as/ui-rules";
 import { LogFilters } from "./log-filters";
@@ -138,7 +139,7 @@ export default async function ViewAsLogPage({
                           <div className="min-w-0">
                             <p className="truncate font-medium">{r.target_label}</p>
                             <p className="truncate text-xs text-muted-foreground">
-                              {r.target_kind === "role" ? "Vista de ejemplo por rol" : (r.target_detail ?? "Persona")}
+                              {viewLogTargetDetail(r)}
                             </p>
                           </div>
                         </div>

@@ -126,3 +126,15 @@ describe("registro", () => {
     expect(logPeriodSince("7", Date.parse("2026-11-10T00:00:00Z"))).toBe("2026-11-03T00:00:00.000Z");
   });
 });
+
+import { viewLogTargetDetail } from "./ui-rules";
+
+describe("viewLogTargetDetail", () => {
+  it("por rol dice solo «Vista de ejemplo»", () => {
+    expect(viewLogTargetDetail({ target_kind: "role", target_label: "Asesor de Ventas", target_detail: "Ejemplo por rol, sin cuenta" })).toBe("Vista de ejemplo");
+  });
+  it("por persona usa el detalle o 'Persona'", () => {
+    expect(viewLogTargetDetail({ target_kind: "person", target_label: "Ana", target_detail: "ana@x.com" })).toBe("ana@x.com");
+    expect(viewLogTargetDetail({ target_kind: "person", target_label: "Ana", target_detail: null })).toBe("Persona");
+  });
+});
