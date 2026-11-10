@@ -40,6 +40,7 @@ export function NewCaseDialog({
   const supervised = new Set(data.me.supervisedTeamIds);
   const assignable = members.filter(
     (m) =>
+      !m.sample &&
       m.userId !== data.me.userId &&
       (data.me.isAdmin || m.teams.some((t) => supervised.has(t.teamId))),
   );

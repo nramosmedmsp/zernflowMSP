@@ -32,10 +32,13 @@ export function useInboxData({
   workspaceId,
   initialConversations,
   initialCases,
+  viewing = false,
 }: {
   workspaceId: string;
   initialConversations: InboxConversation[];
   initialCases: InboxCase[];
+  /** "Ver como": Realtime llega con permisos del Dueño, así que solo dispara relecturas (con la identidad vista). */
+  viewing?: boolean;
 }) {
   const [conversations, setConversations] = useState(initialConversations);
   const [cases, setCases] = useState(initialCases);
@@ -158,12 +161,23 @@ export function useInboxData({
   // Realtime de conversaciones (nuevas y actualizadas).
   useEffect(() => {
     const supabase = createClient();
+    // En vista el evento no se aplica tal cual: se vuelve a leer la fila (RLS de la persona vista).
+    const rereadConversation = async (id: string | undefined) => {
+      if (!id) return;
+      const { data } = await supabase.from("conversations").select("*, contacts(*)").eq("id", id).maybeSingle();
+      if (data) setConversations((prev) => mergeConversations(prev, [data as InboxConversation]));
+    };
     const channel = supabase
       .channel(uniqueChannelName(`inbox-conversations-${workspaceId}`))
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
         async (payload) => {
+          if (viewing) {
+            if (payload.eventType === "DELETE") void refreshActiveCases(true);
+            else await rereadConversation((payload.new as { id?: string }).id);
+            return;
+          }
           if (payload.eventType === "UPDATE") {
             const updated = payload.new as InboxConversation;
             setConversations((prev) =>
@@ -189,7 +203,7 @@ export function useInboxData({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [workspaceId]);
+  }, [workspaceId, viewing, refreshActiveCases]);
 
   // Realtime de gestiones: altas, cambios de etapa o responsable, cierres.
   useEffect(() => {
@@ -200,6 +214,10 @@ export function useInboxData({
         "postgres_changes",
         { event: "*", schema: "public", table: "cases", filter: `workspace_id=eq.${workspaceId}` },
         (payload) => {
+          if (viewing) {
+            void refreshActiveCases(true);
+            return;
+          }
           if (payload.eventType === "DELETE") {
             const old = payload.old as { id?: string };
             if (old.id) setCases((prev) => prev.filter((c) => c.id !== old.id));
@@ -217,7 +235,7 @@ export function useInboxData({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [workspaceId, ensureContactConversations]);
+  }, [workspaceId, ensureContactConversations, viewing, refreshActiveCases]);
 
   const casesByContact = useMemo(() => groupCasesByContact(cases), [cases]);
 

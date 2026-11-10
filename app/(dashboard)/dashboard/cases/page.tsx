@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { isAdminRole } from "@/lib/permissions";
 import { parseCaseListParams } from "@/components/cases/case-filters";
 import { CasesView } from "@/components/cases/cases-view";
+import { withoutSample } from "@/lib/view-as/ui-rules";
 import { loadCases, loadCasesByClient } from "./load-cases";
 
 export default async function CasesPage({
@@ -67,9 +68,9 @@ export default async function CasesPage({
   // A quién puede asignar al crear una gestión: administrador, a cualquiera;
   // supervisor, a su equipo; asesor, solo a sí mismo.
   const assignable = isAdmin
-    ? members
+    ? withoutSample(members)
     : isSupervisor
-      ? members.filter((m) => m.userId === user.id || m.teams.some((t) => supervisedTeamIds.includes(t.teamId)))
+      ? withoutSample(members).filter((m) => m.userId === user.id || m.teams.some((t) => supervisedTeamIds.includes(t.teamId)))
       : [];
 
   return (

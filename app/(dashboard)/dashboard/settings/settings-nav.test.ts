@@ -6,7 +6,11 @@ describe("settingsLinksFor", () => {
     expect(settingsLinksFor("admin").map((l) => l.title)).not.toContain("Correo");
     expect(settingsLinksFor("owner").map((l) => l.title)).toContain("Correo");
     for (const role of ["owner", "admin"]) {
-      expect(settingsLinksFor(role).map((l) => l.title).filter((t) => t !== "Correo")).toEqual([
+      expect(
+        settingsLinksFor(role)
+          .map((l) => l.title)
+          .filter((t) => t !== "Correo" && t !== "Registro de «Ver como»"),
+      ).toEqual([
         "General",
         "Equipo",
         "Gestiones",
@@ -29,6 +33,18 @@ describe("settingsLinksFor", () => {
     expect(settingsLinksFor(null).map((l) => l.title)).toEqual(expected);
   });
 
+  it("el Registro de «Ver como» es solo del Dueño y no aparece dentro de una vista", () => {
+    const titles = (role: string, viewingAs = false) => settingsLinksFor(role, { viewingAs }).map((l) => l.title);
+    expect(titles("owner")).toContain("Registro de «Ver como»");
+    expect(titles("admin")).not.toContain("Registro de «Ver como»");
+    expect(titles("member")).not.toContain("Registro de «Ver como»");
+    // Mirando como otro Dueño: ni el registro ni el cambio de contraseña (actuaría sobre el Dueño real).
+    expect(titles("owner", true)).not.toContain("Registro de «Ver como»");
+    expect(titles("owner", true)).not.toContain("Cambiar contraseña");
+    expect(titles("member", true)).not.toContain("Cambiar contraseña");
+    expect(titles("member", false)).toContain("Cambiar contraseña");
+  });
+
   it("apunta a las rutas esperadas", () => {
     const byKey = Object.fromEntries(settingsLinksFor("owner").map((l) => [l.key, l.href]));
     expect(byKey).toMatchObject({
@@ -40,6 +56,7 @@ describe("settingsLinksFor", () => {
       mail: "/dashboard/settings/correo",
       attention: "/dashboard/settings/attention",
       source: "/dashboard/settings/codigo",
+      "view-as": "/dashboard/settings/view-as",
       replies: "/dashboard/settings/replies",
       "whatsapp-templates": "/dashboard/settings/whatsapp-templates",
       dictionary: "/dashboard/settings/dictionary",

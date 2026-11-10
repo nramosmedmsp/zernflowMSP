@@ -645,7 +645,7 @@ export function SegmentBuilder({
         teams: teamsRes.data ?? [],
         members:
           "members" in membersRes
-            ? membersRes.members.map((m) => ({ id: m.userId, name: m.name }))
+            ? membersRes.members.filter((m) => !m.sample).map((m) => ({ id: m.userId, name: m.name }))
             : [],
       });
       setLoading(false);

@@ -8,6 +8,8 @@ import { markNotificationsRead } from "@/lib/actions/cases";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { uniqueChannelName } from "@/lib/realtime-channel";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_BELL_POLL_MS } from "@/lib/view-as/ui-rules";
 import {
   NOTIFICATION_LIST_LIMIT,
   badgeLabel,
@@ -50,6 +52,9 @@ async function fetchSnapshot(supabase: BrowserClient, userId: string, workspaceI
  */
 export function NotificationBell({ userId, workspaceId }: { userId: string; workspaceId: string }) {
   const [supabase] = useState(() => createClient());
+  // "Ver como": solo se mira. Abrir la campana no marca nada como leído y, como
+  // Realtime entrega con permisos del Dueño, se vuelve a leer cada 30 s.
+  const viewing = useViewAs().active;
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
@@ -88,8 +93,16 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
     };
   }, [supabase, userId, workspaceId]);
 
+  // En vista: relectura periódica en lugar de Realtime.
+  useEffect(() => {
+    if (!viewing) return;
+    const id = setInterval(() => void reload(), VIEW_AS_BELL_POLL_MS);
+    return () => clearInterval(id);
+  }, [viewing, reload]);
+
   // Tiempo real: nuevas notificaciones y cambios de "leída" (también desde otra pestaña).
   useEffect(() => {
+    if (viewing) return;
     let subscribedBefore = false;
     const channel = supabase
       .channel(uniqueChannelName(`notifications:${userId}:${workspaceId}`))
@@ -116,7 +129,7 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [supabase, userId, workspaceId, reload, refreshCount]);
+  }, [supabase, userId, workspaceId, reload, refreshCount, viewing]);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -165,9 +178,11 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
     if (rect) setAnchor({ left: Math.max(8, rect.left), top: rect.bottom + 8 });
     setOpen(true);
 
-    // Abrir la lista marca como leídas las que se ven.
+    // Abrir la lista marca como leídas las que se ven (en vista, solo se relee).
     const ids = unreadIds(items);
-    if (ids.length > 0) {
+    if (viewing) {
+      void reload();
+    } else if (ids.length > 0) {
       setHighlight(new Set(ids));
       setItems((prev) => markAsRead(prev, ids, new Date().toISOString()));
       setUnread((prev) => Math.max(0, prev - ids.length));
@@ -184,7 +199,7 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
   }
 
   function onItemClick(item: NotificationItem) {
-    if (item.read_at === null) {
+    if (item.read_at === null && !viewing) {
       setItems((prev) => markAsRead(prev, [item.id], new Date().toISOString()));
       setUnread((prev) => Math.max(0, prev - 1));
       void markRead([item.id]);
@@ -222,7 +237,7 @@ export function NotificationBell({ userId, workspaceId }: { userId: string; work
         >
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
             <h2 className="text-sm font-semibold">Notificaciones</h2>
-            {unread > 0 && (
+            {unread > 0 && !viewing && (
               <button
                 type="button"
                 onClick={markAll}

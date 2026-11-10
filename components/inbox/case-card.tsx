@@ -194,6 +194,7 @@ export function CaseCard({
   const assignable = perms.canAssign
     ? members.filter(
         (m) =>
+          !m.sample &&
           m.userId !== active.assigneeId &&
           (data.me.isAdmin || (!!scopeTeam && m.teams.some((t) => t.teamId === scopeTeam))),
       )

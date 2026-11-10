@@ -37,6 +37,7 @@ import { DemoBadge } from "./demo-badge";
 import { selectClass } from "./ui";
 import { useNow } from "./use-now";
 import { useDraftPreviews } from "./use-drafts";
+import { useViewAs } from "@/components/view-as/view-as-context";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -114,6 +115,8 @@ export function ConversationList({
   const now = useNow();
   const nowDate = useMemo(() => (now === null ? new Date() : new Date(now)), [now]);
   const drafts = useDraftPreviews({ userId: meta.userId, workspaceId });
+  // "Ver como": no se lee ni se guarda la última vista de esa persona en este navegador.
+  const viewing = useViewAs().active;
 
   // El último alcance y estado se leen después de montar (no hay localStorage en el servidor).
   const storageKey = viewStorageKey(workspaceId, meta.userId);
@@ -125,7 +128,7 @@ export function ConversationList({
     const id = setTimeout(() => {
       let raw: string | null = null;
       try {
-        raw = window.localStorage.getItem(storageKey);
+        raw = viewing ? null : window.localStorage.getItem(storageKey);
       } catch {
         // Sin almacenamiento: se queda en Míos / Todo.
       }
@@ -146,6 +149,7 @@ export function ConversationList({
     setScope(nextScope);
     setState(nextState);
     setFilters((prev) => filtersForScope(prev, nextScope));
+    if (viewing) return;
     try {
       window.localStorage.setItem(storageKey, JSON.stringify({ scope: nextScope, state: nextState }));
     } catch {
@@ -366,7 +370,7 @@ export function ConversationList({
             >
               <option value="">Todos los responsables</option>
               <option value="none">Sin asignar</option>
-              {(canSeeOthers ? meta.members : meta.members.filter((m) => m.userId === meta.userId)).map((m) => (
+              {(canSeeOthers ? meta.members.filter((m) => !m.sample) : meta.members.filter((m) => m.userId === meta.userId)).map((m) => (
                 <option key={m.userId} value={m.userId}>
                   {m.userId === meta.userId ? `${m.name} (yo)` : m.name}
                 </option>

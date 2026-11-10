@@ -322,6 +322,7 @@ export function MessageThread({
   canSimulate = false,
   isAdmin = false,
   contactType = null,
+  emptyNote = null,
 }: {
   conversation: InboxConversation | null;
   /** Envíos de la bandeja de este chat que aún no aparecen en la lista de Zernio. */
@@ -352,6 +353,8 @@ export function MessageThread({
   isAdmin?: boolean;
   /** Tipo de contacto del chat (chip, pregunta y líneas automáticas); null mientras carga. */
   contactType?: ThreadContactType | null;
+  /** Aviso bajo "Selecciona una conversación" (p. ej. «Míos» vacío en "Ver como" por rol). */
+  emptyNote?: ReactNode;
 }) {
   const toast = useToast();
   const [simulateOpen, setSimulateOpen] = useState(false);
@@ -535,6 +538,7 @@ export function MessageThread({
         <p className="mt-1 text-xs text-muted-foreground/70">
           Elige una conversación de la lista para ver los mensajes
         </p>
+        {emptyNote}
       </div>
     );
   }

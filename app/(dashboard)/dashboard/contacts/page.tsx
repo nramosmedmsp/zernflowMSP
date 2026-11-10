@@ -11,6 +11,7 @@ import {
   type ContactQueryBuilder,
 } from "@/components/contacts/contact-list-query";
 import { ContactsView, type ContactWithTags } from "./contacts-view";
+import { withoutSample } from "@/lib/view-as/ui-rules";
 
 export default async function ContactsPage({
   searchParams,
@@ -53,7 +54,7 @@ export default async function ContactsPage({
   const members = "members" in membersRes ? membersRes.members : [];
   // Un asesor solo ve sus contactos: no se le ofrecen otras personas como responsable.
   const supervises = !!members.find((m) => m.userId === user.id)?.teams.some((t) => t.role === "supervisor");
-  const ownerOptions = isAdminRole(role) || supervises ? members : members.filter((m) => m.userId === user.id);
+  const ownerOptions = withoutSample(isAdminRole(role) || supervises ? members : members.filter((m) => m.userId === user.id));
 
   return (
     <ContactsView

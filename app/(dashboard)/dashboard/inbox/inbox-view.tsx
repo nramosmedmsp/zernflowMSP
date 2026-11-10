@@ -13,7 +13,7 @@ import { useInboxData } from "@/components/inbox/use-inbox-data";
 import { useContactCases } from "@/components/inbox/use-contact-cases";
 import { useContactTypeThread } from "@/components/inbox/use-contact-type";
 import { useCaseNotes } from "@/components/inbox/use-case-notes";
-import type { InboxCase, InboxConversation, InboxMeta, InboxRow } from "@/components/inbox/inbox-model";
+import { availableScopes, type InboxCase, type InboxConversation, type InboxMeta, type InboxRow } from "@/components/inbox/inbox-model";
 import { createClient } from "@/lib/supabase/client";
 import { persistConversationRead } from "@/lib/inbox-read";
 import { useToast } from "@/components/ui/toast";
@@ -25,6 +25,9 @@ import { useNewMessageAlerts } from "@/components/inbox/use-new-message-alerts";
 import { AlertSettingsButton } from "@/components/inbox/alert-settings";
 import { alertScopesFor } from "@/lib/inbox-alerts";
 import { useReconnect } from "@/components/inbox/use-reconnect";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { viewAsMineEmptyNote } from "@/lib/view-as/ui-rules";
+import { Info } from "lucide-react";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -35,6 +38,18 @@ function latestConversation(list: InboxConversation[]): InboxConversation | null
       (a, b) =>
         new Date(b.last_message_at ?? b.created_at).getTime() - new Date(a.last_message_at ?? a.created_at).getTime(),
     )[0] ?? null
+  );
+}
+
+function MineEmptyNote({ text }: { text: string }) {
+  return (
+    <p
+      data-testid="view-as-mine-note"
+      className="mt-6 flex max-w-md items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
+    >
+      <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      {text}
+    </p>
   );
 }
 
@@ -52,7 +67,8 @@ export function InboxView({
   const router = useRouter();
   const toast = useToast();
   const searchParams = useSearchParams();
-  const data = useInboxData({ workspaceId, initialConversations, initialCases });
+  const viewAs = useViewAs();
+  const data = useInboxData({ workspaceId, initialConversations, initialCases, viewing: viewAs.active });
   const {
     conversations,
     casesByContact,
@@ -200,8 +216,10 @@ export function InboxView({
 
   // Chat abierto y a la vista: sus mensajes quedan leídos, también los que
   // llegan mientras está abierto o cuando la pestaña vuelve a verse.
+  // En "Ver como" no se marca nada: mirar no deja huella.
+  const viewing = viewAs.active;
   useEffect(() => {
-    if (!selectedId || unread === 0) return;
+    if (viewing || !selectedId || unread === 0) return;
     const markRead = () => {
       if (document.hidden) return;
       markConversationRead(selectedId);
@@ -210,7 +228,7 @@ export function InboxView({
     markRead();
     document.addEventListener("visibilitychange", markRead);
     return () => document.removeEventListener("visibilitychange", markRead);
-  }, [selectedId, unread, markConversationRead]);
+  }, [viewing, selectedId, unread, markConversationRead]);
 
   // Envíos: viven aquí para que un fallo después de cambiar de chat no se pierda.
   const conversationsRef = useRef(conversations);
@@ -267,6 +285,8 @@ export function InboxView({
   }
 
   const me = meta.members.find((m) => m.userId === meta.userId);
+  // La identidad de ejemplo de "Ver como" por rol no se asigna ni se menciona.
+  const selectableMembers = useMemo(() => meta.members.filter((m) => !m.sample), [meta.members]);
   const meInfo = useMemo(() => ({ userId: meta.userId, name: me?.name ?? "" }), [meta.userId, me?.name]);
   const contactType = useContactTypeThread({
     conversation: selected,
@@ -276,6 +296,7 @@ export function InboxView({
     patchContact,
     reload: handleCaseChanged,
   });
+  const mineNote = viewAs.active && viewAs.info ? viewAsMineEmptyNote(viewAs.info, availableScopes(meta).includes("unassigned")) : null;
   const teamName = activeCase?.teamId ? meta.teams.find((t) => t.id === activeCase.teamId)?.name ?? null : null;
 
   return (
@@ -293,7 +314,11 @@ export function InboxView({
           syncing={syncing}
           syncError={conversations.length > 0 ? syncError : null}
           failedConversationIds={outbox.failedIds}
-          headerActions={<AlertSettingsButton settings={alerts.settings} onChange={alerts.update} scopes={alertScopesFor(meta)} />}
+          headerActions={
+            viewing ? undefined : (
+              <AlertSettingsButton settings={alerts.settings} onChange={alerts.update} scopes={alertScopesFor(meta)} />
+            )
+          }
         />
       </div>
 
@@ -352,11 +377,13 @@ export function InboxView({
                   Aquí verás los chats de las gestiones que te asignen.
                 </p>
               )}
+              {mineNote && <MineEmptyNote text={mineNote} />}
             </div>
           ) : (
             <MessageThread
               key={selected?.id ?? "none"}
               conversation={selected}
+              emptyNote={mineNote ? <MineEmptyNote text={mineNote} /> : null}
               outbox={selectedOutbox}
               initialUnread={opened.unread}
               onSend={(text, attachments) =>
@@ -376,7 +403,7 @@ export function InboxView({
                       <CaseCard
                         data={casesData}
                         activeCaseId={activeCase?.id ?? null}
-                        members={meta.members}
+                        members={selectableMembers}
                         onSelectCase={handleSelectCase}
                         onChanged={handleCaseChanged}
                       />
@@ -403,7 +430,7 @@ export function InboxView({
                 ) : null
               }
               notes={notes}
-              members={meta.members}
+              members={selectableMembers}
               noteCase={activeCase}
               me={meInfo}
               teamName={teamName}
@@ -427,7 +454,7 @@ export function InboxView({
           workspaceId={workspaceId}
           onClose={() => setShowContactPanel(false)}
           cases={casesData}
-          members={meta.members}
+          members={selectableMembers}
           onContactChanged={() => void handleCaseChanged()}
         />
       )}
