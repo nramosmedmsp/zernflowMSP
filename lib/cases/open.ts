@@ -125,6 +125,8 @@ export async function openCase(
     })
     .select("*")
     .single();
+  // 23505 = el índice único de 00038: otra solicitud simultánea creó antes la «Sin clasificar».
+  if (error?.code === "23505" && caseTypeId === null) return { error: UNCLASSIFIED_DUPLICATE_MESSAGE };
   if (error || !created) return { error: GENERIC_ERROR };
 
   const base = { workspace_id: input.workspaceId, case_id: created.id, contact_id: contact.id, actor_id: input.actorId };

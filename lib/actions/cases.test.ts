@@ -256,6 +256,27 @@ describe("acciones de gestiones: permisos", () => {
     expect(await openManualCase({ contactId })).toMatchObject({ ok: true, status: "open" });
   });
 
+  it("«Sin clasificar» simultánea: el 23505 del índice único se traduce al mismo mensaje", async () => {
+    as(OWNER);
+    fake.rows("cases").forEach((c) => (c.status = "won"));
+    // Mismo índice que la migración 00038.
+    fake.unique(
+      "cases",
+      ["contact_id"],
+      (r) => (r.case_type_id ?? null) === null && ["open", "scheduled"].includes(r.status as string),
+    );
+    // Otra solicitud crea la «Sin clasificar» entre la comprobación y el insert.
+    fake.beforeInsert.set("cases", () => {
+      fake.beforeInsert.delete("cases");
+      fake.insertRow("cases", { workspace_id: WS, contact_id: contactId, case_type_id: null, status: "open", origin: "manual" });
+    });
+    const before = fake.rows("cases").length;
+    expect(await openManualCase({ contactId })).toEqual({
+      error: "Ya tiene una gestión abierta: clasifícala en vez de crear otra.",
+    });
+    expect(fake.rows("cases")).toHaveLength(before + 1); // solo la de la otra solicitud
+  });
+
   it("un contacto sin gestiones abiertas no pide confirmación", async () => {
     as(OWNER);
     fake.rows("cases").forEach((c) => (c.status = "won"));
