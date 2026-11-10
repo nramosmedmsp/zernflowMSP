@@ -12,6 +12,7 @@ import {
   CalendarClock,
   Check,
   ChevronDown,
+  Clock,
   Hand,
   History,
   Hourglass,
@@ -50,6 +51,8 @@ import {
   closedHeadline,
   nextContactChip,
   nextContactOptions,
+  showCaseTabs,
+  caseTabs,
   typeChangeLock,
 } from "./case-card-model";
 import { memberName, type InboxMember } from "./inbox-model";
@@ -242,14 +245,96 @@ export function CaseCard({
   }
 
   const hasMore = !isClosed;
+  // Con 2 o más gestiones activas: una pestaña por gestión (cada una con su guía y sus acciones).
+  const tabsOn = showCaseTabs(data.cases.length, isClosed);
+  const tabModels = tabsOn ? caseTabs(data.cases, data.caseTypes, now === null ? new Date(0) : new Date(now)) : [];
 
   return (
     <div className="shrink-0 space-y-1.5 border-b border-border bg-muted/30 px-4 py-2">
+      {tabsOn && (
+        <div className="flex flex-wrap items-end gap-x-1 gap-y-1 border-b border-border" role="tablist" aria-label="Gestiones de este cliente">
+          <BriefcaseBusiness className="mb-2 mr-1 h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+          {tabModels.map((t) => {
+            const selected = t.id === active.id;
+            const color = t.typeColor && HEX.test(t.typeColor) ? t.typeColor : "#6b7280";
+            return (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={selected}
+                onClick={() => onSelectCase(t.id)}
+                className={cn(
+                  "-mb-px inline-flex items-center gap-1.5 whitespace-nowrap rounded-t-lg border border-b-0 px-3 py-1.5 text-xs transition-colors",
+                  selected
+                    ? "border-border bg-card font-semibold"
+                    : "border-transparent text-muted-foreground hover:bg-accent/60",
+                )}
+                style={selected ? { boxShadow: `inset 0 2px 0 ${color}` } : undefined}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                <span style={selected ? { color } : undefined}>{t.typeName}</span>
+                <span className="text-muted-foreground">· {t.stageText}</span>
+                {t.deadline && (
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-[10px] font-semibold",
+                      t.deadline.tone === "red"
+                        ? "bg-red-500/15 text-red-600 dark:text-red-300"
+                        : "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+                    )}
+                  >
+                    <Clock className="h-2.5 w-2.5" aria-hidden />
+                    {t.deadline.label}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {isClosed && (
+            <button
+              role="tab"
+              aria-selected
+              className="-mb-px inline-flex items-center gap-1.5 whitespace-nowrap rounded-t-lg border border-b-0 border-border bg-card px-3 py-1.5 text-xs font-semibold"
+            >
+              <Lock className="h-3 w-3 text-muted-foreground" aria-hidden />
+              Cerrada: {caseLabel(active)}
+            </button>
+          )}
+          <div className="mb-1 ml-auto flex items-center gap-2">
+            {data.recentClosed.length > 0 && (
+              <select
+                value=""
+                onChange={(e) => e.target.value && onSelectCase(e.target.value)}
+                className={cn(selectClass, "max-w-44 text-[11px]")}
+                aria-label="Ver gestiones cerradas"
+              >
+                <option value="">Ver cerradas ({data.recentClosed.length})</option>
+                {data.recentClosed.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {caseLabel(c)}
+                    {c.closedAt ? ` · ${formatDate(c.closedAt)}` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+            {data.canOpenCase && (
+              <button
+                onClick={() => setCreating(true)}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="h-3 w-3" />
+                Nueva gestión
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Fila 1: qué es y quién lo tiene + acciones */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        <BriefcaseBusiness className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+        {!tabsOn && <BriefcaseBusiness className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}
 
-        {data.cases.length > 1 || isClosed ? (
+        {!tabsOn && isClosed ? (
           <select
             value={active.id}
             onChange={(e) => onSelectCase(e.target.value)}
@@ -282,7 +367,7 @@ export function CaseCard({
                 <History className="h-3.5 w-3.5" />
                 Historial
               </button>
-              {newCaseButton}
+              {!tabsOn && newCaseButton}
             </div>
           </>
         ) : (

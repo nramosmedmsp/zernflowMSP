@@ -43,8 +43,17 @@ export function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_RE.test(value);
 }
 
+/** Vista de la lista: una fila por cliente (por defecto) o una por gestión. */
+export type CaseView = "client" | "case";
+export const CASE_VIEWS: readonly { key: CaseView; label: string }[] = [
+  { key: "client", label: "Por cliente" },
+  { key: "case", label: "Por gestión" },
+];
+
 export interface CaseListParams {
   tab: CaseTab;
+  /** Parámetro de URL `view`: "case" = Por gestión; ausente o inválido = Por cliente. */
+  view: CaseView;
   /** Id del tipo de gestión, "none" (sin clasificar) o "". */
   type: string;
   stage: string;
@@ -58,6 +67,7 @@ export interface CaseListParams {
 
 export const DEFAULT_CASE_PARAMS: CaseListParams = {
   tab: "open",
+  view: "client",
   type: "",
   stage: "",
   assignee: "",
@@ -88,6 +98,7 @@ export function parseCaseListParams(raw: RawParams): CaseListParams {
   const period = first(raw.period);
   return {
     tab: parseCaseTab(first(raw.tab)),
+    view: first(raw.view) === "case" ? "case" : "client",
     type: idOrNone(first(raw.type)),
     stage: isUuid(first(raw.stage)) ? first(raw.stage) : "",
     assignee:
@@ -104,6 +115,7 @@ export function buildCasesHref(params: Partial<CaseListParams>): string {
   const p = { ...DEFAULT_CASE_PARAMS, ...params };
   const qs = new URLSearchParams();
   if (p.tab !== "open") qs.set("tab", p.tab);
+  if (p.view !== "client") qs.set("view", p.view);
   if (p.type) qs.set("type", p.type);
   if (p.stage) qs.set("stage", p.stage);
   if (p.assignee) qs.set("assignee", p.assignee);
@@ -209,12 +221,17 @@ export function formatWaiting(since: string | null | undefined, now: Date): stri
   return `${Math.floor(hours / 24)} d`;
 }
 
-/** Texto del rango visible: "1–25 de 80". */
-export function pageRangeLabel(page: number, pageSize: number, total: number): string {
+/** Texto del rango visible: "1–25 de 80" (o "1–12 de 12 clientes" con `noun`). */
+export function pageRangeLabel(page: number, pageSize: number, total: number, noun = ""): string {
   if (total === 0) return "0 de 0";
   const from = (page - 1) * pageSize + 1;
   const to = Math.min(total, page * pageSize);
-  return `${from}–${to} de ${total}`;
+  return `${from}–${to} de ${total}${noun ? ` ${noun}` : ""}`;
+}
+
+/** Encabezado de "Por cliente": "12 clientes · 15 gestiones" (singular/plural). */
+export function clientsHeadline(clients: number, cases: number): string {
+  return `${clients} ${clients === 1 ? "cliente" : "clientes"} · ${cases} ${cases === 1 ? "gestión" : "gestiones"}`;
 }
 
 /** Patrón seguro para `ilike`: escapa %, _ y \. */

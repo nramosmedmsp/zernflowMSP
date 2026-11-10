@@ -199,10 +199,37 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
       return (r: Row) => {
         if (op === "eq") return String(r[col]) === value;
         if (op === "is" && value === "null") return (r[col] ?? null) === null;
+        const cell = r[col];
+        const has = cell !== null && cell !== undefined;
+        if (op === "lt") return has && compare(cell, value) < 0;
+        if (op === "lte") return has && compare(cell, value) <= 0;
+        if (op === "gt") return has && compare(cell, value) > 0;
+        if (op === "gte") return has && compare(cell, value) >= 0;
+        if (op === "in") return value.replace(/^\(|\)$/g, "").split(",").includes(String(cell));
         throw new Error(`or(${op}) no soportado`);
       };
     });
     this.filters.push((r) => parts.some((f) => f(r)));
+    return this;
+  }
+  /** `ilike` sin distinguir mayúsculas; `%` y `_` como comodines y `\\` escapa. "rel.campo" mira la fila relacionada. */
+  ilike(col: string, pattern: string) {
+    let source = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i];
+      if (ch === "\\" && i + 1 < pattern.length) source += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      else if (ch === "%") source += ".*";
+      else if (ch === "_") source += ".";
+      else source += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    const re = new RegExp(`^${source}$`, "i");
+    if (col.includes(".")) {
+      const [rel, field] = col.split(".");
+      const fk = `${rel.replace(/s$/, "")}_id`;
+      this.filters.push((r) => re.test(String(this.db.rows(rel).find((x) => x.id === r[fk])?.[field] ?? "")));
+    } else {
+      this.filters.push((r) => re.test(String(r[col] ?? "")));
+    }
     return this;
   }
   neq(col: string, v: unknown) {
@@ -319,11 +346,8 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         this.db.beforeInsert.get(this.table)?.();
         // Restricciones únicas opt-in (FakeDb.unique): imita el error 23505 de Postgres.
         for (const r of list) {
-          for (const cols of this.db.uniques.get(this.table) ?? []) {
-            if (this.db.rows(this.table).some((x) => cols.every((c) => x[c] === r[c]))) {
-              return { data: null, error: { code: "23505", message: `duplicate key (${cols.join(", ")})` } };
-            }
-          }
+          const violated = this.db.uniqueViolation(this.table, r);
+          if (violated) return { data: null, error: { code: "23505", message: `duplicate key (${violated.join(", ")})` } };
         }
         const inserted = list.map((r) => this.db.insertRow(this.table, r));
         if (!this.returning) return { data: null, error: null };
@@ -388,13 +412,23 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
 export class FakeDb {
   tables: Record<string, Row[]> = {};
   failNext = new Map<string, string>();
-  /** Restricciones únicas (columnas) por tabla; solo las que la prueba declara con `unique()`. */
-  uniques = new Map<string, string[][]>();
+  /** Restricciones únicas (columnas) por tabla; solo las que la prueba declara con `unique()`. `where` = índice parcial. */
+  uniques = new Map<string, { cols: string[]; where?: (row: Row) => boolean }[]>();
   /** Se ejecuta justo antes de cada inserción en la tabla (para simular una carrera con otra solicitud). */
   beforeInsert = new Map<string, () => void>();
 
-  unique(table: string, cols: string[]): void {
-    this.uniques.set(table, [...(this.uniques.get(table) ?? []), cols]);
+  /** Declara una restricción única; con `where`, solo cuenta las filas que la cumplen (índice único parcial). */
+  unique(table: string, cols: string[], where?: (row: Row) => boolean): void {
+    this.uniques.set(table, [...(this.uniques.get(table) ?? []), { cols, where }]);
+  }
+
+  /** Columnas de la restricción única que violaría insertar `row`, o null. */
+  uniqueViolation(table: string, row: Row): string[] | null {
+    for (const { cols, where } of this.uniques.get(table) ?? []) {
+      if (where && !where(row)) continue;
+      if (this.rows(table).some((x) => (!where || where(x)) && cols.every((c) => x[c] === row[c]))) return cols;
+    }
+    return null;
   }
   users = new Map<string, { id: string; email: string; user_metadata: Record<string, unknown> }>();
 
@@ -445,7 +479,7 @@ export class FakeDb {
     if (name === "open_inbound_case") {
       const open = this.rows("cases").find((c) => c.contact_id === args.p_contact_id && c.status === "open");
       if (open) return { data: { case_id: open.id, created: false }, error: null };
-      const row = this.insertRow("cases", {
+      const fresh = {
         workspace_id: args.p_workspace_id,
         contact_id: args.p_contact_id,
         case_type_id: args.p_case_type_id,
@@ -455,7 +489,18 @@ export class FakeDb {
         opened_at: args.p_at,
         last_inbound_at: args.p_at,
         waiting_since: args.p_at,
-      });
+      };
+      // Carrera con una apertura manual (00038): si choca con una restricción única,
+      // devuelve la gestión sin clasificar que ya existe.
+      this.beforeInsert.get("cases")?.();
+      if (this.uniqueViolation("cases", fresh)) {
+        const dup = this.rows("cases").find(
+          (c) => c.contact_id === args.p_contact_id && c.case_type_id === null && ["open", "scheduled"].includes(c.status as string),
+        );
+        if (!dup) return { data: null, error: { code: "23505", message: "duplicate key" } };
+        return { data: { case_id: dup.id, created: false }, error: null };
+      }
+      const row = this.insertRow("cases", fresh);
       return { data: { case_id: row.id, created: true }, error: null };
     }
     if (name === "assign_case_pick") {

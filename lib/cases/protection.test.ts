@@ -4,6 +4,7 @@ import {
   closeGate,
   closeRequestToJson,
   complaintStillPending,
+  deadlineChip,
   formatSpan,
   isCaseSupervisor,
   parseCloseRequest,
@@ -59,6 +60,30 @@ describe("solutionState", () => {
   });
   it("una gestión cerrada no tiene plazo", () => {
     expect(solutionState({ ...open, status: "resolved" }, 24, at("2026-11-30T00:00:00Z"))).toEqual({ kind: "none" });
+  });
+});
+
+describe("deadlineChip (etiqueta del plazo en Gestiones y la Bandeja)", () => {
+  const open = { status: "open", openedAt: "2026-10-28T10:00:00Z", solutionStatus: null, solutionNote: null, nextActionAt: null };
+  const at = (iso: string) => new Date(iso);
+
+  it("sin plazo o cerrada: nada", () => {
+    expect(deadlineChip(open, null, at("2026-10-28T11:00:00Z"))).toBeNull();
+    expect(deadlineChip({ ...open, status: "resolved" }, 4, at("2026-10-28T11:00:00Z"))).toBeNull();
+  });
+  it("corre el plazo: rojo si faltan menos de 4 h, ámbar si hay margen", () => {
+    expect(deadlineChip(open, 6, at("2026-10-28T12:00:00Z"))).toEqual({ label: "vence en 4 h", tone: "amber" });
+    expect(deadlineChip(open, 6, at("2026-10-28T13:00:00Z"))).toEqual({ label: "vence en 3 h", tone: "red" });
+    expect(deadlineChip(open, 30, at("2026-10-28T11:00:00Z"))).toEqual({ label: "vence en 29 h", tone: "amber" });
+  });
+  it("vencido, compromiso vencido y cierre por aprobar", () => {
+    expect(deadlineChip(open, 4, at("2026-10-28T16:00:00Z"))).toEqual({ label: "Plazo vencido", tone: "red" });
+    const progress = { ...open, solutionStatus: "in_progress", nextActionAt: "2026-10-30T00:00:00Z" };
+    expect(deadlineChip(progress, 24, at("2026-10-30T02:00:00Z"))).toEqual({ label: "Compromiso vencido", tone: "red" });
+    expect(deadlineChip({ ...open, hasCloseRequest: true }, 4, at("2026-10-28T16:00:00Z"))).toEqual({
+      label: "Cierre por aprobar",
+      tone: "amber",
+    });
   });
 });
 

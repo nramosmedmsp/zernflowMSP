@@ -8,7 +8,12 @@ import { Loader2 } from "lucide-react";
 import { openManualCase, type ContactCasesView } from "@/lib/actions/cases";
 import { addDays, limaDateOf } from "@/lib/cases/dates";
 import { allowsSameTypeParallel } from "@/lib/cases/parallel";
-import { ParallelCaseWarning, hasSameTypeOpen, type ParallelCase } from "@/components/cases/parallel-case-warning";
+import {
+  ParallelCaseWarning,
+  UNCLASSIFIED_BLOCKED_HINT,
+  hasSameTypeOpen,
+  type ParallelCase,
+} from "@/components/cases/parallel-case-warning";
 import type { InboxMember } from "./inbox-model";
 import { ErrorText, Field, Modal, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
 
@@ -50,10 +55,16 @@ export function NewCaseDialog({
   const selectedType = data.caseTypes.find((t) => t.id === caseTypeId);
   const sameTypeAllowed = !!selectedType && allowsSameTypeParallel(selectedType);
   const blocked = hasSameTypeOpen(existing, caseTypeId || null, sameTypeAllowed);
+  // «Sin clasificar» no se ofrece si ya tiene una gestión abierta o programada: se clasifica esa.
+  const noUnclassified = existing.length > 0;
 
   async function handleCreate() {
     if (scheduledFor && scheduledFor < tomorrow) {
       setError("La fecha programada debe ser a partir de mañana. Para abrirla ahora, deja la fecha vacía.");
+      return;
+    }
+    if (noUnclassified && !caseTypeId) {
+      setError(UNCLASSIFIED_BLOCKED_HINT);
       return;
     }
     if (blocked) {
@@ -99,7 +110,7 @@ export function NewCaseDialog({
           <button onClick={onCancel} className={secondaryButtonClass}>
             Cancelar
           </button>
-          <button onClick={handleCreate} disabled={saving || blocked} className={primaryButtonClass}>
+          <button onClick={handleCreate} disabled={saving || blocked || (noUnclassified && !caseTypeId)} className={primaryButtonClass}>
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {scheduledFor ? "Programar gestión" : "Abrir gestión"}
           </button>
@@ -117,13 +128,27 @@ export function NewCaseDialog({
 
       <Field label="Tipo de gestión">
         <select value={caseTypeId} onChange={(e) => setCaseTypeId(e.target.value)} className={inputClass}>
-          <option value="">Sin clasificar</option>
+          {noUnclassified ? (
+            <>
+              <option value="">Elige un tipo…</option>
+              <option disabled value="__sin_clasificar">
+                Sin clasificar (no disponible)
+              </option>
+            </>
+          ) : (
+            <option value="">Sin clasificar</option>
+          )}
           {types.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
             </option>
           ))}
         </select>
+        {noUnclassified && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            <span className="font-medium">Sin clasificar:</span> {UNCLASSIFIED_BLOCKED_HINT}
+          </p>
+        )}
       </Field>
 
       <Field
