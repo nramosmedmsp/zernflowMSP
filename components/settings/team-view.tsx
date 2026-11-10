@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Check,
@@ -12,6 +13,7 @@ import {
   Link2,
   Loader2,
   Mail,
+  Pencil,
   Send,
   Shield,
   Trash2,
@@ -27,7 +29,9 @@ import {
   removeTeamMember,
   revokeInvite,
   sendAccessEmail,
+  updateTeamMember,
 } from "@/lib/actions/team";
+import { EditMemberDialog, type EditMemberInput } from "@/components/settings/edit-member-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
@@ -37,11 +41,13 @@ import {
   MAIL_NOT_CONFIGURED_MESSAGE,
   MEMBER_STATUS_LABELS,
   canManageTeam,
+  canEditMembers,
   canManageMailSettings,
   copyAccessLinkError,
   removeMemberError,
   sendAccessEmailError,
   type TeamMemberView,
+  type TeamRoleEntry,
 } from "@/lib/team-rules";
 
 interface LegacyInvite {
@@ -201,6 +207,7 @@ export function TeamView({
   members: initialMembers,
   legacyInvites: initialLegacyInvites,
   mailConfigured,
+  teamsByUser,
 }: {
   workspaceId: string;
   workspaceName: string;
@@ -209,9 +216,12 @@ export function TeamView({
   members: TeamMemberView[];
   legacyInvites: LegacyInvite[];
   mailConfigured: boolean;
+  teamsByUser: Record<string, TeamRoleEntry[]>;
 }) {
   const isManager = canManageTeam(currentUserRole);
+  const isOwner = canEditMembers(currentUserRole);
   const toast = useToast();
+  const router = useRouter();
 
   const [members, setMembers] = useState(initialMembers);
   const [legacyInvites, setLegacyInvites] = useState(initialLegacyInvites);
@@ -228,6 +238,10 @@ export function TeamView({
   const [rowNotices, setRowNotices] = useState<Record<string, Notice | undefined>>({});
   const [confirmRemove, setConfirmRemove] = useState<{ userId: string; name: string } | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
+  const [editing, setEditing] = useState<TeamMemberView | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const ownerCount = members.filter((m) => m.role === "owner").length;
 
   function setRowBusy(id: string, action: string | undefined) {
     setBusy((prev) => ({ ...prev, [id]: action }));
@@ -307,6 +321,36 @@ export function TeamView({
       toast.error("No se pudo quitar al miembro. Inténtalo de nuevo.");
     } finally {
       setRowBusy(userId, undefined);
+    }
+  }
+
+  async function handleEdit(member: TeamMemberView, input: EditMemberInput) {
+    if (savingEdit) return;
+    setSavingEdit(true);
+    try {
+      const result = await updateTeamMember(workspaceId, member.userId, input);
+      if ("error" in result) {
+        toast.error(result.error);
+        return;
+      }
+      setMembers((prev) => prev.map((m) => (m.userId === member.userId ? result.member : m)));
+      setEditing(null);
+      toast.success("Cambios guardados");
+      if (result.delivery) {
+        const d = result.delivery;
+        setRowNotices((prev) => ({
+          ...prev,
+          [member.userId]: d.sent
+            ? { kind: "ok", text: d.message }
+            : { kind: "warn", text: d.message, offerCopy: true },
+        }));
+      }
+      // Si cambió su propio rol, el menú y los permisos de la pantalla cambian.
+      if (member.userId === currentUserId && result.member.role !== member.role) router.refresh();
+    } catch {
+      toast.error("No se pudieron guardar los cambios. Inténtalo de nuevo.");
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -400,6 +444,7 @@ export function TeamView({
                   >
                     <option value="member">{roleLabel("member")}</option>
                     <option value="admin">{roleLabel("admin")}</option>
+                    {isOwner && <option value="owner">{roleLabel("owner")}</option>}
                   </select>
                   <button
                     type="submit"
@@ -436,6 +481,9 @@ export function TeamView({
               <Users className="h-4 w-4 text-muted-foreground" />
               <h2 className="text-sm font-semibold">Miembros ({members.length})</h2>
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Puede haber varios Dueños, pero siempre debe quedar al menos uno.
+            </p>
 
             <div className="mt-4 space-y-2">
               {members.map((member) => {
@@ -458,7 +506,8 @@ export function TeamView({
                   isManager &&
                   copyError !== null &&
                   copyAccessLinkError({ ...actor, targetActive: false }) === null;
-                const canRemove = isManager && removeMemberError(actor) === null;
+                const canRemove = isManager && removeMemberError({ ...actor, ownerCount }) === null;
+                const canEdit = isOwner;
                 const notice = rowNotices[member.userId];
                 const rowBusy = busy[member.userId];
 
@@ -532,8 +581,19 @@ export function TeamView({
                       </div>
                     </div>
 
-                    {(showSendButton || showCopyButton || showBlockedCopyButton) && (
+                    {(canEdit || showSendButton || showCopyButton || showBlockedCopyButton) && (
                       <div className="flex flex-wrap items-start gap-2 border-t border-border pt-3">
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => setEditing(member)}
+                            disabled={!!rowBusy}
+                            className={smallButtonClass}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            Editar
+                          </button>
+                        )}
                         {showSendButton && (
                           <button
                             type="button"
@@ -592,7 +652,7 @@ export function TeamView({
                 <span>
                   {canManageMailSettings(currentUserRole)
                     ? MAIL_NOT_CONFIGURED_MESSAGE
-                    : "El correo aún no está configurado. Pide al Dueño que lo configure."}{" "}
+                    : "El correo aún no está configurado. Pide a un Dueño que lo configure."}{" "}
                   {canManageMailSettings(currentUserRole) && (
                     <Link href="/dashboard/settings/correo" className="font-medium text-foreground hover:underline">
                       Ir a Correo
@@ -654,6 +714,18 @@ export function TeamView({
           )}
         </div>
       </div>
+      {editing && (
+        <EditMemberDialog
+          key={editing.userId}
+          member={editing}
+          ownerCount={ownerCount}
+          isSelf={editing.userId === currentUserId}
+          teams={teamsByUser[editing.userId] ?? []}
+          saving={savingEdit}
+          onSave={(input) => void handleEdit(editing, input)}
+          onClose={() => setEditing(null)}
+        />
+      )}
       <ConfirmDialog
         open={!!confirmRemove}
         title="Quitar miembro"

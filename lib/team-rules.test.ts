@@ -13,6 +13,11 @@ import {
   copyAccessLinkError,
   displayName,
   isAssignableRole,
+  isGrantableRole,
+  editMemberError,
+  LAST_OWNER_MESSAGE,
+  sameEmailAddress,
+  teamsSummary,
   memberStatus,
   memberViewFromUser,
   normalizeEmail,
@@ -55,9 +60,10 @@ describe("removeMemberError", () => {
     expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "admin" })).toMatch(/Solo el Dueño puede quitar a un Administrador/);
   });
 
-  it("nadie puede quitar al Dueño", () => {
+  it("un Administrador no puede quitar a un Dueño; otro Dueño sí (si no es el último)", () => {
     expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "owner" })).toMatch(/Dueño/);
-    expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "owner" })).toMatch(/Dueño/);
+    expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "owner" })).toBeNull();
+    expect(removeMemberError({ ...base, actorRole: "owner", targetRole: "owner", ownerCount: 1 })).toMatch(/al menos un Dueño/);
   });
 
   it("nadie puede quitarse a sí mismo", () => {
@@ -346,5 +352,71 @@ describe("crossWorkspaceAuthorityError", () => {
     expect(
       crossWorkspaceAuthorityError({ actorMemberships: [m("w1", "owner")], targetMemberships: [] }),
     ).toBe(CROSS_WORKSPACE_DENIED_MESSAGE);
+  });
+});
+
+describe("varios Dueños: reglas puras", () => {
+  const base = { actorId: "a", actorRole: "owner", targetId: "t" };
+
+  it("isGrantableRole: Dueño solo lo da un Dueño", () => {
+    expect(isGrantableRole("owner", "owner")).toBe(true);
+    expect(isGrantableRole("owner", "admin")).toBe(false);
+    expect(isGrantableRole("admin", "admin")).toBe(true);
+    expect(isGrantableRole("member", "admin")).toBe(true);
+    expect(isGrantableRole("superadmin", "owner")).toBe(false);
+  });
+
+  it("editMemberError: solo un Dueño edita", () => {
+    expect(editMemberError({ ...base, actorRole: "admin", targetRole: "member", newRole: "member", ownerCount: 2 })).toMatch(/Solo un Dueño/);
+    expect(editMemberError({ ...base, actorRole: "member", targetRole: "member", newRole: "admin", ownerCount: 2 })).toMatch(/Solo un Dueño/);
+    expect(editMemberError({ ...base, targetRole: "member", newRole: "owner", ownerCount: 1 })).toBeNull();
+  });
+
+  it("editMemberError: el último Dueño no deja de serlo, pero con otro Dueño sí", () => {
+    expect(editMemberError({ ...base, targetRole: "owner", newRole: "admin", ownerCount: 1 })).toBe(LAST_OWNER_MESSAGE);
+    expect(editMemberError({ ...base, targetRole: "owner", newRole: "member", ownerCount: 1 })).toBe(LAST_OWNER_MESSAGE);
+    expect(editMemberError({ ...base, targetRole: "owner", newRole: "owner", ownerCount: 1 })).toBeNull();
+    expect(editMemberError({ ...base, targetRole: "owner", newRole: "admin", ownerCount: 2 })).toBeNull();
+    expect(editMemberError({ ...base, targetRole: "member", newRole: "dios", ownerCount: 2 })).toMatch(/Rol no válido/);
+  });
+
+  it("removeMemberError: un Dueño quita a otro Dueño, nunca al último ni a sí mismo", () => {
+    expect(removeMemberError({ ...base, targetRole: "owner", ownerCount: 2 })).toBeNull();
+    expect(removeMemberError({ ...base, targetRole: "owner", ownerCount: 1 })).toBe(LAST_OWNER_MESSAGE);
+    expect(removeMemberError({ ...base, targetId: "a", targetRole: "owner", ownerCount: 3 })).toMatch(/ti mismo/);
+    expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "owner", ownerCount: 2 })).toMatch(/Solo un Dueño/);
+    expect(removeMemberError({ ...base, actorRole: "admin", targetRole: "admin", ownerCount: 2 })).toMatch(/Solo el Dueño/);
+  });
+
+  it("crossWorkspaceAuthorityError: en el espacio actual un Dueño tiene autoridad sobre otro Dueño; en otros espacios no", () => {
+    const actor = [
+      { workspaceId: "w1", role: "owner" },
+      { workspaceId: "w2", role: "owner" },
+    ];
+    expect(crossWorkspaceAuthorityError({ actorMemberships: actor, targetMemberships: [{ workspaceId: "w1", role: "owner" }] })).not.toBeNull();
+    expect(
+      crossWorkspaceAuthorityError({ actorMemberships: actor, targetMemberships: [{ workspaceId: "w1", role: "owner" }], currentWorkspaceId: "w1" }),
+    ).toBeNull();
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: actor,
+        targetMemberships: [{ workspaceId: "w1", role: "owner" }, { workspaceId: "w2", role: "owner" }],
+        currentWorkspaceId: "w1",
+      }),
+    ).not.toBeNull();
+    expect(
+      crossWorkspaceAuthorityError({
+        actorMemberships: [{ workspaceId: "w1", role: "admin" }],
+        targetMemberships: [{ workspaceId: "w1", role: "owner" }],
+        currentWorkspaceId: "w1",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("teamsSummary y sameEmailAddress", () => {
+    expect(teamsSummary([])).toBe("ninguno");
+    expect(teamsSummary([{ name: "Ventas", role: "supervisor" }, { name: "Atención", role: "agent" }])).toBe("Ventas (supervisor) · Atención (asesor)");
+    expect(sameEmailAddress(" A@x.pe ", "a@X.pe")).toBe(true);
+    expect(sameEmailAddress("a@x.pe", null)).toBe(false);
   });
 });

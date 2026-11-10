@@ -4,7 +4,7 @@ import { TeamView } from "@/components/settings/team-view";
 import { createServiceClient } from "@/lib/supabase/server";
 import { isMailConfigured } from "@/lib/mail/settings";
 import { NoPermission } from "@/components/settings/cases/no-permission";
-import { canManageTeam, memberViewFromUser } from "@/lib/team-rules";
+import { canManageTeam, memberViewFromUser, type TeamRoleEntry } from "@/lib/team-rules";
 
 export const metadata: Metadata = { title: "Equipo" };
 
@@ -49,6 +49,27 @@ export default async function TeamPage() {
 
   const isManager = canManageTeam(role);
 
+  // Equipos de cada persona, para la línea informativa de "Editar usuario".
+  const teamsByUser: Record<string, TeamRoleEntry[]> = {};
+  if (isManager) {
+    const { data: teams } = await serviceClient
+      .from("teams")
+      .select("id, name")
+      .eq("workspace_id", workspace.id);
+    const teamNames = new Map((teams ?? []).map((t) => [t.id, t.name]));
+    if (teamNames.size > 0) {
+      const { data: teamMembers } = await serviceClient
+        .from("team_members")
+        .select("team_id, user_id, role")
+        .in("team_id", [...teamNames.keys()]);
+      for (const tm of teamMembers ?? []) {
+        const name = teamNames.get(tm.team_id);
+        if (!name) continue;
+        (teamsByUser[tm.user_id] ??= []).push({ name, role: tm.role });
+      }
+    }
+  }
+
   // Invitaciones pendientes del sistema anterior de enlaces (las nuevas se
   // marcan como aceptadas en cuanto se crea el usuario).
   const { data: pendingInvites } = isManager
@@ -71,6 +92,7 @@ export default async function TeamPage() {
       members={memberDetails}
       legacyInvites={pendingInvites ?? []}
       mailConfigured={mailConfigured}
+      teamsByUser={teamsByUser}
     />
   );
 }

@@ -462,6 +462,14 @@ export class FakeDb {
   auth = {
     admin: {
       getUserById: async (id: string) => ({ data: { user: this.users.get(id) ?? null }, error: null }),
+      updateUserById: async (id: string, attrs: { email?: string; email_confirm?: boolean; user_metadata?: Record<string, unknown> }) => {
+        const user = this.users.get(id);
+        if (!user) return { data: { user: null }, error: { message: "User not found" } };
+        const next = { ...user, ...(attrs.email ? { email: attrs.email } : {}), ...(attrs.user_metadata ? { user_metadata: attrs.user_metadata } : {}) } as typeof user & Record<string, unknown>;
+        if (attrs.email) next.email_confirmed_at = attrs.email_confirm ? (user as Record<string, unknown>).email_confirmed_at ?? "2026-01-01T00:00:00Z" : null;
+        this.users.set(id, next);
+        return { data: { user: next }, error: null };
+      },
     },
   };
 

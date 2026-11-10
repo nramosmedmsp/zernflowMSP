@@ -6,6 +6,7 @@ import { releaseMemberWork } from "@/lib/cases/member-removal";
 import { logActivity, type Db } from "@/lib/cases/io";
 import { rpcAuthUserExists } from "@/lib/supabase/extra-rpc";
 import { findAuthUserByEmail, generateAccessLink } from "@/lib/supabase/admin-users";
+import type { WorkspaceRole } from "@/lib/types/database";
 import { sendAppMail } from "@/lib/mail/send";
 import { isMailConfigured } from "@/lib/mail/settings";
 import { inviteEmail, resetPasswordEmail } from "@/lib/mail/templates";
@@ -21,7 +22,14 @@ import {
   canManageTeam,
   copyAccessLinkError,
   displayName,
-  isAssignableRole,
+  editMemberError,
+  isGrantableRole,
+  canEditMembers,
+  sameEmailAddress,
+  EDIT_MEMBER_DENIED_MESSAGE,
+  LAST_OWNER_MESSAGE,
+  OWNER_GRANT_DENIED_MESSAGE,
+  OTHER_WORKSPACE_PROMOTION_MESSAGE,
   memberStatus,
   memberViewFromUser,
   normalizeEmail,
@@ -107,14 +115,14 @@ async function deliverAccessLink(
   return {
     sent: false,
     notConfigured: false,
-    message: `No se pudo enviar el correo: ${result.error} Corrígelo en Configuración → Correo y vuelve a intentarlo${params.status === "pending" ? ", o copia el enlace" : ", o pide al Dueño que genere el enlace"}.`,
+    message: `No se pudo enviar el correo: ${result.error} Corrígelo en Configuración → Correo y vuelve a intentarlo${params.status === "pending" ? ", o copia el enlace" : ", o pide a un Dueño que genere el enlace"}.`,
   };
 }
 
 function notConfiguredMessage(status: MemberStatus): string {
   return status === "pending"
     ? MAIL_NOT_CONFIGURED_MESSAGE
-    : "El correo aún no está configurado. Configúralo en Configuración → Correo. Si necesitas el enlace de una cuenta activa, pide al Dueño que lo genere.";
+    : "El correo aún no está configurado. Configúralo en Configuración → Correo. Si necesitas el enlace de una cuenta activa, pide a un Dueño que lo genere.";
 }
 
 function inviterNameOf(user: { email?: string | null; user_metadata?: Record<string, unknown> }) {
@@ -128,6 +136,21 @@ async function membershipsOf(service: ServiceClient, userId: string): Promise<Ro
     .select("workspace_id, role")
     .eq("user_id", userId);
   return (data ?? []).map((m) => ({ workspaceId: m.workspace_id, role: m.role }));
+}
+
+/** Cuántos Dueños tiene hoy el espacio. */
+async function ownerCountOf(service: ServiceClient, workspaceId: string): Promise<number> {
+  const { data } = await service
+    .from("workspace_members")
+    .select("user_id")
+    .eq("workspace_id", workspaceId)
+    .eq("role", "owner");
+  return (data ?? []).length;
+}
+
+/** El trigger de la base (00039) rechaza dejar un espacio sin Dueño. */
+function isLastOwnerDbError(error: { message?: string } | null | undefined): boolean {
+  return !!error?.message?.includes("last_owner_required");
 }
 
 /**
@@ -153,7 +176,8 @@ export async function createTeamUser(
   const email = normalizeEmail(input.email);
   if (!email) return { error: "Escribe un correo válido." };
 
-  if (!isAssignableRole(input.role)) {
+  if (input.role === "owner" && ctx.role !== "owner") return { error: OWNER_GRANT_DENIED_MESSAGE };
+  if (!isGrantableRole(input.role, ctx.role)) {
     return { error: "Rol no válido. Elige Miembro o Administrador." };
   }
   const role = input.role;
@@ -314,6 +338,7 @@ export async function sendAccessEmail(
   const authority = crossWorkspaceAuthorityError({
     actorMemberships: await membershipsOf(service, ctx.user.id),
     targetMemberships: await membershipsOf(service, userId),
+    currentWorkspaceId: workspaceId,
   });
   if (authority) return { error: authority };
 
@@ -391,6 +416,7 @@ export async function copyAccessLink(
   const authority = crossWorkspaceAuthorityError({
     actorMemberships: await membershipsOf(service, ctx.user.id),
     targetMemberships,
+    currentWorkspaceId: workspaceId,
   });
   if (authority) return { error: authority };
 
@@ -423,6 +449,7 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
     actorRole: ctx.role,
     targetId: userId,
     targetRole: membership.role,
+    ownerCount: await ownerCountOf(service, workspaceId),
   });
   if (denied) return { error: denied };
 
@@ -433,9 +460,19 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
     .eq("user_id", userId);
 
   if (deleteError) {
+    // Otro Dueño pudo salir justo antes: la base no deja el espacio sin Dueño.
+    if (isLastOwnerDbError(deleteError)) return { error: LAST_OWNER_MESSAGE };
     console.error("[removeTeamMember]", deleteError.message);
     return { error: "No se pudo quitar al miembro. Inténtalo de nuevo." };
   }
+
+  await logActivity(service as unknown as Db, {
+    workspace_id: workspaceId,
+    type: "config_changed",
+    actor_id: ctx.user.id,
+    from_value: membership.role,
+    meta: { action: "member_removed", entity: "team", user_id: userId, role: membership.role },
+  });
 
   // R2-2: su trabajo no se queda colgado de una persona que ya no está.
   try {
@@ -445,6 +482,194 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
   }
 
   return { ok: true };
+}
+
+export type UpdateTeamMemberResult =
+  | { error: string }
+  | {
+      ok: true;
+      member: TeamMemberView;
+      emailChanged: boolean;
+      /** Solo si cambió el correo: qué pasó con el enlace de acceso al correo nuevo. */
+      delivery: AccessDelivery | null;
+    };
+
+/**
+ * Edita nombre, correo y rol de una persona del espacio. Solo un Dueño. Al
+ * cambiar el correo se actualiza la cuenta de acceso (Auth) y se envía el
+ * enlace de acceso al correo nuevo con el mismo mecanismo que "Enviar acceso";
+ * sin correo de la app configurado se devuelve el aviso para copiar el enlace.
+ * Cada cambio queda en la actividad con quién lo hizo.
+ */
+export async function updateTeamMember(
+  workspaceId: string,
+  userId: string,
+  input: { fullName: string; email: string; role: string },
+): Promise<UpdateTeamMemberResult> {
+  const auth = await managerContext(workspaceId);
+  if (!auth.ok) return { error: auth.error };
+  const { ctx, service } = auth;
+  if (!canEditMembers(ctx.role)) return { error: EDIT_MEMBER_DENIED_MESSAGE };
+
+  const membership = await getMembership(service, workspaceId, userId);
+  if (!membership) return { error: "Esta persona ya no es miembro del espacio de trabajo." };
+
+  const nameCheck = normalizeFullName(input.fullName);
+  if (nameCheck.error !== null) return { error: nameCheck.error };
+  const fullName = nameCheck.name;
+
+  const email = normalizeEmail(input.email);
+  if (!email) return { error: "Escribe un correo válido." };
+
+  const roleDenied = editMemberError({
+    actorId: ctx.user.id,
+    actorRole: ctx.role,
+    targetId: userId,
+    targetRole: membership.role,
+    newRole: input.role,
+    ownerCount: await ownerCountOf(service, workspaceId),
+  });
+  if (roleDenied) return { error: roleDenied };
+  const newRole = input.role as WorkspaceRole;
+  const roleChanged = newRole !== membership.role;
+
+  const {
+    data: { user: target },
+  } = await service.auth.admin.getUserById(userId);
+  if (!target?.email) return { error: "No encontramos la cuenta de esta persona." };
+
+  // Cambiar el correo o el nombre afecta a todos los espacios de la persona:
+  // en los otros espacios, quien edita debe tener autoridad sobre ella. Y, como
+  // al agregarla, no se ascienda a Administrador o Dueño a quien pertenece a
+  // otro espacio.
+  const otherMemberships = (await membershipsOf(service, userId)).filter(
+    (m) => m.workspaceId !== workspaceId,
+  );
+  if (otherMemberships.length > 0) {
+    const authority = crossWorkspaceAuthorityError({
+      actorMemberships: await membershipsOf(service, ctx.user.id),
+      targetMemberships: otherMemberships,
+    });
+    if (authority) return { error: authority };
+    const order = ["member", "admin", "owner"];
+    if (order.indexOf(newRole) > order.indexOf(membership.role)) {
+      return { error: OTHER_WORKSPACE_PROMOTION_MESSAGE };
+    }
+  }
+
+  const emailChanged = !sameEmailAddress(target.email, email);
+  const nameChanged = fullName !== displayName(target);
+
+  if (emailChanged) {
+    const { exists, error: existsError } = await rpcAuthUserExists(service, email);
+    if (existsError) {
+      console.error("[updateTeamMember] auth_user_exists", existsError);
+      return { error: "No se pudo comprobar el correo. Inténtalo de nuevo." };
+    }
+    if (exists) return { error: "Ya existe una cuenta con ese correo." };
+  }
+
+  const baseUrl = emailChanged ? appBaseUrl(process.env.NEXT_PUBLIC_APP_URL) : null;
+  if (emailChanged && !baseUrl) return { error: APP_URL_MISSING_MESSAGE };
+
+  if (roleChanged) {
+    const { error: roleError } = await service
+      .from("workspace_members")
+      .update({ role: newRole })
+      .eq("workspace_id", workspaceId)
+      .eq("user_id", userId);
+    if (roleError) {
+      if (isLastOwnerDbError(roleError)) return { error: LAST_OWNER_MESSAGE };
+      console.error("[updateTeamMember] role", roleError.message);
+      return { error: "No se pudo cambiar el rol. Inténtalo de nuevo." };
+    }
+  }
+
+  let updatedUser = target;
+  if (emailChanged || nameChanged) {
+    const { data, error: authError } = await service.auth.admin.updateUserById(userId, {
+      ...(emailChanged ? { email, email_confirm: !!target.email_confirmed_at } : {}),
+      user_metadata: { ...(target.user_metadata ?? {}), full_name: fullName },
+    });
+    if (authError || !data?.user) {
+      console.error("[updateTeamMember] auth", authError?.message);
+      if (roleChanged) {
+        // Deshace el rol para no dejar la edición a medias.
+        await service
+          .from("workspace_members")
+          .update({ role: membership.role })
+          .eq("workspace_id", workspaceId)
+          .eq("user_id", userId);
+      }
+      const taken = /already|registered|exists/i.test(authError?.message ?? "");
+      return {
+        error: taken
+          ? "Ya existe una cuenta con ese correo."
+          : "No se pudo actualizar la cuenta. Inténtalo de nuevo.",
+      };
+    }
+    updatedUser = data.user;
+  }
+
+  const base = { workspace_id: workspaceId, type: "config_changed" as const, actor_id: ctx.user.id };
+  const logs = [];
+  if (nameChanged) {
+    logs.push({
+      ...base,
+      from_value: displayName(target),
+      to_value: fullName,
+      meta: { action: "member_renamed", entity: "team", user_id: userId },
+    });
+  }
+  if (emailChanged) {
+    logs.push({
+      ...base,
+      from_value: target.email,
+      to_value: email,
+      meta: { action: "member_email_changed", entity: "team", user_id: userId },
+    });
+  }
+  if (roleChanged) {
+    logs.push({
+      ...base,
+      from_value: membership.role,
+      to_value: newRole,
+      meta: { action: "member_role_changed", entity: "team", user_id: userId },
+    });
+  }
+  if (logs.length > 0) await logActivity(service as unknown as Db, logs);
+
+  let delivery: AccessDelivery | null = null;
+  if (emailChanged && baseUrl) {
+    const status = memberStatus(updatedUser.last_sign_in_at);
+    if (!(await isMailConfigured(service))) {
+      delivery = { sent: false, notConfigured: true, message: notConfiguredMessage(status) };
+    } else {
+      const link = await generateAccessLink(service, {
+        email,
+        type: accessLinkTypeFor(!!updatedUser.email_confirmed_at),
+        baseUrl,
+        fullName,
+      });
+      delivery = link.ok
+        ? await deliverAccessLink(service, {
+            to: email,
+            name: fullName,
+            url: link.url,
+            status,
+            inviterName: inviterNameOf(ctx.user),
+            workspaceName: ctx.workspace.name,
+          })
+        : { sent: false, notConfigured: false, message: link.error };
+    }
+  }
+
+  const member = memberViewFromUser(updatedUser, {
+    userId,
+    role: newRole,
+    joinedAt: membership.created_at,
+  });
+  return { ok: true, member, emailChanged, delivery };
 }
 
 /** Elimina una invitación pendiente del sistema anterior de enlaces. */
