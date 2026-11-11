@@ -6,6 +6,7 @@ import { demoTemplateText, isDemoChannel } from "@/lib/demo";
 import { demoConversationByLateId, demoConversationByPhone, storeDemoMessage } from "@/lib/demo-messages";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { zernioErrorMessage, zernioFailed, zernioThrown } from "@/lib/zernio-error";
+import { isViewAsLocked, markReadOnlyHit, VIEW_AS_LOCKED_MESSAGE } from "@/lib/view-as/lock";
 import type { Db } from "./io";
 
 export type SendResult = { ok: true; messageId: string | null } | { ok: false; error: string };
@@ -68,8 +69,17 @@ export function zernioMessenger(db: Db, options: MessengerOptions = {}): CaseMes
     return createZernioClient(apiKey);
   }
 
+  // "Ver como": mientras hay una vista activa nada sale por Zernio ni se guarda.
+  async function blockedByViewAs(): Promise<SendResult | null> {
+    if (!(await isViewAsLocked())) return null;
+    await markReadOnlyHit();
+    return { ok: false, error: VIEW_AS_LOCKED_MESSAGE };
+  }
+
   return {
     async sendText(input) {
+      const blocked = await blockedByViewAs();
+      if (blocked) return blocked;
       if (isDemoChannel(input.lateAccountId)) {
         if (!storeDemo) return { ok: true, messageId: null };
         const conversationId = await demoConversationByLateId(db, input.workspaceId, input.lateConversationId);
@@ -96,6 +106,8 @@ export function zernioMessenger(db: Db, options: MessengerOptions = {}): CaseMes
     },
 
     async sendTemplate(input) {
+      const blocked = await blockedByViewAs();
+      if (blocked) return blocked;
       if (isDemoChannel(input.lateAccountId)) {
         if (!storeDemo) return { ok: true, messageId: null };
         const conversationId = await demoConversationByPhone(db, {

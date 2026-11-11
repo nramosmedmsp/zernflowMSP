@@ -16,6 +16,7 @@
 // rechaza que un usuario las cree o cambie por la base.
 
 import { getWorkspace } from "@/lib/workspace";
+import { viewAsActorOverride } from "@/lib/view-as/rules";
 import { isAdminRole } from "@/lib/permissions";
 import { createServiceClient } from "@/lib/supabase/server";
 import { isReplyFilePath, parseMediaPath, replyMediaPath, safeFileName, validateReplyAttachment } from "@/lib/chat-media";
@@ -112,9 +113,17 @@ async function loadAccess(ctx: Ctx): Promise<Access> {
     .order("name", { ascending: true });
 
   const ids = (teams ?? []).map((t) => t.id);
-  const { data: memberships } = ids.length
-    ? await supabase.from("team_members").select("team_id, role").eq("user_id", user.id).in("team_id", ids)
-    : { data: [] as Array<{ team_id: string; role: TeamRole }> };
+  // "Ver como" por rol: la identidad de ejemplo no tiene filas en team_members.
+  const override = viewAsActorOverride(ctx.viewAs.info);
+  const { data: memberships } = override
+    ? {
+        data: override.memberships
+          .filter((m) => ids.includes(m.teamId))
+          .map((m) => ({ team_id: m.teamId, role: m.role as TeamRole })),
+      }
+    : ids.length
+      ? await supabase.from("team_members").select("team_id, role").eq("user_id", user.id).in("team_id", ids)
+      : { data: [] as Array<{ team_id: string; role: TeamRole }> };
 
   return {
     isAdmin: isAdminRole(role),

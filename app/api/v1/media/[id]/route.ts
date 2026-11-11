@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { signedUrl } from "@/lib/media-store";
+import { getEffectiveAuthUser } from "@/lib/view-as/state";
 
 const VIEW_SECONDS = 300;
 
@@ -13,9 +14,7 @@ const VIEW_SECONDS = 300;
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { data: row } = await supabase

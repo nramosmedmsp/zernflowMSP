@@ -26,6 +26,7 @@ import type { Database } from "@/lib/types/database";
 import { zernioAttachmentType } from "@/lib/chat-media";
 import { prepareOutgoingMedia, type OutgoingMedia } from "@/lib/media-store";
 import { recordOutboundSend } from "@/lib/outbound-log";
+import { getEffectiveAuthUser } from "@/lib/view-as/state";
 
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 
@@ -43,9 +44,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const params = request.nextUrl.searchParams;
@@ -170,9 +169,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const body = await request.json();

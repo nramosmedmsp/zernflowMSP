@@ -6,6 +6,7 @@ import { computeMetrics } from "@/lib/metrics/compute";
 import { loadMetrics } from "@/lib/metrics/load";
 import { parseMetricFilters } from "@/lib/metrics/period";
 import { MetricsView, type TabKey } from "./metrics-view";
+import { withoutSample } from "@/lib/view-as/ui-rules";
 
 export const metadata: Metadata = { title: "Métricas" };
 
@@ -41,7 +42,7 @@ export default async function MetricsPage({
   }
 
   const visibleMembers = membersPromise.then((all) =>
-    (canSeeOthers ? all : all.filter((m) => m.userId === user.id)).map((m) => ({
+    (canSeeOthers ? withoutSample(all) : all.filter((m) => m.userId === user.id)).map((m) => ({
       userId: m.userId,
       name: m.name,
     })),

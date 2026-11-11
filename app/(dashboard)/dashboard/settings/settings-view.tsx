@@ -35,6 +35,7 @@ import { saveWorkspaceSettings } from "@/lib/actions/settings";
 import { isAdminRole } from "@/lib/permissions";
 import { settingsLinksFor, type SettingsLinkKey } from "./settings-nav";
 import { useToast } from "@/components/ui/toast";
+import { useViewAs } from "@/components/view-as/view-as-context";
 import { Spinner } from "@/components/ui/spinner";
 
 const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
@@ -50,12 +51,14 @@ const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
   "whatsapp-templates": MessageCircle,
   dictionary: SpellCheck,
   source: FileCode2,
+  "view-as": Eye,
   password: KeyRound,
 };
 
 /** Navegación de Configuración: cada persona ve solo lo que puede usar. */
 function SettingsNav({ role }: { role: string | null | undefined }) {
-  const links = settingsLinksFor(role);
+  const viewingAs = useViewAs().active;
+  const links = settingsLinksFor(role, { viewingAs });
   return (
     <nav aria-label="Secciones de configuración">
       <ul className="grid gap-3 sm:grid-cols-2">

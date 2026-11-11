@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { translateSmtpError, type ResolvedMailConfig } from "@/lib/mail/config";
 import { recordMailResult, resolveMailConfig } from "@/lib/mail/settings";
 import type { MailContent } from "@/lib/mail/templates";
+import { isViewAsLocked, markReadOnlyHit, VIEW_AS_LOCKED_MESSAGE } from "@/lib/view-as/lock";
 
 export type SendMailResult =
   | { ok: true }
@@ -31,6 +32,11 @@ export async function sendAppMail(
   to: string,
   content: MailContent,
 ): Promise<SendMailResult> {
+  // "Ver como" es solo lectura: durante una vista no sale ningún correo (ni el de prueba).
+  if (await isViewAsLocked()) {
+    await markReadOnlyHit();
+    return { ok: false, notConfigured: false, error: VIEW_AS_LOCKED_MESSAGE };
+  }
   let config: ResolvedMailConfig | null;
   try {
     config = await resolveMailConfig(service);

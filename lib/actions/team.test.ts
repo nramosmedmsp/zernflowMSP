@@ -49,7 +49,7 @@ vi.mock("@/lib/supabase/admin-users", () => ({
 vi.mock("@/lib/mail/settings", () => ({ isMailConfigured: async () => state.mailConfigured }));
 vi.mock("@/lib/mail/send", () => ({ sendAppMail: vi.fn(async () => ({ ok: true })) }));
 
-import { createTeamUser, removeTeamMember } from "./team";
+import { createTeamUser, removeTeamMember, sendAccessEmail, updateTeamMember } from "./team";
 
 const WS = randomUUID();
 const OWNER = randomUUID();
@@ -203,5 +203,184 @@ describe("A-1: volver a agregar a una persona que ya tiene cuenta", () => {
     fake.seed("workspace_members", [{ workspace_id: WS2, user_id: CARLA, role: "owner" }]);
     const result = await createTeamUser(WS, input);
     expect(JSON.stringify(result)).not.toMatch(/invitaci/i);
+  });
+});
+
+describe("varios Dueños: editar usuario", () => {
+  const OWNER2 = randomUUID();
+  const WS2 = randomUUID();
+  const putUser = (id: string, email: string, name: string, extra: Record<string, unknown> = {}) => {
+    const user = {
+      id,
+      email,
+      email_confirmed_at: "2026-01-01T00:00:00Z",
+      last_sign_in_at: "2026-02-01T00:00:00Z",
+      user_metadata: { full_name: name },
+      ...extra,
+    };
+    fake.users.set(id, user as never);
+    state.authUsers.push(user);
+  };
+  const roleOf = (id: string) => fake.rows("workspace_members").find((m) => m.user_id === id && m.workspace_id === WS)?.role;
+  const edit = (id: string, over: Partial<{ fullName: string; email: string; role: string }> = {}) =>
+    updateTeamMember(WS, id, { fullName: "Ana Torres", email: "ana@x.pe", role: "member", ...over });
+
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.test";
+    state.mailConfigured = true;
+    state.authUsers = [];
+    putUser(OWNER, "dueno@x.pe", "Dueña Uno");
+    putUser(ANA, "ana@x.pe", "Ana Torres");
+    putUser(ADMIN, "admin@x.pe", "Admin Uno");
+    putUser(OWNER2, "dueno2@x.pe", "Dueño Dos");
+    fake.seed("workspace_members", [{ workspace_id: WS, user_id: OWNER2, role: "owner" }]);
+  });
+
+  it("solo un Dueño edita: un Administrador y un Miembro no", async () => {
+    as(ADMIN, "admin");
+    expect(await edit(ANA, { fullName: "Otra" })).toEqual({ error: expect.stringContaining("Solo un Dueño puede editar") });
+    as(ANA, "member");
+    expect(await edit(BETO)).toMatchObject({ error: expect.any(String) });
+    expect(fake.users.get(ANA)!.user_metadata).toEqual({ full_name: "Ana Torres" });
+  });
+
+  it("el Dueño cambia nombre y queda en actividad con quién lo hizo", async () => {
+    const result = await edit(ANA, { fullName: "Ana María Torres" });
+    expect(result).toMatchObject({ ok: true, emailChanged: false, delivery: null, member: { name: "Ana María Torres" } });
+    expect(fake.users.get(ANA)!.user_metadata).toEqual({ full_name: "Ana María Torres" });
+    expect(fake.rows("activity")).toEqual([
+      expect.objectContaining({
+        type: "config_changed",
+        actor_id: OWNER,
+        from_value: "Ana Torres",
+        to_value: "Ana María Torres",
+        meta: expect.objectContaining({ action: "member_renamed", user_id: ANA }),
+      }),
+    ]);
+  });
+
+  it("un Dueño nombra Dueño a un Miembro y queda en actividad", async () => {
+    expect(await edit(ANA, { role: "owner" })).toMatchObject({ ok: true, member: { role: "owner" } });
+    expect(roleOf(ANA)).toBe("owner");
+    expect(fake.rows("activity")[0]).toMatchObject({
+      actor_id: OWNER,
+      from_value: "member",
+      to_value: "owner",
+      meta: expect.objectContaining({ action: "member_role_changed" }),
+    });
+  });
+
+  it("un Dueño puede quitarle el rol a otro Dueño si queda al menos uno", async () => {
+    expect(await updateTeamMember(WS, OWNER2, { fullName: "Dueño Dos", email: "dueno2@x.pe", role: "admin" })).toMatchObject({ ok: true });
+    expect(roleOf(OWNER2)).toBe("admin");
+  });
+
+  it("el último Dueño no puede dejar de serlo", async () => {
+    fake.rows("workspace_members").find((m) => m.user_id === OWNER2)!.role = "member";
+    const result = await updateTeamMember(WS, OWNER, { fullName: "Dueña Uno", email: "dueno@x.pe", role: "admin" });
+    expect(result).toEqual({ error: expect.stringContaining("al menos un Dueño") });
+    expect(roleOf(OWNER)).toBe("owner");
+  });
+
+  it("rechaza un rol inventado y un correo inválido", async () => {
+    expect(await edit(ANA, { role: "superadmin" })).toMatchObject({ error: expect.stringContaining("Rol no válido") });
+    expect(await edit(ANA, { email: "no-es-correo" })).toEqual({ error: "Escribe un correo válido." });
+  });
+
+  it("cambiar el correo actualiza la cuenta, lo registra y envía el acceso al correo nuevo", async () => {
+    const result = await edit(ANA, { email: "Ana.Nueva@X.pe" });
+    expect(result).toMatchObject({ ok: true, emailChanged: true, delivery: { sent: true }, member: { email: "ana.nueva@x.pe" } });
+    expect(fake.users.get(ANA)!.email).toBe("ana.nueva@x.pe");
+    expect(fake.rows("activity")[0]).toMatchObject({
+      actor_id: OWNER,
+      from_value: "ana@x.pe",
+      to_value: "ana.nueva@x.pe",
+      meta: expect.objectContaining({ action: "member_email_changed" }),
+    });
+  });
+
+  it("sin correo de la app configurado cambia el correo y ofrece copiar el enlace", async () => {
+    state.mailConfigured = false;
+    const result = await edit(ANA, { email: "ana.nueva@x.pe" });
+    expect(result).toMatchObject({ ok: true, delivery: { sent: false, notConfigured: true } });
+    expect(fake.users.get(ANA)!.email).toBe("ana.nueva@x.pe");
+  });
+
+  it("no permite un correo que ya usa otra cuenta", async () => {
+    expect(await edit(ANA, { email: "admin@x.pe" })).toEqual({ error: "Ya existe una cuenta con ese correo." });
+    expect(fake.users.get(ANA)!.email).toBe("ana@x.pe");
+    expect(fake.rows("activity")).toHaveLength(0);
+  });
+
+  it("no asciende a Administrador o Dueño a quien también está en otro espacio", async () => {
+    fake.seed("workspaces", [{ id: WS2, name: "Otra", settings: {} }]);
+    fake.seed("workspace_members", [
+      { workspace_id: WS2, user_id: OWNER, role: "owner" },
+      { workspace_id: WS2, user_id: ANA, role: "member" },
+    ]);
+    expect(await edit(ANA, { role: "admin" })).toEqual({ error: expect.stringContaining("otro espacio de trabajo") });
+    expect(roleOf(ANA)).toBe("member");
+    // Sí puede cambiarle el nombre: es Dueño también del otro espacio.
+    expect(await edit(ANA, { fullName: "Ana T." })).toMatchObject({ ok: true });
+  });
+
+  it("no edita a quien está en otro espacio que quien llama no administra", async () => {
+    fake.seed("workspaces", [{ id: WS2, name: "Otra", settings: {} }]);
+    fake.seed("workspace_members", [{ workspace_id: WS2, user_id: ANA, role: "member" }]);
+    expect(await edit(ANA, { fullName: "Otro nombre" })).toEqual({ error: expect.stringContaining("otro espacio de trabajo") });
+  });
+});
+
+describe("varios Dueños: crear, quitar y enviar acceso", () => {
+  const OWNER2 = randomUUID();
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.test";
+    state.mailConfigured = true;
+    state.authUsers = [];
+    fake.seed("workspace_members", [{ workspace_id: WS, user_id: OWNER2, role: "owner" }]);
+  });
+
+  it("solo un Dueño puede crear a otro Dueño (el servidor lo exige)", async () => {
+    as(ADMIN, "admin");
+    expect(await createTeamUser(WS, { fullName: "Nuevo Dueño", email: "nuevo@x.pe", role: "owner" })).toEqual({
+      error: expect.stringContaining("Solo un Dueño puede nombrar"),
+    });
+    expect(fake.rows("workspace_invites")).toHaveLength(0);
+  });
+
+  it("un Dueño sí puede crear a otro Dueño", async () => {
+    state.authUsers = [
+      { id: "u-nuevo", email: "nuevo@x.pe", email_confirmed_at: "2026-01-01", last_sign_in_at: "2026-01-02", user_metadata: {} },
+    ];
+    fake.users.set("u-nuevo", state.authUsers[0] as never);
+    const result = await createTeamUser(WS, { fullName: "Nuevo Dueño", email: "nuevo@x.pe", role: "owner" });
+    expect(result).toMatchObject({ ok: true, member: { role: "owner" } });
+    expect(fake.rows("workspace_members").find((m) => m.user_id === "u-nuevo")).toMatchObject({ role: "owner" });
+  });
+
+  it("un Dueño quita a otro Dueño; un Administrador no", async () => {
+    as(ADMIN, "admin");
+    expect(await removeTeamMember(WS, OWNER2)).toMatchObject({ error: expect.stringContaining("Solo un Dueño puede quitar a otro Dueño") });
+    as(OWNER, "owner");
+    expect(await removeTeamMember(WS, OWNER2)).toEqual({ ok: true });
+    expect(members()).not.toContain(OWNER2);
+    expect(fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")).toMatchObject({ actor_id: OWNER });
+  });
+
+  it("el último Dueño no se quita", async () => {
+    as(OWNER2, "owner");
+    expect(await removeTeamMember(WS, OWNER)).toEqual({ ok: true });
+    // Queda OWNER2 solo: nadie más puede quitarlo (ni él mismo).
+    expect(await removeTeamMember(WS, OWNER2)).toMatchObject({ error: expect.any(String) });
+    expect(members()).toContain(OWNER2);
+  });
+
+  it("un Dueño puede enviar el acceso a otro Dueño; un Administrador no", async () => {
+    state.authUsers = [];
+    fake.users.set(OWNER2, { id: OWNER2, email: "o2@x.pe", email_confirmed_at: "x", last_sign_in_at: "y", user_metadata: {} } as never);
+    state.authUsers.push(fake.users.get(OWNER2)!);
+    expect(await sendAccessEmail(WS, OWNER2)).toMatchObject({ ok: true, delivery: { sent: true } });
+    as(ADMIN, "admin");
+    expect(await sendAccessEmail(WS, OWNER2)).toMatchObject({ error: expect.any(String) });
   });
 });

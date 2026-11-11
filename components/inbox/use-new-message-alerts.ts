@@ -15,6 +15,7 @@ import {
   type AlertSettings,
 } from "@/lib/inbox-alerts";
 import type { InboxCase, InboxConversation } from "./inbox-model";
+import { useViewAs } from "@/components/view-as/view-as-context";
 
 function readSettings(userId: string): AlertSettings {
   try {
@@ -23,6 +24,9 @@ function readSettings(userId: string): AlertSettings {
     return parseAlertSettings(null);
   }
 }
+
+/** Todo apagado: lo que se usa mientras se mira como otra persona. */
+const OFF_SETTINGS: AlertSettings = { ...parseAlertSettings(null), sound: false, desktop: false, tabCount: false };
 
 let audio: AudioContext | null = null;
 
@@ -66,12 +70,16 @@ export function useNewMessageAlerts({
   /** Clic en la notificación de Windows: abre ese chat. */
   onOpen: (conversationId: string) => void;
 }) {
+  // "Ver como": sin sonido, sin avisos de escritorio, sin número en la pestaña
+  // y sin leer ni escribir preferencias de esa persona en este navegador.
+  const viewing = useViewAs().active;
   const [settings, setSettings] = useState<AlertSettings>(() =>
-    typeof window === "undefined" ? parseAlertSettings(null) : readSettings(userId),
+    typeof window === "undefined" || viewing ? OFF_SETTINGS : readSettings(userId),
   );
 
   const update = useCallback(
     (patch: Partial<AlertSettings>) => {
+      if (viewing) return;
       setSettings((prev) => {
         const next = { ...prev, ...patch };
         try {
@@ -82,7 +90,7 @@ export function useNewMessageAlerts({
         return next;
       });
     },
-    [userId],
+    [userId, viewing],
   );
 
   // Mensajes nuevos: sonido y notificación.
@@ -112,7 +120,7 @@ export function useNewMessageAlerts({
       now: Date.now(),
     });
     pending.current = result.pending;
-    if (!s.sound && !s.desktop) return;
+    if (viewing || (!s.sound && !s.desktop)) return;
     const fresh = result.alertIds.map((id) => conversations.find((c) => c.id === id)!);
     if (fresh.length === 0) return;
 
@@ -131,13 +139,14 @@ export function useNewMessageAlerts({
         };
       }
     }
-  }, [conversations, casesByContact, userId]);
+  }, [conversations, casesByContact, userId, viewing]);
 
   // Número en la pestaña.
-  const count = settings.tabCount ? unreadChatsInScope(conversations, casesByContact, userId, settings.scope) : 0;
+  const count = !viewing && settings.tabCount ? unreadChatsInScope(conversations, casesByContact, userId, settings.scope) : 0;
   useEffect(() => {
+    if (viewing) return;
     document.title = titleWithCount(document.title, count);
-  }, [count]);
+  }, [count, viewing]);
   useEffect(() => () => {
     document.title = titleWithCount(document.title, 0);
   }, []);

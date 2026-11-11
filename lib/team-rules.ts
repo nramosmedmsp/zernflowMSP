@@ -6,6 +6,9 @@ import { SET_PASSWORD_PATH, isSignupRequiresInviteError } from "@/lib/auth-helpe
 export type AssignableRole = "member" | "admin";
 export const ASSIGNABLE_ROLES: readonly AssignableRole[] = ["member", "admin"];
 
+/** Rol que se puede asignar: además de Miembro y Administrador, "owner" (solo lo da un Dueño). */
+export type GrantableRole = AssignableRole | "owner";
+
 export type MemberStatus = "active" | "pending";
 
 export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
@@ -20,10 +23,40 @@ export function canManageTeam(role: string | null | undefined): boolean {
   return role === "owner" || role === "admin";
 }
 
-/** Roles que se pueden asignar al crear un usuario (nunca "owner"). */
+/** Roles que cualquiera que administre el equipo puede asignar (el de Dueño lo da isGrantableRole). */
 export function isAssignableRole(role: unknown): role is AssignableRole {
   return role === "member" || role === "admin";
 }
+
+/**
+ * ¿Puede `actorRole` dar `role` a otra persona? Miembro y Administrador, los
+ * puede dar cualquiera que administre el equipo; Dueño, solo otro Dueño.
+ */
+export function isGrantableRole(role: unknown, actorRole: string | null | undefined): role is GrantableRole {
+  if (isAssignableRole(role)) return true;
+  return role === "owner" && actorRole === "owner";
+}
+
+/** Solo un Dueño edita a las personas del equipo (nombre, correo y rol). */
+export function canEditMembers(role: string | null | undefined): boolean {
+  return role === "owner";
+}
+
+export const EDIT_MEMBER_DENIED_MESSAGE = "Solo un Dueño puede editar a las personas del equipo.";
+
+export const LAST_OWNER_MESSAGE =
+  "Siempre debe quedar al menos un Dueño. Primero nombra a otro Dueño.";
+
+export const SOLE_OWNER_NOTICE =
+  "Eres el único Dueño: no puedes dejar de serlo ni ser eliminado. Primero nombra a otro Dueño.";
+
+export const OTHER_WORKSPACE_PROMOTION_MESSAGE =
+  "Esa persona también pertenece a otro espacio de trabajo, así que no puede ser Dueño ni Administrador aquí.";
+
+export const OWNER_GRANT_DENIED_MESSAGE = "Solo un Dueño puede nombrar a otro Dueño.";
+
+export const OWNER_PROMOTION_WARNING =
+  "será Dueño: podrá ver y cambiar todo, incluidas las claves de conexión, nombrar o quitar otros Dueños y usar «Ver como».";
 
 interface ActorTarget {
   actorId: string;
@@ -33,11 +66,30 @@ interface ActorTarget {
 }
 
 /**
- * ¿Puede `actor` quitar a `target` del espacio? Devuelve el motivo en español
- * si no puede, o null si sí. Nadie puede quitar al Dueño ni quitarse a sí mismo,
- * y a un Administrador solo lo quita el Dueño (R2-13).
+ * ¿Puede `actor` cambiar nombre, correo y rol de `target`? Solo un Dueño. El
+ * último Dueño no puede dejar de serlo (`ownerCount` = Dueños que hay hoy en el
+ * espacio). Devuelve el motivo en español o null.
  */
-export function removeMemberError(params: ActorTarget): string | null {
+export function editMemberError(
+  params: ActorTarget & { newRole: string; ownerCount: number },
+): string | null {
+  if (!canEditMembers(params.actorRole)) return EDIT_MEMBER_DENIED_MESSAGE;
+  if (params.newRole !== "owner" && params.newRole !== "admin" && params.newRole !== "member") {
+    return "Rol no válido. Elige Miembro, Administrador o Dueño.";
+  }
+  if (params.targetRole === "owner" && params.newRole !== "owner" && params.ownerCount <= 1) {
+    return LAST_OWNER_MESSAGE;
+  }
+  return null;
+}
+
+/**
+ * ¿Puede `actor` quitar a `target` del espacio? Devuelve el motivo en español
+ * si no puede, o null si sí. Nadie se quita a sí mismo; a un Administrador o a
+ * otro Dueño solo lo quita un Dueño (R2-13), y el último Dueño nunca se quita
+ * (`ownerCount` = Dueños que hay hoy; si no se pasa, no se aplica esa regla).
+ */
+export function removeMemberError(params: ActorTarget & { ownerCount?: number }): string | null {
   if (!canManageTeam(params.actorRole)) {
     return "Solo el Dueño o un Administrador pueden quitar miembros.";
   }
@@ -45,7 +97,10 @@ export function removeMemberError(params: ActorTarget): string | null {
     return "No puedes quitarte a ti mismo del espacio de trabajo.";
   }
   if (params.targetRole === "owner") {
-    return "No se puede quitar al Dueño del espacio de trabajo.";
+    if (params.actorRole !== "owner") {
+      return "Solo un Dueño puede quitar a otro Dueño del espacio de trabajo.";
+    }
+    if (params.ownerCount !== undefined && params.ownerCount <= 1) return LAST_OWNER_MESSAGE;
   }
   if (params.targetRole === "admin" && params.actorRole !== "owner") {
     return "Solo el Dueño puede quitar a un Administrador del espacio de trabajo.";
@@ -119,20 +174,26 @@ function rank(role: string | null | undefined): number {
 /**
  * Autoridad del actor sobre el objetivo en TODOS los espacios del objetivo:
  * en cada uno el actor debe ser Dueño o Administrador y tener un rol
- * estrictamente superior al del objetivo (nadie supera a un Dueño). Devuelve el
+ * estrictamente superior al del objetivo (nadie supera a un Dueño, salvo un Dueño en el espacio actual). Devuelve el
  * motivo en español o null. Un objetivo sin espacios se rechaza.
  */
 export function crossWorkspaceAuthorityError(params: {
   actorMemberships: readonly RoleMembership[];
   targetMemberships: readonly RoleMembership[];
+  /**
+   * Espacio donde se actúa. Allí un Dueño tiene autoridad sobre cualquier rol,
+   * otro Dueño incluido (puede haber varios); en los demás espacios sigue
+   * valiendo el rol estrictamente superior.
+   */
+  currentWorkspaceId?: string;
 }): string | null {
   if (params.targetMemberships.length === 0) return CROSS_WORKSPACE_DENIED_MESSAGE;
   const actorRoles = new Map(params.actorMemberships.map((m) => [m.workspaceId, m.role]));
   for (const target of params.targetMemberships) {
     const actorRole = actorRoles.get(target.workspaceId);
-    if (!canManageTeam(actorRole) || rank(actorRole) <= rank(target.role)) {
-      return CROSS_WORKSPACE_DENIED_MESSAGE;
-    }
+    if (!canManageTeam(actorRole)) return CROSS_WORKSPACE_DENIED_MESSAGE;
+    if (target.workspaceId === params.currentWorkspaceId && actorRole === "owner") continue;
+    if (rank(actorRole) <= rank(target.role)) return CROSS_WORKSPACE_DENIED_MESSAGE;
   }
   return null;
 }
@@ -181,6 +242,11 @@ export function accessLinkTypeFor(emailConfirmed: boolean): AccessLinkType {
 export function accessLinkUrl(baseUrl: string, hashedToken: string, type: AccessLinkType): string {
   const params = new URLSearchParams({ token_hash: hashedToken, type, next: SET_PASSWORD_PATH });
   return `${baseUrl.replace(/\/+$/, "")}/auth/confirm?${params.toString()}`;
+}
+
+/** ¿Son el mismo correo (sin distinguir mayúsculas ni espacios)? */
+export function sameEmailAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -282,6 +348,17 @@ export interface TeamMemberView {
   name: string;
   status: MemberStatus;
   emailConfirmed: boolean;
+}
+
+export interface TeamRoleEntry {
+  name: string;
+  role: string;
+}
+
+/** "Ventas (supervisor) · Atención (asesor)", o "ninguno" si no está en equipos. */
+export function teamsSummary(entries: readonly TeamRoleEntry[] | null | undefined): string {
+  if (!entries || entries.length === 0) return "ninguno";
+  return entries.map((e) => `${e.name} (${e.role === "supervisor" ? "supervisor" : "asesor"})`).join(" · ");
 }
 
 /** Nombre para mostrar: full_name, name o la parte local del correo. */

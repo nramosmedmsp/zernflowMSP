@@ -2,6 +2,8 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { effectiveUserFor, getRealSession, getViewAsState } from "@/lib/view-as/state";
+import type { Database, MemberAvailability, WorkspaceRole } from "@/lib/types/database";
 
 export const WORKSPACE_COOKIE = "zernflow_workspace_id";
 
@@ -31,27 +33,48 @@ export interface SessionUser {
  * Cached per-request: deduplicates across layout + page in the same render.
  * Una sola consulta trae todas las membresías con su espacio; se elige el de
  * la cookie y, si no, el primero.
+ *
+ * Devuelve la identidad EFECTIVA: con una vista de "Ver como" activa, `user`,
+ * `role`, `availability` y `workspace` son los de la persona (o rol de ejemplo)
+ * que se está viendo, y `viewAs` lleva el detalle; `realUser` es siempre quien
+ * inició sesión. Sin vista, es exactamente la identidad de siempre.
  */
 export const getWorkspace = cache(async () => {
   const supabase = await createClient();
-  const { data: claimsData } = await supabase.auth.getClaims();
-  const claims = claimsData?.claims;
+  const real = await getRealSession();
 
-  if (!claims?.sub) redirect("/login");
+  if (!real) redirect("/login");
 
-  const user: SessionUser = {
-    id: claims.sub,
-    email: typeof claims.email === "string" ? claims.email : undefined,
-    user_metadata: (claims.user_metadata as Record<string, unknown> | undefined) ?? {},
-  };
+  const viewAs = await getViewAsState();
+  const user: SessionUser = effectiveUserFor(real.user, viewAs);
+  const info = viewAs.active ? viewAs.info : null;
 
   const cookieStore = await cookies();
   const selectedId = cookieStore.get(WORKSPACE_COOKIE)?.value;
 
-  const { data: memberships } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, role, availability, workspaces(*)")
-    .eq("user_id", user.id);
+  type Membership = {
+    workspace_id: string;
+    role: string;
+    availability: string;
+    workspaces: Database["public"]["Tables"]["workspaces"]["Row"] | null;
+  };
+  let memberships: Membership[] | null;
+  if (info && info.kind === "role") {
+    // Identidad de ejemplo: no tiene filas en workspace_members. El espacio y el
+    // rol vienen de la vista; el espacio se lee con la identidad efectiva (RLS).
+    const { data: ws } = await supabase.from("workspaces").select("*").eq("id", info.workspaceId).maybeSingle();
+    memberships = ws
+      ? [{ workspace_id: info.workspaceId, role: info.roleWs ?? "member", availability: "available", workspaces: ws }]
+      : [];
+  } else {
+    const query = supabase
+      .from("workspace_members")
+      .select("workspace_id, role, availability, workspaces(*)")
+      .eq("user_id", user.id);
+    // En vista el espacio queda fijado al de la vista.
+    const { data } = await (info ? query.eq("workspace_id", info.workspaceId) : query);
+    memberships = data as Membership[] | null;
+  }
 
   const usable = (memberships ?? []).filter((m) => m.workspaces);
   const membership = usable.find((m) => m.workspace_id === selectedId) ?? usable[0];
@@ -62,13 +85,17 @@ export const getWorkspace = cache(async () => {
   return {
     user,
     workspace: withoutLegacySecrets(membership.workspaces),
-    role: membership.role,
-    availability: membership.availability,
+    role: membership.role as WorkspaceRole,
+    availability: membership.availability as MemberAvailability,
     /** Espacios de la persona (solo id, nombre y slug; nada de secretos). */
     workspaces: usable.map((m) => {
       const w = m.workspaces as unknown as { id: string; name: string; slug: string };
       return { id: w.id, name: w.name, slug: w.slug, role: m.role };
     }),
     supabase,
+    /** Persona que inició sesión (el Dueño, también durante una vista). */
+    realUser: real.user,
+    /** Estado de "Ver como": `active` con la vista vigente; `ended` si hay candado pero la base ya la cerró. */
+    viewAs,
   };
 });

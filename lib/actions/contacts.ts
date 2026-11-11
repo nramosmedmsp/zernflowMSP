@@ -10,6 +10,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
+import { viewAsActorOverride } from "@/lib/view-as/rules";
 import { isDateString } from "@/lib/cases/dates";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
 import { confirmContactTypeRow, isMissingColumn, recordContactTypeChange, setContactTypeRow } from "@/lib/cases/contact-type";
@@ -65,9 +66,10 @@ interface Session {
 }
 
 async function session(): Promise<Session | { error: string }> {
-  const { user, workspace } = await getWorkspace();
+  const { user, workspace, viewAs } = await getWorkspace();
   const db = await createServiceClient();
-  const actor = await loadWorkspaceActor(db, workspace.id, user.id);
+  // "Ver como" por rol: la identidad de ejemplo no tiene filas de membresía.
+  const actor = await loadWorkspaceActor(db, workspace.id, user.id, viewAsActorOverride(viewAs.info));
   if (!actor.role) return { error: "No eres miembro de este espacio de trabajo." };
   return { userId: user.id, workspaceId: workspace.id, db, actor };
 }

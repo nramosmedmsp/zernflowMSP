@@ -247,7 +247,7 @@ export function ContactPanel({
     if (providedMembers) return;
     let cancelled = false;
     void listCaseMembers().then((r) => {
-      if (!cancelled && "members" in r) setLoadedMembers(r.members.map((m) => ({ userId: m.userId, name: m.name })));
+      if (!cancelled && "members" in r) setLoadedMembers(r.members.filter((m) => !m.sample).map((m) => ({ userId: m.userId, name: m.name })));
     });
     return () => {
       cancelled = true;

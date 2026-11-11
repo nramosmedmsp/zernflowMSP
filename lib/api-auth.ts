@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import { effectiveAuthUser, getVerifiedAuthUser, getViewAsState } from "@/lib/view-as/state";
 import { WORKSPACE_COOKIE } from "@/lib/workspace";
 import { ADMIN_ONLY_MESSAGE, OWNER_ONLY_SECRETS_MESSAGE, isAdminRole, isOwnerRole } from "@/lib/permissions";
 
@@ -36,13 +37,21 @@ function fail(status: number, error: string): ApiGuard {
 /** Usuario y membresía del espacio activo, con el mismo criterio que getWorkspace(). */
 async function resolve(): Promise<ApiGuard> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return fail(401, UNAUTHORIZED_MESSAGE);
+  const realUser = await getVerifiedAuthUser(supabase);
+  if (!realUser) return fail(401, UNAUTHORIZED_MESSAGE);
+
+  // "Ver como": identidad y espacio de la persona que se está viendo.
+  const viewAs = await getViewAsState();
+  const info = viewAs.active ? viewAs.info : null;
+  const user = effectiveAuthUser(realUser, viewAs);
+
+  if (info && info.kind === "role") {
+    // Identidad de ejemplo: no tiene filas en workspace_members.
+    return { ok: true, ctx: { supabase, user, workspaceId: info.workspaceId, role: info.roleWs ?? "member" } };
+  }
 
   const cookieStore = await cookies();
-  const selectedId = cookieStore.get(WORKSPACE_COOKIE)?.value;
+  const selectedId = info ? info.workspaceId : cookieStore.get(WORKSPACE_COOKIE)?.value;
 
   if (selectedId) {
     const { data } = await supabase

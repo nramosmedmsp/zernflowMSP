@@ -20,7 +20,9 @@ import {
   Moon,
   Sun,
   KeyRound,
+  Lock,
 } from "lucide-react";
+import { useViewAs } from "@/components/view-as/view-as-context";
 import { createClient } from "@/lib/supabase/client";
 import { Spinner } from "@/components/ui/spinner";
 import { useRouter } from "next/navigation";
@@ -160,6 +162,8 @@ export function Sidebar({
   workspaces: WorkspaceItem[];
 }) {
   const pathname = usePathname();
+  const viewAs = useViewAs();
+  const viewing = viewAs.active;
   // Ítem pulsado: se marca al instante, antes de que el servidor responda.
   const [clicked, setClicked] = useState<{ href: string; from: string } | null>(null);
   const optimisticHref = clicked && clicked.from === pathname ? clicked.href : null;
@@ -178,6 +182,10 @@ export function Sidebar({
   }
 
   async function handleSignOut() {
+    // Si quedó una vista abierta (o terminada), se cierra antes de salir.
+    if (viewAs.locked) {
+      await fetch("/api/v1/view-as/stop", { method: "POST" }).catch(() => {});
+    }
     // Los borradores de la bandeja son de esta persona: no quedan en la PC.
     clearUserDrafts(draftStorage(), user.id);
     await supabase.auth.signOut();
@@ -198,7 +206,20 @@ export function Sidebar({
           </Link>
           <NotificationBell userId={user.id} workspaceId={workspace.id} />
         </div>
-        <WorkspaceSwitcher current={workspace} workspaces={workspaces} />
+        {viewing ? (
+          // En vista no se cambia ni se crea espacio: queda fijado al de la vista.
+          <div className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${encodeURIComponent(workspace.id)}&size=28`}
+              alt=""
+              className="h-7 w-7 rounded-md"
+            />
+            <span className="flex-1 truncate text-sm font-semibold text-sidebar-foreground">{workspace.name}</span>
+          </div>
+        ) : (
+          <WorkspaceSwitcher current={workspace} workspaces={workspaces} />
+        )}
       </div>
 
       <nav className="flex-1 space-y-1 p-3">
@@ -228,14 +249,35 @@ export function Sidebar({
       </nav>
 
       <div className="border-t border-sidebar-border p-3 space-y-1">
-        <div className="mb-1 space-y-2 rounded-lg bg-sidebar-accent/50 px-3 py-2">
+        <div
+          data-view-as-user={viewing ? "true" : undefined}
+          className={cn("mb-1 space-y-2 rounded-lg bg-sidebar-accent/50 px-3 py-2", viewing && "ring-2 ring-amber-400/80")}
+        >
           <div className="min-w-0">
             <p className="truncate text-sm font-medium" title={user.email ?? userName}>
               {userName}
             </p>
             <p className="truncate text-xs text-sidebar-foreground/60">{ROLE_LABELS[role] ?? "Miembro"}</p>
           </div>
-          <AvailabilityToggle initial={availability} />
+          {viewing ? (
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className={cn("h-2 w-2 shrink-0 rounded-full", availability === "available" ? "bg-green-500" : "bg-gray-400")}
+              />
+              <span className="flex-1 text-xs text-sidebar-foreground/70">
+                {availability === "available" ? "Disponible" : "Ausente"}
+              </span>
+              <span
+                title="Solo lectura: no puedes cambiar el estado de otra persona"
+                className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-300"
+              >
+                <Lock className="h-3 w-3" /> Solo lectura
+              </span>
+            </div>
+          ) : (
+            <AvailabilityToggle initial={availability} />
+          )}
         </div>
         <button
           onClick={toggleTheme}
@@ -244,20 +286,24 @@ export function Sidebar({
           {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           {dark ? "Modo claro" : "Modo oscuro"}
         </button>
-        <Link
-          href="/cuenta/contrasena"
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
-        >
-          <KeyRound className="h-4 w-4" />
-          Cambiar contraseña
-        </Link>
-        <button
-          onClick={handleSignOut}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
-        >
-          <LogOut className="h-4 w-4" />
-          Cerrar sesión
-        </button>
+        {!viewing && (
+          <>
+            <Link
+              href="/cuenta/contrasena"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+            >
+              <KeyRound className="h-4 w-4" />
+              Cambiar contraseña
+            </Link>
+            <button
+              onClick={handleSignOut}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Cerrar sesión
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

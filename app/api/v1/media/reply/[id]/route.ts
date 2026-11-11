@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { signedUrl } from "@/lib/media-store";
 import { isReplyFilePath } from "@/lib/chat-media";
+import { getEffectiveAuthUser } from "@/lib/view-as/state";
 
 /**
  * GET /api/v1/media/reply/{replyId}
@@ -12,9 +13,7 @@ import { isReplyFilePath } from "@/lib/chat-media";
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const { data: reply } = await supabase.from("saved_replies").select("attachment_url, workspace_id").eq("id", id).maybeSingle();

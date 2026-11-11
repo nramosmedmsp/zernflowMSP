@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { withoutSample } from "@/lib/view-as/ui-rules";
 import Link from "next/link";
 import { getWorkspace } from "@/lib/workspace";
 import { listCaseMembers } from "@/lib/actions/cases";
@@ -245,7 +246,7 @@ export default async function ContactDetailPage({
                 }))}
                 typeInfo={typeInfo}
                 teams={teamsRes.data ?? []}
-                members={members.map((m) => ({ userId: m.userId, name: m.name }))}
+                members={withoutSample(members).map((m) => ({ userId: m.userId, name: m.name }))}
                 tags={tags}
                 allTags={allTagsRes.data ?? []}
               />

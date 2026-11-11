@@ -1,6 +1,18 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { safeNextPath } from "@/lib/auth-helpers";
+import { VIEW_AS_COOKIE, VIEW_AS_HIT_COOKIE, parseViewAsCookie, type ViewAsCookie } from "@/lib/view-as/cookie";
+import {
+  VIEW_AS_READ_ONLY_CODE,
+  VIEW_AS_READ_ONLY_MESSAGE,
+  decideViewAsRequest,
+  isStaleViewAsCookie,
+  isViewAsGuardExemptPath,
+} from "@/lib/view-as/guard";
+
+// Cookie de vista con formato no válido (falsificada o dañada): se trata como una
+// vista vencida, la más estricta, y solo /api/v1/view-as/stop la quita.
+const UNREADABLE_VIEW_COOKIE: ViewAsCookie = { sid: "", viewer: "", exp: 0 };
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -47,6 +59,37 @@ export async function updateSession(request: NextRequest) {
   const isNoWorkspace = pathname === "/sin-espacio";
   // /invite/<id> is public: it only explains that invitations now arrive by
   // email, so it falls through untouched.
+
+  // "Ver como" (capa 3 del solo lectura). Una cookie de vista de OTRA persona
+  // (quedó de una sesión anterior) se descarta; con una cookie propia, las
+  // escrituras no pasan (ver lib/view-as/guard.ts). Sin cookie no cambia nada.
+  let viewCookieRaw = request.cookies.get(VIEW_AS_COOKIE)?.value;
+  if (viewCookieRaw) {
+    const parsed = parseViewAsCookie(viewCookieRaw);
+    if (isStaleViewAsCookie(parsed, user?.id)) {
+      const carried = supabaseResponse.cookies.getAll();
+      request.cookies.delete(VIEW_AS_COOKIE);
+      supabaseResponse = NextResponse.next({ request });
+      carried.forEach((cookie) => supabaseResponse.cookies.set(cookie));
+      supabaseResponse.cookies.set(VIEW_AS_COOKIE, "", { path: "/", maxAge: 0 });
+      viewCookieRaw = undefined;
+    } else if (!isViewAsGuardExemptPath(pathname)) {
+      const decision = decideViewAsRequest({
+        method: request.method,
+        pathname,
+        cookie: parsed ?? UNREADABLE_VIEW_COOKIE,
+      });
+      if (!decision.allow) {
+        const blocked = NextResponse.json(
+          { error: VIEW_AS_READ_ONLY_MESSAGE, code: VIEW_AS_READ_ONLY_CODE, reason: decision.reason },
+          { status: 403 },
+        );
+        blocked.cookies.set(VIEW_AS_HIT_COOKIE, String(Date.now()), { path: "/", httpOnly: false, sameSite: "lax", maxAge: 60 });
+        supabaseResponse.cookies.getAll().forEach((cookie) => blocked.cookies.set(cookie));
+        return blocked;
+      }
+    }
+  }
 
   // Auth callback and API routes (including webhooks) always pass through
   if (isAuthCallback || isApiRoute) {

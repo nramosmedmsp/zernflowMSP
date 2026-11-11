@@ -19,6 +19,7 @@ export type SettingsLinkKey =
   | "whatsapp-templates"
   | "dictionary"
   | "source"
+  | "view-as"
   | "password";
 
 export interface SettingsLink {
@@ -29,6 +30,8 @@ export interface SettingsLink {
   adminOnly: boolean;
   /** Solo el Dueño la ve (el correo SMTP es de toda la instalación). */
   ownerOnly?: boolean;
+  /** No se muestra mientras el Dueño mira como otra persona ("Ver como"). */
+  hiddenInViewAs?: boolean;
 }
 
 export const SETTINGS_LINKS: readonly SettingsLink[] = [
@@ -97,6 +100,15 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     adminOnly: true,
   },
   {
+    key: "view-as",
+    title: "Registro de «Ver como»",
+    description: "Quién miró la app como otra persona, a quién y por cuánto tiempo.",
+    href: "/dashboard/settings/view-as",
+    adminOnly: true,
+    ownerOnly: true,
+    hiddenInViewAs: true,
+  },
+  {
     key: "replies",
     title: "Respuestas guardadas",
     description: "Textos listos para usar en la bandeja escribiendo «/».",
@@ -123,13 +135,20 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     description: "Actualiza la contraseña de tu cuenta.",
     href: "/cuenta/contrasena",
     adminOnly: false,
+    hiddenInViewAs: true,
   },
 ];
 
 /** Enlaces que ve un rol. Un rol desconocido o ausente se trata como Miembro. */
-export function settingsLinksFor(role: string | null | undefined): SettingsLink[] {
+export function settingsLinksFor(
+  role: string | null | undefined,
+  options: { viewingAs?: boolean } = {},
+): SettingsLink[] {
   const admin = isAdminRole(role);
   return SETTINGS_LINKS.filter(
-    (link) => (admin || !link.adminOnly) && (!link.ownerOnly || canManageMailSettings(role)),
+    (link) =>
+      (admin || !link.adminOnly) &&
+      (!link.ownerOnly || canManageMailSettings(role)) &&
+      !(options.viewingAs && link.hiddenInViewAs),
   );
 }

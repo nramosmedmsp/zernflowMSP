@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { formatDate, formatTime } from "@/lib/format";
 import { firstName } from "@/lib/names";
 import { readDraft, writeDraft, type DraftMode } from "@/lib/drafts";
+import { useViewAs } from "@/components/view-as/view-as-context";
 import { replaceRange, slashQueryAt } from "@/lib/saved-replies";
 import {
   applyReviewItems,
@@ -53,7 +54,8 @@ const REVIEW_OFF_KEY = "zf:send-review:off:";
 const COMPOSER_MIN_HEIGHT = 84;
 const COMPOSER_MAX_HEIGHT = 240;
 
-function reviewDisabled(userId: string): boolean {
+function reviewDisabled(userId: string, viewing = false): boolean {
+  if (viewing) return false;
   try {
     return window.localStorage.getItem(REVIEW_OFF_KEY + userId) === "1";
   } catch {
@@ -61,7 +63,8 @@ function reviewDisabled(userId: string): boolean {
   }
 }
 
-function setReviewDisabled(userId: string, off: boolean): void {
+function setReviewDisabled(userId: string, off: boolean, viewing = false): void {
+  if (viewing) return;
   try {
     if (off) window.localStorage.setItem(REVIEW_OFF_KEY + userId, "1");
     else window.localStorage.removeItem(REVIEW_OFF_KEY + userId);
@@ -106,9 +109,12 @@ export function Composer({
   isAdmin?: boolean;
 }) {
   const scope = { userId: me.userId, workspaceId: conversation.workspace_id };
+  // "Ver como": caja deshabilitada y sin leer ni guardar borradores de la persona vista.
+  const viewAs = useViewAs();
+  const viewing = viewAs.active;
   const [texts, setTexts] = useState<Record<DraftMode, string>>(() => ({
-    message: readDraft(draftStorage(), scope, conversation.id, "message"),
-    note: readDraft(draftStorage(), scope, conversation.id, "note"),
+    message: readDraft(draftStorage(viewing), scope, conversation.id, "message"),
+    note: readDraft(draftStorage(viewing), scope, conversation.id, "note"),
   }));
   // Si solo quedó escrita una nota interna, el chat abre en modo nota: así el borrador se ve (R2-B16).
   const [noteMode, setNoteMode] = useState(() => !!noteCase && !!texts.note.trim() && !texts.message.trim());
@@ -154,8 +160,8 @@ export function Composer({
   // Con la revisión ortográfica apagada, las {variables} sin reemplazar se revisan igual (R2-B9).
   const [reviewOff, setReviewOff] = useState(false);
   useEffect(() => {
-    setReviewOff(reviewDisabled(me.userId));
-  }, [me.userId]);
+    setReviewOff(reviewDisabled(me.userId, viewing));
+  }, [me.userId, viewing]);
   const allItems = buildReviewItems(input, spell.issues, ignoredWords);
   const items = reviewOff ? allItems.filter((i) => i.source === "llave") : allItems;
   const marks: TextMark[] = [...underlineMarks(items), ...(fixed ?? []).map((r) => ({ ...r, tone: "fixed" as const }))];
@@ -187,10 +193,11 @@ export function Composer({
   const conversationId = conversation.id;
   const saveDraft = useCallback(
     (draftMode: DraftMode, text: string) => {
+      if (viewing) return;
       writeDraft(draftStorage(), { userId, workspaceId }, conversationId, draftMode, text);
       notifyDraftsChanged();
     },
-    [userId, workspaceId, conversationId],
+    [userId, workspaceId, conversationId, viewing],
   );
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -362,7 +369,7 @@ export function Composer({
   }
 
   const hasFiles = !noteMode && attachments.items.length > 0;
-  const canSubmit = (!!input.trim() || hasFiles) && !savingNote && !(hasFiles && attachments.preparing);
+  const canSubmit = !viewing && (!!input.trim() || hasFiles) && !savingNote && !(hasFiles && attachments.preparing);
 
   /**
    * Enter y el botón Enviar hacen lo mismo. En un mensaje: sin nada por revisar
@@ -371,6 +378,7 @@ export function Composer({
    * internas nunca se frenan.
    */
   async function handleSubmit({ asIs = false }: { asIs?: boolean } = {}) {
+    if (viewing) return;
     const text = input.trim();
     if (!canSubmit) return;
     setError(null);
@@ -517,7 +525,16 @@ export function Composer({
     return (
       <div className="border-t border-border p-4">
         <div className="mx-auto max-w-2xl space-y-2">
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          {viewAs.composerNote && (
+            <p
+              data-testid="view-as-composer-note"
+              className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              <Lock className="h-4 w-4 shrink-0" />
+              {viewAs.composerNote}
+            </p>
+          )}
+<div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
             <Lock className="h-4 w-4 shrink-0" />
             <div className="min-w-0 flex-1">
               <p>
@@ -539,7 +556,8 @@ export function Composer({
             </div>
             <button
               onClick={() => setTemplateOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+              disabled={viewing}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FileText className="h-4 w-4" />
               Usar plantilla
@@ -548,7 +566,8 @@ export function Composer({
           {canNote && (
             <button
               onClick={() => setNoteMode(true)}
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              disabled={viewing}
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               <StickyNote className="h-3.5 w-3.5" />
               Escribir una nota interna
@@ -594,11 +613,20 @@ export function Composer({
         </div>
       )}
       <div className="mx-auto max-w-2xl space-y-2">
-        <div className="flex items-center justify-between">
+        {viewAs.composerNote && (
+          <p
+            data-testid="view-as-composer-note"
+            className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            <Lock className="h-4 w-4 shrink-0" />
+            {viewAs.composerNote}
+          </p>
+        )}
+<div className="flex items-center justify-between">
           <label
             className={cn(
               "inline-flex cursor-pointer items-center gap-2 text-xs",
-              !canNote && "cursor-not-allowed opacity-50",
+              (!canNote || viewing) && "cursor-not-allowed opacity-50",
             )}
             title={canNote ? undefined : "Abre una gestión para escribir notas internas"}
           >
@@ -606,7 +634,7 @@ export function Composer({
               type="button"
               role="switch"
               aria-checked={noteMode}
-              disabled={!canNote}
+              disabled={!canNote || viewing}
               onClick={() => {
                 setNoteMode((v) => !v);
                 setMention(null);
@@ -699,6 +727,7 @@ export function Composer({
             )}
             <HighlightedTextarea
               ref={textareaRef}
+              disabled={viewing}
               value={input}
               marks={marks}
               minHeight={COMPOSER_MIN_HEIGHT}
@@ -776,12 +805,14 @@ export function Composer({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={toggleReplies}
+              disabled={viewing}
               data-replies-toggle
               aria-expanded={browsing}
               title="Ver y elegir respuestas guardadas (también escribiendo /)"
               className={cn(
                 "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
                 browsing && "bg-accent text-foreground",
+                viewing && "cursor-not-allowed opacity-50 hover:bg-transparent",
               )}
             >
               <Zap className="h-3.5 w-3.5" />
@@ -793,7 +824,7 @@ export function Composer({
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!canAttach}
+                  disabled={!canAttach || viewing}
                   title={
                     canAttach
                       ? "Adjuntar foto o PDF (también puedes arrastrarlo o pegarlo con Ctrl+V)"

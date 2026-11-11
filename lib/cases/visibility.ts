@@ -23,15 +23,32 @@ function settingsFlag(settings: unknown, key: string): boolean {
   );
 }
 
+/**
+ * Rol y equipos de una identidad de ejemplo de "Ver como" (por rol): no tiene
+ * filas en workspace_members ni team_members, así que se pasan aquí. Sale de
+ * viewAsActorOverride(getWorkspace().viewAs.info).
+ */
+export interface ActorOverride {
+  role: WorkspaceRole;
+  memberships: { teamId: string; role: TeamRole }[];
+}
+
 /** Rol, equipos y configuración de visibilidad de un usuario en un espacio. */
-export async function loadWorkspaceActor(db: Db, workspaceId: string, userId: string): Promise<WorkspaceActor> {
+export async function loadWorkspaceActor(
+  db: Db,
+  workspaceId: string,
+  userId: string,
+  override?: ActorOverride | null,
+): Promise<WorkspaceActor> {
   const [{ data: member }, { data: ws }, { data: teams }] = await Promise.all([
-    db
-      .from("workspace_members")
-      .select("role")
-      .eq("workspace_id", workspaceId)
-      .eq("user_id", userId)
-      .maybeSingle(),
+    override
+      ? Promise.resolve({ data: { role: override.role } })
+      : db
+          .from("workspace_members")
+          .select("role")
+          .eq("workspace_id", workspaceId)
+          .eq("user_id", userId)
+          .maybeSingle(),
     db.from("workspaces").select("settings").eq("id", workspaceId).maybeSingle(),
     db
       .from("teams")
@@ -41,7 +58,9 @@ export async function loadWorkspaceActor(db: Db, workspaceId: string, userId: st
       .order("name", { ascending: true }),
   ]);
   const teamIds = (teams ?? []).map((t) => t.id);
-  const { data: memberships } = teamIds.length
+  const { data: memberships } = override
+    ? { data: override.memberships.filter((m) => teamIds.includes(m.teamId)).map((m) => ({ team_id: m.teamId, role: m.role })) }
+    : teamIds.length
     ? await db.from("team_members").select("team_id, role").eq("user_id", userId).in("team_id", teamIds)
     : { data: [] as { team_id: string; role: TeamRole }[] };
 

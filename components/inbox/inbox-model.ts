@@ -28,6 +28,8 @@ export interface InboxMember {
   email: string | null;
   availability: MemberAvailability;
   teams: { teamId: string; role: TeamRole }[];
+  /** "Ver como" por rol: identidad de ejemplo. No se asigna ni se menciona. */
+  sample?: boolean;
 }
 
 export interface InboxCaseType {
@@ -626,6 +628,7 @@ export function mentionQueryAt(text: string, caret: number): { start: number; qu
 export function filterMembers(members: readonly InboxMember[], query: string, limit = 6): InboxMember[] {
   const q = normalize(query.trim());
   return members
+    .filter((m) => !m.sample)
     .filter((m) => !q || normalize(m.name).includes(q) || (!!m.email && normalize(m.email).includes(q)))
     .slice(0, limit);
 }

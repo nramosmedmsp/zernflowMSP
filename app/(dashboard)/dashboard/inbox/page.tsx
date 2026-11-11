@@ -117,6 +117,7 @@ export default async function InboxPage() {
       email: m.email,
       availability: m.availability,
       teams: m.teams.map((t) => ({ teamId: t.teamId, role: t.role })),
+      ...(m.sample ? { sample: true } : {}),
     })),
   };
 
