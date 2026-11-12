@@ -19,12 +19,13 @@ te diseñe uno. Para entender el resto del CRM (gestiones, equipos, roles) lee a
 8. [Atención humana y pausa del bot](#8-atención-humana-y-pausa-del-bot)
 9. [Prioridad de palabras clave y choques](#9-prioridad-de-palabras-clave-y-choques)
 10. [Los 10 flujos publicados de la tienda](#10-los-10-flujos-publicados-de-la-tienda)
-11. [Las plantillas de flujos](#11-las-plantillas-de-flujos)
-12. [Publicar, versiones y restaurar](#12-publicar-versiones-y-restaurar)
-13. [Probar un flujo](#13-probar-un-flujo)
-14. [Buenas prácticas y errores comunes](#14-buenas-prácticas-y-errores-comunes)
-15. [Diseñar un flujo con ayuda de Claude](#15-diseñar-un-flujo-con-ayuda-de-claude)
-16. [Para técnicos: formato de las plantillas de flujo](#16-para-técnicos-formato-de-las-plantillas-de-flujo)
+11. [Antes de usar los flujos con clientes reales](#11-antes-de-usar-los-flujos-con-clientes-reales)
+12. [Las plantillas de flujos](#12-las-plantillas-de-flujos)
+13. [Publicar, versiones y restaurar](#13-publicar-versiones-y-restaurar)
+14. [Probar un flujo](#14-probar-un-flujo)
+15. [Buenas prácticas y errores comunes](#15-buenas-prácticas-y-errores-comunes)
+16. [Diseñar un flujo con ayuda de Claude](#16-diseñar-un-flujo-con-ayuda-de-claude)
+17. [Para técnicos: formato de las plantillas de flujo](#17-para-técnicos-formato-de-las-plantillas-de-flujo)
 
 ---
 
@@ -61,6 +62,29 @@ Menú **Flujos** -> lista de flujos. Botones útiles: **crear flujo**, **Plantil
 
 Los nodos con problema se marcan en rojo al intentar publicar.
 
+### 2.1 Aviso de «nodos rotos»
+
+Un **nodo roto** es un nodo que apunta a algo de la configuración que **ya no sirve**: una **etapa**, un **tipo
+de gestión**, un **equipo** o un **tipo de contacto** que se archivó o se borró después de armar el flujo. Se
+revisan los nodos *Clasificar gestión* (tipo y etapa), *Cambiar etapa*, *Asignar a equipo* (solo en modo
+fijo), los disparadores de gestión y las condiciones que comparan tipo de contacto, tipo, etapa o equipo. Un
+campo que se dejó vacío no cuenta como roto (eso lo avisa la revisión al publicar).
+
+**Por qué importa:** el bot no se detiene ni avisa a nadie; ese paso **falla en silencio** y la gestión queda
+sin clasificar, sin cambiar de etapa o sin equipo. Por eso el CRM lo hace visible:
+
+- En la lista de **Flujos**, arriba, una franja ámbar: «Un flujo publicado tiene nodos rotos» (o «N flujos
+  publicados tienen nodos rotos»), con enlaces a cada flujo. En la tarjeta de cada flujo aparece la insignia
+  «N nodos rotos»; al pasar el cursor por encima se lee qué usa cada nodo, por ejemplo «Cambiar etapa» usa la
+  etapa «Esperando pago», que está archivada.
+- Dentro del **editor**, una franja ámbar: «Un nodo está roto» / «Hay nodos rotos» (marcados en ámbar), con una
+  línea por nodo («...que está archivada» o «...que ya no existe»).
+
+**Cómo se arregla:** abre el flujo, haz clic en el nodo marcado en ámbar, **elige otra opción** (otra etapa,
+otro tipo, otro equipo...) en su panel y pulsa **Publicar**. Si la opción archivada era la correcta, se puede
+restaurar en Configuración y el aviso desaparece solo. Mientras no se publique, el bot sigue usando la versión
+anterior (sección 13).
+
 ## 3. Disparadores
 
 El nodo **Disparador de palabra clave** de la paleta es el punto de partida; en su panel eliges el **tipo**:
@@ -73,15 +97,27 @@ El nodo **Disparador de palabra clave** de la paleta es el punto de partida; en 
 | **Bienvenida** | Es el primer mensaje del contacto en ese canal. | — |
 | **Por defecto** | Ningún otro disparador coincide. | — |
 | **Palabra clave en comentario** | Alguien comenta una publicación con la palabra. | Palabras, y «También coincidir en DM». |
-| **Gestión nueva** (`case_opened`) | Se abre una gestión entrante nueva (primer mensaje de un cliente nuevo, o de uno que vuelve sin gestión abierta). No se activa al reabrir ni en gestiones manuales/programadas. | «Solo gestiones sin clasificar» y «Tipos de contacto (opcional)». |
+| **Gestión nueva** (`case_opened`) | Se abre una gestión entrante nueva (primer mensaje de un cliente nuevo, o de uno que vuelve sin gestión abierta). No se activa en gestiones manuales/programadas ni en las situaciones de la nota de abajo. | «Solo gestiones sin clasificar» y «Tipos de contacto (opcional)». |
 | **Cambio de etapa** (`case_stage_changed`) | Una gestión cambia de etapa (por persona, bot, cierre o regla). | Tipo de gestión y **etapa nueva** (opcionales). |
 | **Gestión cerrada** (`case_closed`) | Se gana, pierde o resuelve. | Tipo de gestión y **resultado**: Ganada / Perdida / Resuelta (opcionales). |
 | **Cliente sin responder** (`client_no_reply`) | Le escribiste y el cliente no contesta en N minutos (lo detecta el reloj interno). | **Minutos sin respuesta** y tipo de gestión. |
 
 Notas importantes:
 
-- Los disparadores de **evento de gestión** corren **aunque el bot esté pausado** (la empresa los configuró a
-  propósito para ese evento). Los de **mensaje del cliente** no.
+- Los disparadores de **evento de gestión** (cambio de etapa, gestión cerrada, cliente sin responder) corren
+  **aunque el bot esté pausado** (la empresa los configuró a propósito para ese evento). Los de **mensaje del
+  cliente** no, ni tampoco **Gestión nueva** (ver la nota siguiente).
+- **El disparador «Gestión nueva» es más prudente:** para que el bot no hable encima de una persona ni repita
+  el saludo, **no corre** si (1) el bot de esa conversación está **en pausa**, (2) la gestión es una
+  **reapertura** de una cerrada hace poco, (3) un **asesor escribió** en esa conversación en las últimas
+  **24 horas**, o (4) **ese mismo flujo ya corrió** para el contacto en las últimas **24 horas**. En esos casos
+  no pasa nada y queda solo una nota técnica en el registro del servidor.
+- **«Solo gestiones sin clasificar»** (casilla del disparador «Gestión nueva»): si la marcas, el flujo solo corre
+  cuando la gestión nace **sin tipo**. Una gestión nace sin tipo cuando ningún tipo se sugiere para el tipo de
+  contacto del cliente (por ejemplo, un cliente que vuelve a escribir). Un **prospecto nuevo entra ya como
+  «Venta»**, así que con la casilla marcada **no recibe ese flujo**. Si dejas la casilla sin marcar, corre con
+  cualquier gestión nueva, clasificada o no. Atención: el flujo publicado *Bienvenida y clasificación*
+  (sección 10) tiene la casilla marcada.
 - Si un disparador de gestión no tiene tipo o etapa elegidos, el editor avisa: se activaría con **cualquier**
   gestión o cambio de etapa.
 - Un flujo puede tener varios disparadores, pero lo normal es uno.
@@ -240,12 +276,12 @@ WhatsApp). Si el nombre no coincide con una aprobada, el envío falla.
 | **Una persona responde** desde la Bandeja | El bot se pausa solo. |
 | Alguien lo **pausa o reanuda a mano** (cabecera del chat) | Pausar también corta lo que el bot dejó esperando. |
 | **Reanudación automática** | Si el bot está pausado porque una persona escribió y el contacto **no tiene ninguna gestión abierta ni programada**, vuelve solo **24 h después del último mensaje humano**. Una pausa manual sin mensajes humanos no se toca. |
-| Con el bot **pausado** y el cliente escribe | No se activan palabras clave, bienvenida ni se retoman esperas. Los flujos de **eventos de gestión** sí corren. |
+| Con el bot **pausado** y el cliente escribe | No se activan palabras clave, bienvenida ni se retoman esperas, y tampoco corre el flujo de **Gestión nueva**. Los flujos de los demás **eventos de gestión** (cambio de etapa, cierre, cliente sin responder) sí corren. |
 | Palabras clave **globales** (Configuración -> General, p. ej. «baja») | Van **primero**, antes que cualquier flujo: coincidencia exacta, y desuscriben o suscriben al contacto. |
 
 Orden en que el CRM decide qué hacer con un mensaje del cliente:
 
-1. ¿Bot pausado? -> no hace nada (salvo eventos de gestión).
+1. ¿Bot pausado? -> no hace nada (salvo los eventos de gestión de cambio de etapa, cierre y cliente sin responder).
 2. ¿Es una palabra clave global (baja/alta)? -> la aplica y termina.
 3. ¿Hay una **espera inteligente** vigente? -> retoma ese flujo.
 4. Si no, busca un **disparador** (sección 9).
@@ -278,23 +314,81 @@ Foto de la base de Muscle Shop (todos *publicados*). Además hay un borrador vac
 
 | # | Flujo | Disparador | Qué hace |
 |---|---|---|---|
-| 1 | **Bienvenida y clasificación** | Gestión nueva (`case_opened`) | Saluda y ofrece tres opciones. Según la elección **clasifica** la gestión (Venta, Postventa o Consulta); en una venta pregunta qué producto busca y lo guarda en un campo; al final **reparte a un asesor**. |
-| 2 | **Catálogo y precios** | Palabras: precio, precios, catálogo, catalogo (contiene) y «lista» (empieza con) | Envía el enlace del catálogo con respuestas rápidas y pasa la venta a «Asesorando». |
+| 1 | **Bienvenida y clasificación** | Gestión nueva (`case_opened`), solo sin clasificar | Saluda y ofrece tres opciones. Según la elección **clasifica** la gestión (Venta, Postventa o Consulta); en una venta pregunta qué producto busca y lo guarda en un campo; al final **reparte a un asesor**. |
+| 2 | **Catálogo y precios** | Palabras: precio, precios, catálogo, catalogo (contiene) y «lista» (empieza con) | Envía el enlace del catálogo con respuestas rápidas y pasa la venta a «Asesorando». **Con enlace de relleno** (sección 11). |
 | 3 | **Darse de baja** | Palabras: baja y stop (exactas); «no más mensajes», «darme de baja», «dar de baja» (contienen) | Desuscribe al contacto y confirma. |
-| 4 | **Datos de pago** | Cambio de etapa (a «Pedido o enlace de pago enviado») | Envía los datos de Yape, Plin y transferencia, pide la captura y pasa la venta a «Esperando pago». |
+| 4 | **Datos de pago** | Cambio de etapa (a «Pedido o enlace de pago enviado») | Envía los datos de Yape, Plin y transferencia, pide la captura y pasa la venta a «Esperando pago». **Con datos de relleno** (sección 11). |
 | 5 | **Encuesta de satisfacción** | Gestión cerrada (Postventa resuelta) | Pregunta del 1 al 5; etiqueta «Satisfecho» o «Insatisfecho»; si la nota es 1 o 2, pasa a **atención humana**. |
-| 6 | **Estado de pedido** | Palabras: pedido, envío, envio, tracking, seguimiento (contienen) | Clasifica como Postventa/«Estado de pedido», pide el número de pedido, lo guarda en un campo y asigna al equipo «Atención». |
-| 7 | **Gracias por tu compra** | Gestión cerrada (Venta ganada) | Agradece, informa tiempos de envío (Lima y provincia) y cómo consultar el pedido. |
+| 6 | **Estado de pedido** | Palabras: pedido, envío, envio, tracking, seguimiento (contienen) | Clasifica como Postventa/«Estado de pedido», pide el número de pedido y lo guarda en un campo. Trae un nodo «Asignar a equipo» llamado «Asignar al equipo Atención» **sin equipo elegido** (hoy no hace nada; ver sección 11). |
+| 7 | **Gracias por tu compra** | Gestión cerrada (Venta ganada) | Agradece, informa tiempos de envío (Lima y provincia) y cómo consultar el pedido. **Con tiempos de relleno** (sección 11). |
 | 8 | **Hablar con un asesor** | Palabras: asesor, humano, persona, agente (contienen) | Avisa que lo comunica, **reparte** la gestión y **detiene el bot** para que lo atienda una persona. |
-| 9 | **Recompra interesada** | Cambio de etapa (Recompra -> «Interesado») | Envía el enlace para volver a comprar y ofrece hablar con un asesor. |
-| 10 | **Recordatorio de pago** | Cliente sin responder (2 horas) | Si la venta sigue en «Esperando pago», envía un recordatorio amable; con la ventana cerrada usa una plantilla de WhatsApp. |
+| 9 | **Recompra interesada** | Cambio de etapa (Recompra -> «Interesado») | Envía el enlace para volver a comprar y ofrece hablar con un asesor. **Con enlace de relleno** (sección 11). |
+| 10 | **Recordatorio de pago** | Cliente sin responder (2 horas) | Si la venta sigue en «Esperando pago», envía un recordatorio amable; con la ventana cerrada usa la plantilla de WhatsApp `recordatorio_pago` (debe existir aprobada; sección 11). |
 
 Cómo trabajan juntos: **1** abre y clasifica; **2** mueve a «Asesorando»; el asesor avanza la etapa y **4**
 manda los datos de pago; **10** recuerda si no pagan; al cerrar la venta, **7** agradece y se programa la
 Recompra (regla de gestión), cuyo avance a «Interesado» dispara **9**. En Postventa, **6** clasifica y **5**
 mide la satisfacción. **3** y **8** atienden pedidos de baja y de hablar con una persona.
 
-## 11. Las plantillas de flujos
+## 11. Antes de usar los flujos con clientes reales
+
+Los 10 flujos publicados se verificaron (cada rama, con el motor real y canales de prueba) y funcionan. Pero
+vienen de plantillas con **datos de ejemplo**, y hay cuatro cosas que **hay que completar o confirmar** antes de
+confiar en ellos con clientes reales. Si no, el cliente recibiría textos como `[REEMPLAZA: https://tutienda.pe/catalogo]`.
+
+### 11.1 Textos de relleno `[REEMPLAZA: …]`
+
+Cuatro flujos publicados tienen mensajes con marcas `[REEMPLAZA: …]`. Esas marcas **se envían tal cual al
+cliente** hasta que se cambien por los datos reales de la tienda:
+
+| Flujo | Qué hay que reemplazar |
+|---|---|
+| **Catálogo y precios** | El enlace del catálogo: `[REEMPLAZA: https://tutienda.pe/catalogo]`. |
+| **Datos de pago** | Siete datos de pago de ejemplo: números de Yape y Plin, banco, cuenta, CCI y titulares. |
+| **Gracias por tu compra** | Los tiempos de envío: `[REEMPLAZA: 1 a 2 días hábiles / 3 a 5 días hábiles]` (Lima y provincia). |
+| **Recompra interesada** | El enlace para volver a comprar: `[REEMPLAZA: https://tutienda.pe/recompra]`. |
+
+**Cómo hacerlo:** Flujos -> abre el flujo -> clic en el nodo **Enviar mensaje** que trae la marca -> cambia el
+texto por el real -> **Publicar** (sección 13). Busca en todo el flujo: puede haber más de un nodo con marcas. Luego
+pruébalo en el Laboratorio o con un número propio.
+
+### 11.2 Plantilla de WhatsApp del Recordatorio de pago
+
+El flujo **Recordatorio de pago** corre cuando el cliente lleva 2 horas sin responder, y muchas veces ya pasaron
+las 24 horas de WhatsApp. En ese caso usa la plantilla de WhatsApp llamada **`recordatorio_pago`** (idioma `es`).
+Esa plantilla **debe existir y estar aprobada** en el WhatsApp real (Configuración -> Plantillas de WhatsApp);
+si no, el recordatorio fuera de las 24 horas **no se envía**. Dentro de las 24 horas el flujo sí envía su texto
+normal. Esto no se pudo comprobar en las pruebas porque depende de la aprobación de WhatsApp.
+
+### 11.3 Recompra: falta la plantilla automática
+
+La **Recompra** se programa sola 25 días después de una venta ganada y, ese día, pasa a «Recordatorio enviado»,
+se asigna y avisa «Recompra para hoy» al responsable. Pero el tipo **Recompra no tiene definida una plantilla
+automática**, así que el CRM **no le escribe nada al cliente**: el asesor tiene que escribirle a mano (y pasadas
+24 horas, con una plantilla aprobada). Para que el recordatorio salga solo, hay que crear y aprobar una
+plantilla de WhatsApp para recompra y elegirla en Configuración -> Gestiones -> Recompra -> pestaña General -> «Plantilla al activarse».
+
+### 11.4 «Asignar a equipo» sin equipo en Estado de pedido
+
+En **Estado de pedido**, el nodo «Asignar a equipo» (llamado «Asignar al equipo Atención») **no tiene ningún
+equipo elegido**, así que no hace nada. Hoy no se nota porque Postventa ya reparte al equipo fijo de su tipo y
+la gestión llega a las personas correctas. Para evitar sorpresas: abre el flujo, elige el equipo en ese nodo y
+publica, o quita el nodo.
+
+### 11.5 Dos comportamientos por decidir
+
+Quedaron anotados como decisiones del negocio (no son errores del bot):
+
+- **La respuesta a la Encuesta de satisfacción reabre la Postventa.** Cualquier mensaje del cliente dentro de
+  los 7 días siguientes a la resolución reabre la gestión, avisa a los supervisores y reinicia el plazo, aunque
+  solo esté contestando la nota.
+- **Saludo y palabra clave juntos.** Si el primer mensaje trae una palabra clave («precio de la creatina»), el
+  cliente recibe el catálogo y también el saludo de bienvenida.
+
+También conviene saber que los prospectos nuevos (que entran ya como Venta) no reciben el saludo de *Bienvenida y
+clasificación* mientras esté marcada la casilla «Solo gestiones sin clasificar» (ver sección 3).
+
+## 12. Las plantillas de flujos
 
 Menú Flujos -> **Plantillas**. Es una biblioteca de flujos hechos; al instalar uno, el CRM cambia los
 nombres de tipos, etapas y equipos por los de tu empresa (lo que no exista queda sin configurar y se avisa),
@@ -338,7 +432,7 @@ Hay **21** (el filtro del negocio muestra las del negocio más las generales).
 | Preguntas frecuentes | Palabras: ayuda, preguntas, faq | Menú de temas y respuestas frecuentes. |
 | Captura de clientes potenciales | Palabras: me interesa, más información... | Pide nombre y correo paso a paso, los guarda y etiqueta como potencial. |
 
-## 12. Publicar, versiones y restaurar
+## 13. Publicar, versiones y restaurar
 
 1. Pulsa **Publicar**. Antes, el CRM **revisa** el flujo:
    - **Errores** (impiden publicar): falta el disparador; palabra clave vacía; botón sin carga; disparador sin
@@ -356,7 +450,7 @@ Hay **21** (el filtro del negocio muestra las del negocio más las generales).
 4. Los cambios que haces en un flujo **ya publicado** no afectan al bot hasta que vuelvas a publicar.
 5. El estado puede ser Borrador, Publicado o Archivado. La lista de flujos también permite importar y exportar un flujo como archivo JSON.
 
-## 13. Probar un flujo
+## 14. Probar un flujo
 
 | Herramienta | Dónde | Para qué |
 |---|---|---|
@@ -369,7 +463,7 @@ Hay **21** (el filtro del negocio muestra las del negocio más las generales).
 Orden recomendado: Panel de prueba mientras construyes -> Laboratorio con el perfil real -> Escenarios antes
 de publicar cambios grandes -> publicar -> probar con un número propio en un canal de prueba.
 
-## 14. Buenas prácticas y errores comunes
+## 15. Buenas prácticas y errores comunes
 
 **Buenas prácticas**
 
@@ -399,15 +493,17 @@ de publicar cambios grandes -> publicar -> probar con un número propio en un ca
 | Editar un flujo publicado y no publicar | El bot sigue con la versión anterior. | Pulsa Publicar; revisa el Historial. |
 | Variables mal escritas (`{{Nombre}}`, `{{nombre}` ) | Salen vacías. | Usa exactamente `{{nombre}}`, `{{message}}`, `{{empresa}}`, `{{fecha_clave}}`. |
 | Nombres de etapa o equipo que cambiaron | Al reinstalar una plantilla quedan sin configurar. | Revisa los avisos tras instalar. |
+| Archivar una etapa, tipo, equipo o tipo de contacto que usa un flujo | El nodo queda **roto** y falla en silencio. | Mira el aviso de «nodos rotos» en la lista de Flujos (2.1) y elige otra opción. |
+| Publicar con textos `[REEMPLAZA: …]` | El cliente recibe la marca tal cual. | Sigue la sección 11. |
 
 ---
 
-## 15. Diseñar un flujo con ayuda de Claude
+## 16. Diseñar un flujo con ayuda de Claude
 
 Puedes pedirle a Claude (con este ZIP cargado) que **diseñe** el flujo, y luego tú lo armas en el editor
-arrastrando nodos, o un técnico lo convierte en una plantilla de código (sección 16).
+arrastrando nodos, o un técnico lo convierte en una plantilla de código (sección 17).
 
-### 15.1 Prompt para copiar y pegar
+### 16.1 Prompt para copiar y pegar
 
 > Lee `docs/GUIA-FUNCIONAL.md`, `docs/GUIA-FLUJOS.md` y, para ver ejemplos reales, `lib/flow-templates/templates/`.
 > Eres diseñador de bots para el CRM de Muscle Shop. Diséñame un flujo del chat con este objetivo:
@@ -421,13 +517,13 @@ arrastrando nodos, o un técnico lo convierte en una plantilla de código (secci
 > **Cuándo pasa a una persona:** [siempre al final / si dice «asesor» / si la nota es baja / nunca]
 >
 > Respóndeme con: (1) un resumen de una línea; (2) el disparador exacto; (3) la lista de pasos en el
-> formato «Lista de pasos» de la sección 15.2 de `docs/GUIA-FLUJOS.md`; (4) las palabras clave que podrían
+> formato «Lista de pasos» de la sección 16.2 de `docs/GUIA-FLUJOS.md`; (4) las palabras clave que podrían
 > chocar con los flujos publicados de la sección 10; (5) si algún mensaje puede enviarse con la ventana de 24 h
 > cerrada y por tanto necesita plantilla de WhatsApp; (6) los tipos de gestión, etapas, categorías, equipos,
 > etiquetas y campos personalizados que deben existir (usa los de la sección 9 de `docs/GUIA-FUNCIONAL.md`);
 > (7) cómo probarlo en el Laboratorio. No inventes nodos que no estén en la paleta.
 
-### 15.2 Formato «Lista de pasos» (cómo expresar un flujo para poder construirlo)
+### 16.2 Formato «Lista de pasos» (cómo expresar un flujo para poder construirlo)
 
 Escribe un paso por línea, numerado, con **el nombre del nodo** tal como aparece en la paleta y sus datos.
 Las ramas se indican con «Sí:» / «No:» (o con el nombre de cada camino en una Prueba A/B) y «Ir al paso N».
@@ -464,7 +560,7 @@ Reglas del formato:
 - Cuando algo debe existir previamente (etapa, equipo, plantilla de WhatsApp, campo), anótalo en una sección
   **REQUISITOS** al final.
 
-### 15.3 Cómo construirlo en el editor a partir de la lista
+### 16.3 Cómo construirlo en el editor a partir de la lista
 
 1. Flujos -> **crear flujo** (o instala una plantilla parecida y modifícala).
 2. Arrastra el **Disparador** y configúralo como dice la lista.
@@ -473,7 +569,7 @@ Reglas del formato:
 5. **Probar** -> revisa cada rama. Luego Laboratorio.
 6. **Publicar**, lee los avisos, y prueba en un canal de prueba.
 
-## 16. Para técnicos: formato de las plantillas de flujo
+## 17. Para técnicos: formato de las plantillas de flujo
 
 Las plantillas viven en `lib/flow-templates/templates/*.ts`. Se escriben con el constructor `FlowBuilder`
 (`lib/flow-templates/builder.ts`), que genera los nodos en el **mismo formato que guarda el lienzo**

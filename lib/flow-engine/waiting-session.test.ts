@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeDb } from "@/lib/cases/fake-db.test-helper";
-import { cancelActiveSessions, cancelOtherWaitingSessions, shouldCancelResumeForPausedBot } from "./waiting-session";
+import { cancelActiveSessions, cancelOtherWaitingSessions, shouldCancelResumeForPausedBot, startedByCaseOpening } from "./waiting-session";
 
 describe("B-16: una espera de tiempo no sigue enviando si un asesor tomó el chat", () => {
   const setup = (paused: boolean) => {
@@ -44,5 +44,20 @@ describe("cancelar sesiones", () => {
     db.seed("flow_sessions", [{ id: "a", contact_id: "ct", channel_id: "ch", status: "active", waiting_for_input: true }]);
     await cancelActiveSessions(db.asDb(), { contactId: "ct", channelIds: [] });
     expect(db.rows("flow_sessions")[0].status).toBe("active");
+  });
+});
+
+describe("startedByCaseOpening: sesión que arrancó el evento «gestión nueva» de esa gestión", () => {
+  it("coincide solo con ese evento y esa gestión", () => {
+    expect(startedByCaseOpening({ __case_event: "case_opened", case_id: "c1" }, "c1")).toBe(true);
+    expect(startedByCaseOpening({ __case_event: "case_opened", case_id: "c2" }, "c1")).toBe(false);
+    expect(startedByCaseOpening({ __case_event: "case_closed", case_id: "c1" }, "c1")).toBe(false);
+    expect(startedByCaseOpening({}, "c1")).toBe(false);
+  });
+
+  it("sin gestión abierta por este mensaje o con variables raras no excluye nada", () => {
+    expect(startedByCaseOpening({ __case_event: "case_opened", case_id: "c1" }, null)).toBe(false);
+    expect(startedByCaseOpening(null, "c1")).toBe(false);
+    expect(startedByCaseOpening([], "c1")).toBe(false);
   });
 });

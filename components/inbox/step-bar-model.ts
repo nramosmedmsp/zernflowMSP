@@ -136,6 +136,9 @@ export function layoutStepBar(input: {
     modes[i] = "name";
     if (total(folded) > available) modes[i] = "number";
   }
+  // En pantallas muy angostas ni siquiera cabe el nombre del siguiente paso: pasa a número
+  // (el actual siempre conserva su nombre) para que ningún botón quede encima de otro.
+  if (firstNext >= 0 && modes[firstNext] === "name" && total(folded) > available) modes[firstNext] = "number";
   return { folded, modes };
 }
 

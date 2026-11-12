@@ -21,7 +21,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ZoomIn, ZoomOut, Maximize2, ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical, Route } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize2, ArrowLeft, TriangleAlert, Save, Rocket, Loader2, History, Play, Download, Trash2, FlaskConical, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { flowFileName } from "@/lib/flow-file-name";
 import { formatTime } from "@/lib/format";
@@ -32,6 +32,9 @@ import { startRouteProgress } from "@/components/ui/route-progress";
 import { apiErrorMessage } from "@/lib/api-errors";
 import { flowSignature, UNSAVED_CHANGES_MESSAGE } from "@/lib/flow-editor-state";
 import type { FlowIssue } from "@/lib/flow-engine/validate";
+import { brokenDetailLines, findBrokenNodes, type FlowCatalog } from "@/lib/flow-engine/broken-nodes";
+import { loadFlowCatalog } from "@/lib/flow-engine/broken-nodes-catalog";
+import { createClient } from "@/lib/supabase/client";
 import type { Database } from "@/lib/types/database";
 
 import { NodePalette } from "./node-palette";
@@ -153,12 +156,36 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
     () => new Set(issues.filter((i) => i.severity === "error" && i.nodeId).map((i) => i.nodeId as string)),
     [issues],
   );
+  // R2-5: nodos que usan una etapa, tipo, equipo o tipo de contacto archivado o borrado.
+  const [flowCatalog, setFlowCatalog] = useState<FlowCatalog | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void loadFlowCatalog(createClient())
+      .then((c) => {
+        if (!cancelled) setFlowCatalog(c);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const brokenNodes = useMemo(
+    () => (flowCatalog ? findBrokenNodes(nodes as unknown as Parameters<typeof findBrokenNodes>[0], flowCatalog) : []),
+    [nodes, flowCatalog],
+  );
+  const brokenNodeIds = useMemo(() => new Set(brokenNodes.map((b) => b.nodeId)), [brokenNodes]);
   const displayNodes = useMemo(
     () =>
-      issueNodeIds.size === 0
+      issueNodeIds.size === 0 && brokenNodeIds.size === 0
         ? nodes
-        : nodes.map((n) => (issueNodeIds.has(n.id) ? { ...n, className: cn(n.className, "rounded-xl ring-2 ring-red-500") } : n)),
-    [nodes, issueNodeIds],
+        : nodes.map((n) =>
+            issueNodeIds.has(n.id)
+              ? { ...n, className: cn(n.className, "rounded-xl ring-2 ring-red-500") }
+              : brokenNodeIds.has(n.id)
+                ? { ...n, className: cn(n.className, "rounded-xl ring-2 ring-amber-500") }
+                : n,
+          ),
+    [nodes, issueNodeIds, brokenNodeIds],
   );
 
   const selectedNode = selectedNodeId
@@ -400,7 +427,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-2 [&_a]:whitespace-nowrap [&_button]:whitespace-nowrap">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-b border-border bg-card px-4 py-2 [&_a]:whitespace-nowrap [&_button]:whitespace-nowrap">
         <div className="flex items-center gap-3">
           <button
             onClick={handleBack}
@@ -431,7 +458,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             {flowStatusLabel(flow.status)}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {saveError && (
             <span className="text-xs font-medium text-destructive">
               {saveError}
@@ -588,6 +615,26 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
           />
         </div>
       </div>
+
+      {brokenNodes.length > 0 && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 border-b border-amber-300 bg-amber-50 px-6 py-2 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div>
+            <p className="font-semibold">
+              {new Set(brokenNodes.map((b) => b.nodeId)).size === 1 ? "Un nodo está roto" : "Hay nodos rotos"} (marcados en ámbar):
+              elige otra opción en cada uno.
+            </p>
+            <ul className="mt-0.5 list-disc pl-4">
+              {brokenDetailLines(brokenNodes).map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Canvas area */}
       <div className="flex flex-1 overflow-hidden">

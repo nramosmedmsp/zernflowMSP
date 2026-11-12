@@ -3,6 +3,8 @@ import { ToastProvider } from "@/components/ui/toast";
 import { RouteProgress } from "@/components/ui/route-progress";
 import { getWorkspace } from "@/lib/workspace";
 import { Sidebar } from "@/components/sidebar";
+import { MobileNavShell } from "@/components/mobile-nav-shell";
+import { APP_NAME } from "@/lib/brand";
 import { ViewAsProvider } from "@/components/view-as/view-as-context";
 import { ViewAsBar } from "@/components/view-as/view-as-bar";
 import { displayName } from "@/lib/team-rules";
@@ -49,10 +51,11 @@ export default async function DashboardLayout({
       <ViewAsProvider active={viewAs.active} locked={viewAs.locked} ended={viewAs.ended} info={info} roleText={roleText}>
         <div className="flex h-screen flex-col">
           <ViewAsBar isRealOwner={isRealOwner} />
-          <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
             <Suspense fallback={null}>
               <RouteProgress />
             </Suspense>
+            <MobileNavShell appName={APP_NAME}>
             <Sidebar
               workspace={workspace}
               user={user}
@@ -61,6 +64,7 @@ export default async function DashboardLayout({
               availability={availability}
               workspaces={shownWorkspaces}
             />
+            </MobileNavShell>
             <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
           </div>
         </div>

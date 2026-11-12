@@ -40,14 +40,16 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
   // ── Gestiones (docs/FASE-1-TECNICO.md 3.1) ───────────────────────────────
   // Abre o retoma la gestión del contacto y la reparte. Un fallo aquí no debe
   // impedir que corran los flujos.
+  let openedCaseId: string | null = null;
   try {
-    await handleInbound(supabase, {
+    const result = await handleInbound(supabase, {
       workspaceId: channel.workspace_id,
       contactId,
       conversationId: conversation.id,
       at: input.at ?? new Date().toISOString(),
       text: msg.text,
     });
+    if (result?.opened) openedCaseId = result.caseId;
   } catch (err) {
     console.error("Case engine (handleInbound) error:", err);
   }
@@ -108,7 +110,12 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
   // Si el contacto tiene una sesión esperando su respuesta (Espera inteligente)
   // y la espera no venció, el mensaje la retoma sin buscar disparadores: así
   // respuestas como "1" o "Sede 2" no necesitan coincidir con una palabra clave.
-  const waiting = await findWaitingSession(supabase, { contactId, channelId: channel.id });
+  // El saludo de «Gestión nueva» que abrió este mismo mensaje no cuenta: espera la siguiente respuesta.
+  const waiting = await findWaitingSession(supabase, {
+    contactId,
+    channelId: channel.id,
+    openedByThisMessageCaseId: openedCaseId,
+  });
   if (waiting) {
     if (!(await claimWaitingSession(supabase, waiting.id))) return; // otro mensaje la retomó
     // "1", "2." o el texto exacto de una opción del último menú del bot retoman la
@@ -156,6 +163,9 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
       incomingMessage,
       lateConversationId: input.lateConversationId,
       lateAccountId: input.lateAccountId,
+      // Si este mensaje abrió la gestión, la espera que haya es el saludo de «Gestión nueva»
+      // (arrancó a la vez): el flujo del disparador empieza de cero y no la retoma.
+      ...(openedCaseId ? { startFresh: true } : {}),
     });
   } catch (err) {
     console.error("Flow execution error:", err);

@@ -150,7 +150,39 @@ describe("A-1: volver a agregar a una persona que ya tiene cuenta", () => {
     expect(fake.rows("workspace_members").find((m) => m.user_id === CARLA)).toMatchObject({ workspace_id: WS, role: "admin" });
     expect(fake.rows("activity").find((a) => a.type === "config_changed")).toMatchObject({
       actor_id: OWNER,
-      meta: expect.objectContaining({ action: "member_readded", user_id: CARLA }),
+      meta: expect.objectContaining({ action: "member_readded", user_id: CARLA, reset_link_sent: true }),
+    });
+  });
+
+  it("recibe un enlace de restablecer contraseña (recuperación), aunque nunca haya iniciado sesión", async () => {
+    state.authUsers = [authUser(CARLA, "carla@x.pe", { last_sign_in_at: null })];
+    const result = await createTeamUser(WS, input);
+    expect(result).toMatchObject({
+      ok: true,
+      delivery: { sent: true, message: "Se volvió a agregar a Carla Torres y se le envió un enlace para restablecer su contraseña." },
+    });
+    const { sendAppMail } = await import("@/lib/mail/send");
+    const [, to, content] = vi.mocked(sendAppMail).mock.calls.at(-1) as unknown as [unknown, string, { subject: string; text: string }];
+    expect(to).toBe("carla@x.pe");
+    expect(content.subject).toMatch(/Restablece tu contraseña/);
+    expect(content.text).toContain("type=recovery");
+  });
+
+  it("si el correo nunca se confirmó se le manda la activación", async () => {
+    state.authUsers = [authUser(CARLA, "carla@x.pe", { email_confirmed_at: null, last_sign_in_at: null })];
+    const result = await createTeamUser(WS, input);
+    expect(result).toMatchObject({ ok: true, outcome: "readded", delivery: { sent: true } });
+  });
+
+  it("sin correo configurado avisa que no se envió el enlace y lo deja en la actividad", async () => {
+    state.mailConfigured = false;
+    const result = await createTeamUser(WS, input);
+    expect(result).toMatchObject({
+      ok: true,
+      delivery: { sent: false, notConfigured: true, message: expect.stringContaining("no se le envió el enlace para restablecer su contraseña") },
+    });
+    expect(fake.rows("activity").find((a) => a.type === "config_changed")).toMatchObject({
+      meta: expect.objectContaining({ reset_link_sent: false }),
     });
   });
 

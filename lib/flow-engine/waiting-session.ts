@@ -5,7 +5,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/types/database";
-import { CASE_EVENT_VARIABLE } from "./case-trigger-match";
+import { CASE_EVENT_VARIABLE, CASE_ID_VARIABLE } from "./case-trigger-match";
 
 type Db = SupabaseClient<Database>;
 export type FlowSessionRow = Database["public"]["Tables"]["flow_sessions"]["Row"];
@@ -29,7 +29,17 @@ export function smartDelayTimeoutMs(data: { timeout?: unknown; timeoutUnit?: unk
  */
 export async function findWaitingSession(
   db: Db,
-  params: { contactId: string; channelId: string; now?: Date },
+  params: {
+    contactId: string;
+    channelId: string;
+    now?: Date;
+    /**
+     * Gestión que abrió justamente este mensaje: el saludo de «Gestión nueva»
+     * que arrancó con ella no puede tomar ese mismo mensaje como su respuesta
+     * (el flujo y el mensaje corren a la vez y ganaba el que llegaba primero).
+     */
+    openedByThisMessageCaseId?: string | null;
+  },
 ): Promise<FlowSessionRow | null> {
   const now = params.now ?? new Date();
   const { data } = await db
@@ -41,7 +51,9 @@ export async function findWaitingSession(
     .eq("waiting_for_input", true)
     .order("updated_at", { ascending: false });
 
-  const rows = (data ?? []) as FlowSessionRow[];
+  const rows = ((data ?? []) as FlowSessionRow[]).filter(
+    (s) => !startedByCaseOpening(s.variables, params.openedByThisMessageCaseId),
+  );
   const isExpired = (s: FlowSessionRow) => !!s.waiting_until && new Date(s.waiting_until).getTime() <= now.getTime();
   const expired = rows.filter(isExpired);
   if (expired.length > 0) {
@@ -54,6 +66,13 @@ export async function findWaitingSession(
       );
   }
   return rows.find((s) => !isExpired(s)) ?? null;
+}
+
+/** ¿La sesión la arrancó el evento «gestión nueva» de esa gestión? */
+export function startedByCaseOpening(variables: unknown, caseId: string | null | undefined): boolean {
+  if (!caseId || !variables || typeof variables !== "object" || Array.isArray(variables)) return false;
+  const v = variables as Record<string, unknown>;
+  return v[CASE_EVENT_VARIABLE] === "case_opened" && v[CASE_ID_VARIABLE] === caseId;
 }
 
 /**

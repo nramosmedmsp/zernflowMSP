@@ -161,7 +161,7 @@ export function CasesView(props: CasesViewProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-8 py-6">
+      <div className="border-b border-border px-4 py-4 sm:px-8 sm:py-6">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Gestiones</h1>
@@ -203,7 +203,7 @@ export function CasesView(props: CasesViewProps) {
         )}
 
         {/* Pestañas */}
-        <div className="mt-4 flex items-end gap-1 border-b border-border" role="tablist">
+        <div className="mt-4 flex flex-wrap items-end gap-1 border-b border-border" role="tablist">
           {CASE_TABS.map((tab) => (
             <button
               key={tab.key}
@@ -219,7 +219,7 @@ export function CasesView(props: CasesViewProps) {
                 })
               }
               className={cn(
-                "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+                "-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors",
                 params.tab === tab.key
                   ? "border-primary text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground",
