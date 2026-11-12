@@ -40,6 +40,7 @@ import type { Database, Platform } from "@/lib/types/database";
 import { useContactCases } from "./use-contact-cases";
 import { inputClass, selectClass } from "./ui";
 import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
+import { MarketingConsentBlock } from "@/components/contacts/marketing-consent";
 import { useToast } from "@/components/ui/toast";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
@@ -427,18 +428,21 @@ export function ContactPanel({
             ) : (
               <div className="mt-3 h-[72px] w-full animate-pulse rounded-lg border border-border bg-muted/30" aria-hidden />
             )}
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
-              <span
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-[10px] font-medium",
-                  contact.is_subscribed
-                    ? "bg-green-100 text-green-700"
-                    : "bg-muted text-muted-foreground"
-                )}
-              >
-                {contact.is_subscribed ? "Suscrito" : "No suscrito"}
-              </span>
-            </div>
+            <MarketingConsentBlock
+              className="mt-3 w-full"
+              compact
+              contactId={contact.id}
+              status={contact.marketing_status}
+              at={contact.marketing_status_at}
+              source={contact.marketing_source}
+              note={contact.marketing_note}
+              setByName={contact.marketing_set_by ? personName(contact.marketing_set_by) : null}
+              erased={!!contact.erased_at}
+              onChanged={() => {
+                void loadContact(contact.id);
+                onContactChanged?.();
+              }}
+            />
             <Link
               href={`/dashboard/contacts/${contact.id}`}
               className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"

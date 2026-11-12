@@ -1,3 +1,4 @@
+import { marketingDecision } from "@/lib/consent";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   loadDeliveryContext,
@@ -153,15 +154,16 @@ async function processEnrollment(
     return;
   }
 
-  // Un contacto que se dio de baja no recibe nada más de la secuencia.
+  // Las secuencias son publicidad: solo siguen para quien tiene consentimiento
+  // registrado. Quien se dio de baja, o nunca aceptó, no recibe nada más (PRIV-01).
   const { data: contact, error: contactError } = await supabase
     .from("contacts")
-    .select("is_subscribed")
+    .select("is_subscribed, marketing_status, erased_at")
     .eq("id", enrollment.contact_id)
     .eq("workspace_id", sequence.workspace_id)
     .maybeSingle();
   if (contactError) throw new Error(contactError.message);
-  if (!contact || contact.is_subscribed === false) {
+  if (!contact || contact.is_subscribed === false || contact.erased_at || !marketingDecision(contact).ok) {
     await supabase.from("sequence_enrollments").update({ status: "cancelled", next_step_at: null }).eq("id", enrollment.id);
     return;
   }

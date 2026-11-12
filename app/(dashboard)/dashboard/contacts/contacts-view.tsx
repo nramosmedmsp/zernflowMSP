@@ -21,7 +21,8 @@ import { cn } from "@/lib/utils";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import { Spinner } from "@/components/ui/spinner";
 import { NewContactDialog } from "@/components/contacts/new-contact-dialog";
-import { formatNumber, formatRelative } from "@/lib/format";
+import { formatDateTime, formatNumber, formatRelative } from "@/lib/format";
+import { marketingStatusLabel } from "@/lib/consent";
 import { NO_VALUE_FILTER } from "@/components/contacts/contact-filters";
 import {
   CONTACTS_PAGE_SIZE,
@@ -131,7 +132,8 @@ export function ContactsView({
     params.ownerId ||
     params.teamId ||
     params.keyFrom ||
-    params.keyTo
+    params.keyTo ||
+    params.marketing
   );
 
   return (
@@ -238,6 +240,17 @@ export function ContactsView({
               ))}
             </select>
           )}
+          <select
+            aria-label="Publicidad"
+            value={params.marketing}
+            onChange={(e) => go({ marketing: e.target.value as ContactListParams["marketing"] })}
+            className={FILTER_SELECT_CLASS}
+          >
+            <option value="">Toda la publicidad</option>
+            <option value="accepted">{marketingStatusLabel("accepted")}</option>
+            <option value="unknown">{marketingStatusLabel("unknown")}</option>
+            <option value="opted_out">{marketingStatusLabel("opted_out")}</option>
+          </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             Fecha clave
             <input
@@ -271,7 +284,7 @@ export function ContactsView({
           {hasExtraFilters && (
             <button
               onClick={() =>
-                go({ typeId: "", ownerId: "", teamId: "", keyFrom: "", keyTo: "" })
+                go({ typeId: "", ownerId: "", teamId: "", keyFrom: "", keyTo: "", marketing: "" })
               }
               className="text-sm text-muted-foreground underline hover:text-foreground"
             >
@@ -389,7 +402,7 @@ export function ContactsView({
                   Etiquetas
                 </th>
                 <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
-                  Suscrito
+                  Publicidad
                 </th>
               </tr>
             </thead>
@@ -510,15 +523,27 @@ export function ContactsView({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {contact.is_subscribed ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-600">
-                          <CheckCircle className="h-3.5 w-3.5" />
-                          Sí
-                        </span>
-                      ) : (
+                      {contact.erased_at ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                           <XCircle className="h-3.5 w-3.5" />
-                          No
+                          Datos eliminados
+                        </span>
+                      ) : contact.marketing_status === "accepted" ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"
+                          title={contact.marketing_status_at ? `Desde ${formatDateTime(contact.marketing_status_at)}` : undefined}
+                        >
+                          <CheckCircle className="h-3.5 w-3.5" />
+                          {marketingStatusLabel("accepted")}
+                        </span>
+                      ) : contact.marketing_status === "opted_out" ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400">
+                          <XCircle className="h-3.5 w-3.5" />
+                          {marketingStatusLabel("opted_out")}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                          {marketingStatusLabel("unknown")}
                         </span>
                       )}
                     </td>

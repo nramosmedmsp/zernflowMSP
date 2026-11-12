@@ -274,6 +274,14 @@ describe("entrada de mensajes: retomar la conversación", () => {
     await startWaitingFlow();
     await run({ text: "Baja" });
     expect(fake.rows("contacts")[0].is_subscribed).toBe(false);
+    // PRIV-01: queda en el modelo de consentimiento, con origen y fecha.
+    expect(fake.rows("contacts")[0]).toMatchObject({
+      marketing_status: "opted_out",
+      marketing_source: "keyword",
+      marketing_set_by: null,
+      marketing_note: "Palabra clave: baja",
+    });
+    expect(typeof fake.rows("contacts")[0].marketing_status_at).toBe("string");
     expect(notes()).toEqual([]);
     expect(matchTrigger).not.toHaveBeenCalled();
     // La conversación sigue esperando.
@@ -300,6 +308,8 @@ describe("entrada de mensajes: retomar la conversación", () => {
     fake.rows("contacts")[0].is_subscribed = false;
     await run({ text: "Alta" });
     expect(fake.rows("contacts")[0].is_subscribed).toBe(true);
+    // Alta -> "aceptó" con origen "palabra clave".
+    expect(fake.rows("contacts")[0]).toMatchObject({ marketing_status: "accepted", marketing_source: "keyword", marketing_set_by: null });
     expect(fake.rows("activity")[0]).toMatchObject({ type: "contact_subscribed", meta: { source: "keyword", keyword: "alta" } });
   });
 

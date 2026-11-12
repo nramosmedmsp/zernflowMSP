@@ -4,6 +4,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { MEDIA_RETENTION_DAYS, retentionCutoff } from "@/lib/chat-media";
 import { removeObjects } from "@/lib/media-store";
 import { recordCronEnd, recordCronStart } from "@/lib/cron-runs";
+import { cleanOrphanUploads } from "@/lib/upload-tracking";
+import { rateLimitPruneCutoff } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
 
@@ -16,6 +18,13 @@ const MAX_BATCHES = 10;
  * Borra las fotos, PDF y audios de los chats que cumplieron 2 meses y los marca
  * como vencidos: el chat muestra "Archivo vencido". Los archivos de las
  * respuestas guardadas no vencen.
+ *
+ * Además (SEG-10 / SEG-01), en la misma pasada diaria:
+ *   * borra del bucket los archivos subidos hace más de 48 h que nunca se
+ *     enviaron ni se guardaron en una respuesta (lib/upload-tracking.ts);
+ *   * poda los contadores de los topes de frecuencia ya vencidos.
+ * Ambas tareas son secundarias: si fallan se registran y no tumban la limpieza
+ * principal.
  */
 export async function GET(request: NextRequest) {
   if (!isCronAuthorized(request)) {
@@ -62,6 +71,25 @@ export async function GET(request: NextRequest) {
     if (rows.length < BATCH) break;
   }
 
-  await recordCronEnd(supabase, "media_cleanup", { startedAt, stats: { expired } });
-  return NextResponse.json({ ok: true, expired, cutoff });
+  // Subidas que nadie envió (SEG-10). Nunca toca archivos de mensajes ni de respuestas.
+  let orphanUploads: Awaited<ReturnType<typeof cleanOrphanUploads>> = null;
+  try {
+    orphanUploads = await cleanOrphanUploads(supabase);
+  } catch (err) {
+    console.error("[media-cleanup] subidas sin usar:", err);
+  }
+
+  // Contadores de frecuencia vencidos (SEG-01).
+  try {
+    const { error: pruneError } = await supabase.from("rate_limit_hits").delete().lt("window_start", rateLimitPruneCutoff());
+    if (pruneError) console.error("[media-cleanup] poda de contadores:", pruneError.message);
+  } catch (err) {
+    console.error("[media-cleanup] poda de contadores:", err);
+  }
+
+  await recordCronEnd(supabase, "media_cleanup", {
+    startedAt,
+    stats: { expired, orphanUploadsRemoved: orphanUploads?.removed ?? 0, orphanUploadsFailed: orphanUploads?.failed ?? false },
+  });
+  return NextResponse.json({ ok: true, expired, cutoff, orphanUploadsRemoved: orphanUploads?.removed ?? 0 });
 }

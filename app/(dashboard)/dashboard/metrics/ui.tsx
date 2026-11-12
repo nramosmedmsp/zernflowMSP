@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/metrics/stats";
 import type { DualStats, TimeStats } from "@/lib/metrics/types";
 import type { TimeMode } from "@/lib/metrics/export";
+import { recordDataExport } from "@/lib/actions/audit";
 
 export function pickStats(d: DualStats, mode: TimeMode): TimeStats {
   return mode === "business" ? d.business : d.clock;
@@ -44,7 +45,11 @@ export function ExportButton({
     <button
       type="button"
       disabled={disabled}
-      onClick={() => downloadCsv(filename, build())}
+      onClick={() => {
+        downloadCsv(filename, build());
+        // SEG-05: la descarga queda registrada (quién y qué archivo); no frena nada.
+        void recordDataExport(filename).catch(() => undefined);
+      }}
       className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
     >
       <Download className="h-4 w-4" />

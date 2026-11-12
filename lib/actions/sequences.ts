@@ -6,6 +6,7 @@
 import { getWorkspace } from "@/lib/workspace";
 import { revalidatePath } from "next/cache";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
+import { marketingDecision } from "@/lib/consent";
 import { validateSequenceSteps } from "@/lib/broadcasts/sequence-step";
 import { enrollInSequence } from "@/lib/sequences/enroll";
 import { ensureStepIds } from "@/lib/sequences/steps";
@@ -131,11 +132,15 @@ export async function enrollContact(
 
   // El contacto y el canal tienen que ser de este espacio de trabajo.
   const [{ data: contact }, { data: channel }] = await Promise.all([
-    supabase.from("contacts").select("id, is_subscribed").eq("id", contactId).eq("workspace_id", workspace.id).maybeSingle(),
+    supabase.from("contacts").select("id, is_subscribed, marketing_status, erased_at").eq("id", contactId).eq("workspace_id", workspace.id).maybeSingle(),
     supabase.from("channels").select("id").eq("id", channelId).eq("workspace_id", workspace.id).maybeSingle(),
   ]);
   if (!contact) return { error: "No se encontró el contacto" };
-  if (contact.is_subscribed === false) return { error: "El contacto canceló su suscripción y no puede recibir la secuencia" };
+  if (contact.is_subscribed === false || contact.erased_at) return { error: "El contacto se dio de baja de la publicidad y no puede recibir la secuencia" };
+  const consent = marketingDecision(contact);
+  if (!consent.ok) {
+    return { error: "Este contacto aún no aceptó recibir publicidad. Registra su consentimiento en su ficha antes de inscribirlo en la secuencia." };
+  }
   if (!channel) return { error: "No se encontró el canal" };
 
   const steps = (sequence.steps as unknown as SequenceStep[]) || [];

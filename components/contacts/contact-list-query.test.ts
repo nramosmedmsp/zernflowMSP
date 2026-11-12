@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyContactListQuery,
   cleanSearch,
+  contactSearchText,
   contactListHref,
   contactListSelect,
   contactPageCount,
@@ -56,6 +57,7 @@ describe("parseContactListParams", () => {
       tagId: "",
       keyFrom: "",
       keyTo: "",
+      marketing: "",
       sort: "recent",
       dir: "desc",
       page: 1,
@@ -114,9 +116,11 @@ describe("applyContactListQuery", () => {
       ["range", 0, 49],
     ]);
   });
-  it("busca por nombre, correo o teléfono y limpia caracteres que rompen el filtro", () => {
+  it("la búsqueda por texto no se aplica a la consulta (la hace search_contacts en la base)", () => {
     const q = applyContactListQuery(new Recorder(), { ...defaults, search: 'a,b(c)"d' });
-    expect(q.calls[0]).toEqual(["or", "display_name.ilike.%a b c d%,email.ilike.%a b c d%,phone.ilike.%a b c d%"]);
+    expect(q.calls.some(([name]) => name === "or")).toBe(false);
+    expect(contactSearchText({ ...defaults, search: 'a,b(c)"d' })).toBe("a b c d");
+    expect(contactSearchText({ ...defaults, search: "  +51 987 654 321 " })).toBe("+51 987 654 321");
     expect(cleanSearch("  x*y  ")).toBe("x y");
   });
   it("aplica tipo, responsable, equipo, etiqueta y rango de fecha clave", () => {
@@ -183,5 +187,23 @@ describe("rango de fechas clave (B-42)", () => {
       keyFrom: "2026-01-01",
       keyTo: "2026-12-01",
     });
+  });
+});
+
+describe("filtro de publicidad (PRIV-01)", () => {
+  it("lee solo los estados válidos y se mantiene en la URL", () => {
+    expect(parseContactListParams({ marketing: "accepted" }).marketing).toBe("accepted");
+    expect(parseContactListParams({ marketing: "unknown" }).marketing).toBe("unknown");
+    expect(parseContactListParams({ marketing: "opted_out" }).marketing).toBe("opted_out");
+    expect(parseContactListParams({ marketing: "todos" }).marketing).toBe("");
+    const p = parseContactListParams({ marketing: "opted_out" });
+    expect(contactListHref(p)).toBe("/dashboard/contacts?marketing=opted_out");
+    expect(parseContactListParams(new URLSearchParams("marketing=opted_out"))).toEqual(p);
+  });
+
+  it("filtra por marketing_status", () => {
+    const q = applyContactListQuery(new Recorder(), { ...defaults, marketing: "unknown" });
+    expect(q.calls).toContainEqual(["eq", "marketing_status", "unknown"]);
+    expect(applyContactListQuery(new Recorder(), defaults).calls.some((c) => c[1] === "marketing_status")).toBe(false);
   });
 });

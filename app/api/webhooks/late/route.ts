@@ -16,6 +16,7 @@ import {
 import { storeInboundMedia, type InboundAttachmentInput } from "@/lib/media-store";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { applyDeliveryEvent, type DeliveryEvent } from "@/lib/outbound-log";
+import { checkEventAge, webhookEventKey } from "@/lib/webhook-guard";
 
 // Copiar fotos y PDF que llegan puede tardar más que lo normal (hasta 25 MB).
 export const maxDuration = 60;
@@ -92,6 +93,7 @@ interface CommentWebhookPayload {
 /** message.delivered / message.read / message.failed (estado de un mensaje propio). */
 interface DeliveryWebhookPayload {
   id?: string;
+  timestamp?: string;
   event: DeliveryEvent;
   message: { conversationId?: string; platformMessageId?: string };
   statusAt?: string;
@@ -166,7 +168,25 @@ function isCommentPayload(p: Record<string, unknown>): boolean {
   return isObj(p.comment) && isStr(p.comment.id) && isObj(p.account) && isStr(p.account.id);
 }
 
+/** Estado de entrega: necesita la cuenta (para elegir el canal por firma) y el bloque del mensaje. */
+function isDeliveryPayload(p: Record<string, unknown>): boolean {
+  return isObj(p.account) && isStr(p.account.id) && (p.message === undefined || isObj(p.message));
+}
+
 const invalidPayload = () => NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+
+/**
+ * SEG-03: reenvío viejo de un evento firmado. La fecha sale del cuerpo ya
+ * verificado (`timestamp`, que Zernio conserva en los reintentos). Se responde
+ * 200 para que Zernio no lo siga reintentando; el aviso en el log no lleva
+ * contenido del mensaje. Margen y razón: lib/webhook-guard.ts.
+ */
+function staleEventResponse(parsed: { id?: unknown; timestamp?: unknown }, eventId: string) {
+  const age = checkEventAge(parsed.timestamp);
+  if (age.status !== "stale" && age.status !== "future") return null;
+  console.warn(`[webhook] evento ${eventId} descartado: ${age.status === "stale" ? "demasiado viejo" : "fecha en el futuro"}`);
+  return NextResponse.json({ ok: true, skipped: true, reason: "stale_event" });
+}
 
 /**
  * Claim an event id for processing. Returns false when another delivery of the
@@ -202,9 +222,8 @@ async function releaseWebhookEvent(
 async function handleWebhook(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("x-late-signature");
-  const headerEventId = request.headers.get("x-late-event-id");
 
-  let parsed: { event?: string; id?: string };
+  let parsed: { event?: string; id?: string; timestamp?: string };
   try {
     parsed = JSON.parse(body);
   } catch {
@@ -212,7 +231,10 @@ async function handleWebhook(request: NextRequest) {
   }
   if (!isObj(parsed)) return invalidPayload();
 
-  const eventId = parsed.id || headerEventId;
+  // SEG-03: el id sale SOLO del cuerpo firmado (la cabecera x-late-event-id no
+  // va firmada y cambiándola evitaría la anti-repetición). Sin id, se deriva del cuerpo.
+  const eventKey = webhookEventKey(parsed, body);
+  const eventId = eventKey.id;
 
   if (parsed.event === "comment.received") {
     if (!isCommentPayload(parsed)) return invalidPayload();
@@ -220,6 +242,7 @@ async function handleWebhook(request: NextRequest) {
   }
 
   if (parsed.event && DELIVERY_EVENTS.has(parsed.event)) {
+    if (!isDeliveryPayload(parsed)) return invalidPayload();
     return handleDeliveryWebhook(parsed as DeliveryWebhookPayload, body, signature, eventId);
   }
 
@@ -249,6 +272,9 @@ async function handleWebhook(request: NextRequest) {
   }
   const channel = picked.channel;
 
+  const stale = staleEventResponse(parsed, eventId);
+  if (stale) return stale;
+
   // Prevent loops: if the sender is another connected account in this
   // workspace, skip. This happens when both sides of a DM conversation
   // are connected (e.g. during testing).
@@ -272,7 +298,8 @@ async function handleWebhook(request: NextRequest) {
   // ejecución; si quedó a medias, se retoma (lib/inbound-events.ts).
   const at = new Date().toISOString();
   const claim = await claimInboundEvent(supabase, {
-    eventId: eventId || (msg.platformMessageId ? `pm:${account.id}:${msg.platformMessageId}` : crypto.randomUUID()),
+    // Sin id en el cuerpo se usa el mensaje de la plataforma (también del cuerpo firmado).
+    eventId: !eventKey.derived ? eventId : msg.platformMessageId ? `pm:${account.id}:${msg.platformMessageId}` : eventId,
     channelId: channel.id,
     payload: buildStoredPayload({
       at,
@@ -361,16 +388,18 @@ async function handleDeliveryWebhook(
   payload: DeliveryWebhookPayload,
   rawBody: string,
   signature: string | null,
-  eventId: string | null | undefined,
+  eventId: string,
 ) {
   const supabase = await createServiceClient();
-  const picked = await resolveChannel(supabase, payload.account?.id ?? "", rawBody, signature);
+  const picked = await resolveChannel(supabase, payload.account.id, rawBody, signature);
   if (!picked.ok) {
     if (picked.reason === "no_channel") {
       return NextResponse.json({ ok: true, skipped: true, reason: "channel_not_found" });
     }
     return rejectResponse(picked.reason);
   }
+  const stale = staleEventResponse(payload, eventId);
+  if (stale) return stale;
   if (!(await claimWebhookEvent(supabase, eventId))) {
     return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
   }
@@ -401,7 +430,7 @@ async function handleCommentWebhook(
   payload: CommentWebhookPayload,
   rawBody: string,
   signature: string | null,
-  eventId: string | null | undefined
+  eventId: string
 ) {
   const supabase = await createServiceClient();
 
@@ -421,6 +450,8 @@ async function handleCommentWebhook(
     return NextResponse.json({ ok: true, skipped: true, reason: "own_comment" });
   }
 
+  const stale = staleEventResponse(payload, eventId);
+  if (stale) return stale;
   if (!(await claimWebhookEvent(supabase, eventId))) {
     return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
   }

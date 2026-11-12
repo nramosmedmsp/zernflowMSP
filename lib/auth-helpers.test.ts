@@ -44,11 +44,19 @@ describe("validateNewPassword", () => {
   });
 
   it("exige que coincida la confirmación", () => {
-    expect(validateNewPassword("12345678", "12345679")).toMatch(/no coinciden/);
+    expect(validateNewPassword("Tienda2026x", "Tienda2026y")).toMatch(/no coinciden/);
   });
 
   it("acepta una contraseña válida", () => {
-    expect(validateNewPassword("12345678", "12345678")).toBeNull();
+    expect(validateNewPassword("Tienda2026x", "Tienda2026x")).toBeNull();
+  });
+
+  it("rechaza contraseñas comunes, repetidas o en secuencia (PAN-13)", () => {
+    for (const weak of ["12345678", "password", "aaaaaaaa", "abcdefgh", "87654321", "Qwertyui", "11111111"]) {
+      expect(validateNewPassword(weak, weak), weak).toMatch(/muy fácil de adivinar/);
+    }
+    expect(validateNewPassword("Lima2026!", "Lima2026!")).toBeNull();
+    expect(validateNewPassword("12345679", "12345679")).toBeNull();
   });
 });
 

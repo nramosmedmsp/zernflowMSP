@@ -98,7 +98,9 @@ async function setup(template: "ecommerce" | "gym" = "ecommerce") {
 function messenger(overrides: Partial<CaseMessenger> = {}) {
   const sendText = vi.fn(async () => ({ ok: true as const, messageId: "m-text" }));
   const sendTemplate = vi.fn(async () => ({ ok: true as const, messageId: "m-tpl" }));
-  return { sendText, sendTemplate, ...overrides } satisfies CaseMessenger;
+  // Por defecto la plantilla es de servicio (sale a cualquiera); las de publicidad se prueban aparte.
+  const templateKind = vi.fn(async () => "service" as const);
+  return { sendText, sendTemplate, templateKind, ...overrides } satisfies CaseMessenger;
 }
 
 const flowEvents = vi.mocked(runCaseEventFlows);
@@ -496,15 +498,60 @@ describe("plantilla automática de las proactivas", () => {
     expect(stageName(caseById(caseId))).toBe("Por vencer");
   });
 
-  it("R2: quien pidió la baja no recibe la plantilla automática", async () => {
+  it("R2: quien pidió la baja no recibe una plantilla automática de publicidad", async () => {
     const caseId = await scheduledRenovacion();
     fake.rows("contacts")[0].is_subscribed = false;
-    const m = messenger();
+    const m = messenger({ templateKind: vi.fn(async () => "marketing" as const) });
     const r = await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
     expect(r).toMatchObject({ activated: 1, autoTemplates: { sent: 0, failed: 0 } });
     expect(m.sendTemplate).not.toHaveBeenCalled();
     expect(activity("auto_template_skipped", caseId)).toMatchObject([{ meta: { reason: "unsubscribed" } }]);
     expect(caseById(caseId).auto_template_sent_at ?? null).toBeNull();
+  });
+
+  // PRIV-05: a quien se dio de baja solo se le envían plantillas de servicio.
+  it("a quien pidió la baja sí se le envía una plantilla automática de servicio", async () => {
+    await scheduledRenovacion();
+    const contact = fake.rows("contacts")[0];
+    contact.is_subscribed = false;
+    contact.marketing_status = "opted_out";
+    const m = messenger({ templateKind: vi.fn(async () => "service" as const) });
+    const r = await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(r).toMatchObject({ activated: 1, autoTemplates: { sent: 1, failed: 0 } });
+    expect(m.sendTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it("una plantilla de publicidad exige consentimiento registrado", async () => {
+    const caseId = await scheduledRenovacion();
+    const m = messenger({ templateKind: vi.fn(async () => "marketing" as const) });
+    await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(m.sendTemplate).not.toHaveBeenCalled();
+    expect(activity("auto_template_skipped", caseId)).toMatchObject([{ meta: { reason: "no_consent", template_kind: "marketing" } }]);
+  });
+
+  it("con consentimiento registrado, la plantilla de publicidad sale", async () => {
+    await scheduledRenovacion();
+    fake.rows("contacts")[0].marketing_status = "accepted";
+    const m = messenger({ templateKind: vi.fn(async () => "marketing" as const) });
+    const r = await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(r).toMatchObject({ autoTemplates: { sent: 1 } });
+  });
+
+  it("si no se puede saber la categoría se trata como publicidad", async () => {
+    const caseId = await scheduledRenovacion();
+    const m = messenger({ templateKind: vi.fn(async () => "unknown" as const) });
+    await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(m.sendTemplate).not.toHaveBeenCalled();
+    expect(activity("auto_template_skipped", caseId)).toMatchObject([{ meta: { reason: "no_consent", template_kind: "unknown" } }]);
+  });
+
+  it("un mensajero sin lectura de categoría también cuenta como desconocida", async () => {
+    const caseId = await scheduledRenovacion();
+    const m = messenger();
+    delete (m as { templateKind?: unknown }).templateKind;
+    await activateScheduledCases(db(), { deadline: deadline(), now: ACTIVATION, messenger: m });
+    expect(m.sendTemplate).not.toHaveBeenCalled();
+    expect(activity("auto_template_skipped", caseId)).toHaveLength(1);
   });
 
   it("un tipo sin plantilla no envía nada", async () => {

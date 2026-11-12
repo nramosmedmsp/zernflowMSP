@@ -1,6 +1,11 @@
-// Resuelve el filtro de segmento de una difusión a contactos suscritos
-// (servidor, con el cliente de servicio: el administrador ya se validó en la
-// ruta y todas las consultas van acotadas al espacio).
+// Resuelve el filtro de segmento de una difusión a contactos con consentimiento
+// de publicidad (servidor, con el cliente de servicio: el administrador ya se
+// validó en la ruta y todas las consultas van acotadas al espacio).
+//
+// PRIV-01: la publicidad solo sale a quien tiene marketing_status = 'accepted'.
+// El filtro se evalúa sobre TODOS los contactos del espacio y luego se separan
+// los que quedan fuera por estar de baja y los que no tienen consentimiento
+// registrado, para poder decirle al administrador cuántos son antes de lanzar.
 //
 // Filtros de la fase 1 (etiquetas, campos personalizados, plataforma,
 // suscripción, última interacción) siguen igual; la interfaz guarda la
@@ -10,6 +15,7 @@
 // ver segment.ts.
 
 import type { Db } from "@/lib/cases/io";
+import { normalizeMarketingStatus } from "@/lib/consent";
 import type { Platform } from "@/lib/types/database";
 import { pageAll, selectInChunks } from "./db";
 import {
@@ -25,25 +31,62 @@ import {
 export interface SegmentContactRow extends SegmentContact {
   display_name: string | null;
   phone: string | null;
+  /** 'unknown' | 'accepted' | 'opted_out' (00044). */
+  marketing_status?: string | null;
 }
 
-const CONTACT_COLUMNS = "id, display_name, phone, key_date, contact_type_id, team_id, owner_id";
+const CONTACT_COLUMNS = "id, display_name, phone, key_date, contact_type_id, team_id, owner_id, marketing_status";
 
-/** Contactos suscritos del espacio que cumplen el filtro (todos si no hay filtro). */
+/** Contactos del filtro, separados según su consentimiento de publicidad. */
+export interface SegmentByConsent {
+  /** Aceptaron publicidad: pueden recibir la difusión. */
+  accepted: SegmentContactRow[];
+  /** Se dieron de baja de la publicidad (o se borraron sus datos). */
+  optedOut: number;
+  /** Sin consentimiento registrado. */
+  noConsent: number;
+}
+
+/** Contactos del espacio que cumplen el filtro y aceptaron publicidad (todos los que aceptaron si no hay filtro). */
 export async function resolveSegmentContacts(
   db: Db,
   workspaceId: string,
   filter: SegmentFilter | null,
 ): Promise<SegmentContactRow[]> {
-  const all = await pageAll<SegmentContactRow>((from, to) =>
+  return (await resolveSegmentByConsent(db, workspaceId, filter)).accepted;
+}
+
+/** Igual que resolveSegmentContacts, pero también cuenta a quienes quedan fuera por consentimiento. */
+export async function resolveSegmentByConsent(
+  db: Db,
+  workspaceId: string,
+  filter: SegmentFilter | null,
+): Promise<SegmentByConsent> {
+  const everyone = await pageAll<SegmentContactRow>((from, to) =>
     db
       .from("contacts")
       .select(CONTACT_COLUMNS)
       .eq("workspace_id", workspaceId)
-      .eq("is_subscribed", true)
       .order("id")
       .range(from, to),
   );
+  const matching = await applyFilter(db, workspaceId, filter, everyone);
+  const out: SegmentByConsent = { accepted: [], optedOut: 0, noConsent: 0 };
+  for (const contact of matching) {
+    const status = normalizeMarketingStatus(contact.marketing_status);
+    if (status === "accepted") out.accepted.push(contact);
+    else if (status === "opted_out") out.optedOut++;
+    else out.noConsent++;
+  }
+  return out;
+}
+
+async function applyFilter(
+  db: Db,
+  workspaceId: string,
+  filter: SegmentFilter | null,
+  all: SegmentContactRow[],
+): Promise<SegmentContactRow[]> {
   if (!filter || !filter.groups?.length || all.length === 0) return all;
 
   const byId = new Map(all.map((c) => [c.id, c]));

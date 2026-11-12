@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiMember } from "@/lib/api-auth";
+import { enforceRateLimit } from "@/lib/rate-limit-http";
+import { RATE_RULES } from "@/lib/rate-limit";
 import { cleanSearch } from "@/components/contacts/contact-list-query";
 import { ilikePattern } from "@/components/cases/case-filters";
 
@@ -14,6 +16,9 @@ const MAX_LIMIT = 100;
 export async function GET(request: NextRequest) {
   const guard = await requireApiMember();
   if (!guard.ok) return guard.response;
+  // SEG-01: tope de lecturas por usuario (evita vaciar la lista de contactos).
+  const limited = await enforceRateLimit(RATE_RULES.contactsRead, guard.ctx.user.id);
+  if (limited) return limited;
   const { supabase } = guard.ctx;
   const membership = { workspace_id: guard.ctx.workspaceId };
 

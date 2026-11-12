@@ -138,6 +138,7 @@ export const REPLY_IMAGE_MAX_BYTES = 5 * MB;
  * achica las más grandes) o PDF de hasta 25 MB. Así sirve en WhatsApp.
  */
 export function validateReplyAttachment(file: { mime: string; size: number }): OutgoingCheck {
+  if (!(file.size > 0)) return { ok: false, error: EMPTY_FILE_ERROR };
   const mime = baseMime(file.mime);
   const kind = classifyMime(mime);
   if (kind === "image") {
@@ -149,6 +150,9 @@ export function validateReplyAttachment(file: { mime: string; size: number }): O
   if (file.size > MAX_FILE_BYTES) return { ok: false, error: `El PDF pesa más de ${sizeText(MAX_FILE_BYTES)}.` };
   return { ok: true, kind: "file", compress: false };
 }
+
+/** PAN-11: un archivo de 0 bytes (copia que falló) se rechazaba mal: pasaba la validación y salía "enviado". */
+export const EMPTY_FILE_ERROR = "El archivo está vacío (pesa 0 bytes). Elige otro archivo.";
 
 function sizeText(bytes: number): string {
   return `${Math.round(bytes / MB)} MB`;
@@ -169,6 +173,7 @@ export function validateOutgoingAttachment(
 ): OutgoingCheck {
   const rules = SEND_RULES[platform];
   if (!rules) return { ok: false, error: "Este canal no permite enviar archivos." };
+  if (!(file.size > 0)) return { ok: false, error: EMPTY_FILE_ERROR };
   const mime = baseMime(file.mime);
   const kind = classifyMime(mime);
 

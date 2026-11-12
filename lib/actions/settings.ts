@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getWorkspace } from "@/lib/workspace";
+import { auditAction as audit } from "@/lib/audit-server";
 import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import {
   ADMIN_ONLY_MESSAGE,
@@ -49,7 +50,7 @@ export interface SaveWorkspaceSettingsInput {
 export async function saveWorkspaceSettings(
   input: SaveWorkspaceSettingsInput,
 ): Promise<{ error: string } | { ok: true; hasApiKey: boolean; hasAiKey: boolean }> {
-  const { workspace, role, supabase } = await getWorkspace();
+  const { workspace, role, supabase, user } = await getWorkspace();
   if (workspace.id !== input.workspaceId) return { error: WORKSPACE_CHANGED };
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
@@ -92,6 +93,25 @@ export async function saveWorkspaceSettings(
   if (changesSecrets) {
     const { error } = await saveWorkspaceSecrets(workspace.id, secrets);
     if (error) return { error };
+    // SEG-05: queda quién cambió qué clave, nunca el valor.
+    await audit({
+      workspaceId: workspace.id,
+      actorId: user.id,
+      action: "api_key_changed",
+      entity: "secrets",
+      meta: { zernio: !!secrets.lateApiKey, ai: !!secrets.aiApiKey },
+    });
+  }
+  if (name !== workspace.name) {
+    await audit({
+      workspaceId: workspace.id,
+      actorId: user.id,
+      action: "workspace_settings_changed",
+      entity: "workspace",
+      fromValue: workspace.name ?? null,
+      toValue: name,
+      meta: { field: "name" },
+    });
   }
 
   const status = await getWorkspaceSecretsStatus(workspace.id);

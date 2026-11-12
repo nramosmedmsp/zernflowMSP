@@ -14,6 +14,11 @@ export interface ImportOptions {
   channelId: string | null;
   /** Programar gestiones según la fecha clave. */
   scheduleCases: boolean;
+  /**
+   * Quien importa declara que las personas de la lista aceptaron recibir publicidad
+   * (PRIV-02). Sin la declaración entran como "Sin registrar".
+   */
+  consentDeclared: boolean;
 }
 
 export const DEFAULT_IMPORT_OPTIONS: ImportOptions = {
@@ -21,6 +26,7 @@ export const DEFAULT_IMPORT_OPTIONS: ImportOptions = {
   createTags: true,
   channelId: null,
   scheduleCases: false,
+  consentDeclared: false,
 };
 
 export interface ImportLookups {

@@ -163,6 +163,15 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     private table: string,
   ) {}
 
+  /** Para rpc(): filtro de fila arbitrario y conteo exacto pedido al llamar la función. */
+  where(fn: Filter) {
+    this.filters.push(fn);
+    return this;
+  }
+  withCount() {
+    this.count = true;
+    return this;
+  }
   select(_cols?: string, opts?: { count?: string; head?: boolean }) {
     if (this.op === null) this.op = "select";
     else this.returning = true;
@@ -241,6 +250,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         if (op === "is" && value === "null") return (r[col] ?? null) === null;
         const cell = r[col];
         const has = cell !== null && cell !== undefined;
+        if (op === "not" && value === "is.null") return has;
         if (op === "lt") return has && compare(cell, value) < 0;
         if (op === "lte") return has && compare(cell, value) <= 0;
         if (op === "gt") return has && compare(cell, value) > 0;
@@ -412,6 +422,8 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         return this.finish(out);
       }
       case "update": {
+        // Simula una carrera: otra solicitud cambia la fila justo antes de que este UPDATE la busque.
+        this.db.beforeUpdate?.();
         const rows = this.matching();
         const now = new Date().toISOString();
         for (const r of rows) {
@@ -457,6 +469,8 @@ export class FakeDb {
   uniques = new Map<string, { cols: string[]; where?: (row: Row) => boolean }[]>();
   /** Se ejecuta justo antes de cada inserción en la tabla (para simular una carrera con otra solicitud). */
   beforeInsert = new Map<string, () => void>();
+  /** Se ejecuta justo antes de cada UPDATE (para simular que otra persona cambió la fila antes). */
+  beforeUpdate: (() => void) | undefined;
 
   /** Declara una restricción única; con `where`, solo cuenta las filas que la cumplen (índice único parcial). */
   unique(table: string, cols: string[], where?: (row: Row) => boolean): void {
@@ -514,7 +528,41 @@ export class FakeDb {
     },
   };
 
-  async rpc(name: string, args: Record<string, unknown>) {
+  /**
+   * Funciones que se encadenan como tabla (search_cases, 00045): devuelven un Query ya filtrado.
+   * Las demás son llamadas simples (async).
+   */
+  rpc(name: string, args: Record<string, unknown>, opts?: { count?: string }): ReturnType<FakeDb["rpcPlain"]> {
+    if (name === "search_cases") {
+      const norm = (t: unknown) =>
+        String(t ?? "")
+          .normalize("NFD")
+          .replace(/[̀-ͯ]/g, "")
+          .toLowerCase();
+      const digits = (t: unknown) => String(t ?? "").replace(/\D/g, "");
+      const q = norm(String(args.p_q ?? "").trim());
+      const d = digits(args.p_q);
+      const phoneish = /^[0-9+()\s.-]+$/.test(String(args.p_q ?? "")) && d.length >= 3;
+      const ids = new Set(
+        this.rows("contacts")
+          .filter(
+            (c) =>
+              c.workspace_id === args.p_workspace &&
+              q !== "" &&
+              (norm(c.display_name).includes(q) || norm(c.email).includes(q) || (phoneish && digits(c.phone).includes(d))),
+          )
+          .map((c) => c.id),
+      );
+      const query = new Query(this, "cases").where((r) => ids.has(r.contact_id));
+      // En ejecución es un Query encadenable (y esperable); el tipo es el de las demás rpc para no romper a quienes la espían.
+      return (opts?.count ? query.withCount() : query) as unknown as ReturnType<FakeDb["rpcPlain"]>;
+    }
+    return this.rpcPlain(name, args);
+  }
+
+  async rpcPlain(name: string, args: Record<string, unknown>) {
+    // 00043: cerrar las sesiones de una persona (aquí no hay sesiones que borrar).
+    if (name === "revoke_user_sessions") return { data: 0, error: null };
     if (name === "increment_unread") {
       // supabase/migrations/00003_rpc_functions.sql
       const row = this.rows("conversations").find((c) => c.id === args.conv_id);

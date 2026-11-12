@@ -8,6 +8,7 @@ import { flagComplaint, handleInbound } from "@/lib/cases";
 import { executeFlow, FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import { resolveGlobalKeyword } from "@/lib/flow-engine/global-keywords";
 import { logActivity } from "@/lib/cases/io";
+import { buildConsentChange, NOTE_MAX } from "@/lib/consent";
 import { applyWaitingMenuReply } from "@/lib/flow-engine/menu-reply";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { claimWaitingSession, findWaitingSession } from "@/lib/flow-engine/waiting-session";
@@ -252,10 +253,18 @@ async function handleGlobalKeywords(
   const result = resolveGlobalKeyword(text, workspace.global_keywords);
   if (!result.handled) return false;
 
-  const { error } = await supabase
-    .from("contacts")
-    .update({ is_subscribed: result.action === "subscribe" })
-    .eq("id", contactId);
+  // Baja -> "de baja"; Alta -> "aceptó" con origen "palabra clave" (PRIV-01): queda
+  // la fecha y que fue el propio cliente. is_subscribed lo deja coherente la base.
+  const { data: current } = await supabase.from("contacts").select("marketing_status").eq("id", contactId).maybeSingle();
+  const change = buildConsentChange({
+    from: current?.marketing_status,
+    action: result.action === "subscribe" ? "accept" : "opt_out",
+    source: "keyword",
+    by: null,
+    note: `Palabra clave: ${result.keyword}`.slice(0, NOTE_MAX),
+    at: new Date().toISOString(),
+  });
+  const { error } = await supabase.from("contacts").update(change.patch).eq("id", contactId);
   // Si no se pudo guardar, no se da por atendida: el mensaje sigue y queda el error.
   if (error) throw new Error(`no se pudo cambiar la suscripción: ${error.message}`);
 

@@ -38,6 +38,10 @@ import { selectClass } from "./ui";
 import { useNow } from "./use-now";
 import { useDraftPreviews } from "./use-drafts";
 import { useViewAs } from "@/components/view-as/view-as-context";
+import { useInboxSearch } from "./use-inbox-search";
+import { SEARCH_RESULT_LIMIT } from "./inbox-paging";
+
+const NO_RESULTS = () => {};
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -89,6 +93,9 @@ export function ConversationList({
   syncError = null,
   failedConversationIds,
   headerActions,
+  casesTruncated = false,
+  paging,
+  onSearchResults,
 }: {
   workspaceId: string;
   conversations: InboxConversation[];
@@ -104,6 +111,12 @@ export function ConversationList({
   failedConversationIds?: ReadonlySet<string>;
   /** Botones extra en la cabecera (por ejemplo, los avisos). */
   headerActions?: ReactNode;
+  /** Hay más gestiones activas que el tope de lectura: los contadores pueden quedar cortos. */
+  casesTruncated?: boolean;
+  /** Chats sin gestión activa se cargan por páginas ("Todos / Todo"). */
+  paging?: { hasMore: boolean; loading: boolean; failed: boolean; total: number | null; onLoadMore: () => void };
+  /** Chats que encontró la búsqueda del servidor (se agregan a los cargados). */
+  onSearchResults?: (list: InboxConversation[]) => void;
 }) {
   const scopes = availableScopes(meta);
   const [scope, setScope] = useState<InboxScope>(DEFAULT_SCOPE);
@@ -157,16 +170,28 @@ export function ConversationList({
     }
   }
 
+  // Búsqueda en el servidor sobre todos los chats que la persona puede ver.
+  const search = useInboxSearch({ workspaceId, text: filters.search, onResults: onSearchResults ?? NO_RESULTS });
+
   // Por responder de cada alcance (insignias) y conteo de cada estado en el alcance actual (chips).
   const { waitingByScope, countByState, rows } = useMemo(() => {
     const build = (sc: InboxScope, st: InboxState) =>
-      buildRows(conversations, casesByContact, sc, st, filtersForScope(filters, sc), meta, nowDate);
+      buildRows(conversations, casesByContact, sc, st, filtersForScope(filters, sc), meta, nowDate, search.hitIds);
     const waiting = new Map<InboxScope, number>();
     for (const sc of availableScopes(meta)) waiting.set(sc, build(sc, "waiting").length);
     const byState = new Map<InboxState, InboxRow[]>();
     for (const st of INBOX_STATES) byState.set(st, build(scope, st));
     return { waitingByScope: waiting, countByState: byState, rows: byState.get(state) ?? [] };
-  }, [conversations, casesByContact, filters, meta, nowDate, scope, state]);
+  }, [conversations, casesByContact, filters, meta, nowDate, scope, state, search.hitIds]);
+
+  // Resultados del servidor que esta vista (Míos, Equipo, estado, filtros) deja fuera: se avisa.
+  const searchHidden = useMemo(() => {
+    if (!search.hitIds) return 0;
+    const shown = new Set(rows.map((r) => r.conversation.id));
+    let hidden = 0;
+    for (const id of search.hitIds) if (!shown.has(id)) hidden++;
+    return hidden;
+  }, [search.hitIds, rows]);
 
   useEffect(() => {
     if (!viewRead || autoScopeDone.current) return;
@@ -222,6 +247,11 @@ export function ConversationList({
         </div>
       </div>
       {syncError && <p className="border-b border-border px-4 py-1.5 text-xs text-destructive">{syncError}</p>}
+      {casesTruncated && (
+        <p role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-1.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          Hay muchísimas gestiones activas: se cargaron las más urgentes y los números de arriba pueden quedar cortos. Para ver el resto usa Gestiones.
+        </p>
+      )}
 
       {/* Ver: de quién son los chats */}
       {scopes.length > 1 && (
@@ -310,6 +340,23 @@ export function ConversationList({
           )}
         </button>
       </div>
+
+      {filters.search.trim() && (search.searching || search.failed || search.limited || searchHidden > 0) && (
+        <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">
+          {search.searching
+            ? "Buscando en todos tus chats…"
+            : search.failed
+              ? "No se pudo buscar en todos los chats; se muestran solo los ya cargados."
+              : [
+                  search.limited ? `Hay más de ${SEARCH_RESULT_LIMIT} resultados: escribe más para afinar.` : "",
+                  searchHidden > 0
+                    ? `${searchHidden} ${searchHidden === 1 ? "resultado queda" : "resultados quedan"} en otras vistas${scopes.length > 1 ? " (cambia Míos, Todos o el estado)" : ""}.`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+        </p>
+      )}
 
       {showFilters && (
         <div className="grid grid-cols-2 gap-2 border-b border-border px-3 pb-3">
@@ -513,6 +560,24 @@ export function ConversationList({
               </button>
             );
           })
+        )}
+        {paging && scope === "all" && state === "all" && !filters.search.trim() && (paging.hasMore || paging.failed) && (
+          <div className="border-t border-border p-3 text-center">
+            <p className="text-xs text-muted-foreground">
+              {paging.total !== null
+                ? `Mostrando ${rows.length} de ${paging.total} chats. Los más antiguos todavía no se cargan.`
+                : "Los chats más antiguos todavía no se cargan."}
+            </p>
+            {paging.failed && <p className="mt-1 text-xs text-destructive">No se pudieron cargar más chats. Reintenta.</p>}
+            <button
+              type="button"
+              onClick={paging.onLoadMore}
+              disabled={paging.loading}
+              className="mt-2 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+            >
+              {paging.loading ? "Cargando…" : "Cargar más chats"}
+            </button>
+          </div>
         )}
       </div>
     </div>

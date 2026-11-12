@@ -14,6 +14,7 @@ export const CRON_LABELS: Record<CronName, string> = {
   jobs: "Trabajos programados (esperas de flujos, difusiones, gestiones)",
   sequences: "Secuencias",
   media_cleanup: "Limpieza de archivos vencidos",
+  retention: "Limpieza de avisos leídos y registros técnicos viejos",
 };
 
 export interface CronStatus {

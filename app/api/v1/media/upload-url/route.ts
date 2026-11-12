@@ -3,6 +3,9 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { conversationMediaPath, validateOutgoingAttachment } from "@/lib/chat-media";
 import { createUploadUrl } from "@/lib/media-store";
 import { getEffectiveAuthUser } from "@/lib/view-as/state";
+import { enforceRateLimit, rateLimitedResponse } from "@/lib/rate-limit-http";
+import { PENDING_UPLOADS_MESSAGE, registerUpload } from "@/lib/upload-tracking";
+import { RATE_RULES } from "@/lib/rate-limit";
 
 /**
  * POST /api/v1/media/upload-url { conversationId, mime, size }
@@ -16,6 +19,9 @@ export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  // SEG-01: tope de enlaces de subida por usuario.
+  const limited = await enforceRateLimit(RATE_RULES.uploadUrl, user.id);
+  if (limited) return limited;
 
   const body = await request.json().catch(() => ({}));
   const { conversationId, mime, size } = body as { conversationId?: unknown; mime?: unknown; size?: unknown };
@@ -37,7 +43,11 @@ export async function POST(request: NextRequest) {
   if (check.compress) return NextResponse.json({ error: "La foto pesa demasiado para este canal." }, { status: 400 });
 
   const path = conversationMediaPath(conversation.workspace_id, conversation.id, "out", mime);
-  const upload = await createUploadUrl(await createServiceClient(), path);
+  const service = await createServiceClient();
+  // SEG-10: tope de subidas sin enviar por usuario; la subida queda anotada para la limpieza diaria.
+  const registered = await registerUpload(service, { workspaceId: conversation.workspace_id, userId: user.id, path, source: "chat" });
+  if (!registered.ok) return rateLimitedResponse(3600, PENDING_UPLOADS_MESSAGE);
+  const upload = await createUploadUrl(service, path);
   if (!upload) return NextResponse.json({ error: "No se pudo preparar la subida. Inténtalo de nuevo." }, { status: 500 });
   return NextResponse.json(upload);
 }

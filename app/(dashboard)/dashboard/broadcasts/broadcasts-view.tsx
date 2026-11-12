@@ -375,6 +375,18 @@ interface PreviewResult {
   willReceive: number;
   excludedTotal: number;
   excludedReasons: string[];
+  excluded?: {
+    closedWindow?: number;
+    noConversation?: number;
+    optedOut?: number;
+    noConsent?: number;
+  };
+}
+
+interface SkippedRecipient {
+  id: string;
+  error_message: string | null;
+  contacts: { display_name: string | null } | null;
 }
 
 interface FailedRecipient {
@@ -467,6 +479,7 @@ function BroadcastDetail({
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [failedRecipients, setFailedRecipients] = useState<FailedRecipient[]>([]);
+  const [skippedRecipients, setSkippedRecipients] = useState<SkippedRecipient[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [editingFilter, setEditingFilter] = useState(false);
@@ -507,6 +520,25 @@ function BroadcastDetail({
       cancelled = true;
     };
   }, [broadcast.id, broadcast.failed]);
+
+  // Quienes no recibieron la difusión porque se dieron de baja o no tenían consentimiento al momento de enviar.
+  useEffect(() => {
+    if (isDraft) return;
+    let cancelled = false;
+    const supabase = createClient();
+    supabase
+      .from("broadcast_recipients")
+      .select("id, error_message, contacts(display_name)")
+      .eq("broadcast_id", broadcast.id)
+      .eq("status", "skipped")
+      .limit(50)
+      .then(({ data }) => {
+        if (!cancelled) setSkippedRecipients((data ?? []) as unknown as SkippedRecipient[]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [broadcast.id, broadcast.status, broadcast.sent, broadcast.failed, isDraft]);
 
   function changeKind(next: ContentKind) {
     setKind(next);
@@ -754,6 +786,23 @@ function BroadcastDetail({
             </div>
           )}
 
+          {/* Omitidos por baja o falta de consentimiento */}
+          {skippedRecipients.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-900/50 dark:bg-amber-900/10">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                No se envió a {skippedRecipients.length} {skippedRecipients.length === 1 ? "contacto" : "contactos"} (se dieron de baja o dejaron de tener consentimiento antes del envío)
+              </p>
+              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {skippedRecipients.map((r) => (
+                  <li key={r.id}>
+                    <span className="font-medium text-foreground">{r.contacts?.display_name || "Contacto sin nombre"}</span>
+                    : {r.error_message || "Omitido"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* Tipo y redacción del mensaje */}
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
@@ -890,7 +939,13 @@ function BroadcastDetail({
                   Quedan fuera {formatNumber(preview.excludedTotal)}: {preview.excludedReasons.join("; ")}.
                 </p>
               )}
-              {preview.kind === "text" && preview.excludedTotal > 0 && (
+              {((preview.excluded?.noConsent ?? 0) > 0 || (preview.excluded?.optedOut ?? 0) > 0) && (
+                <p className="text-xs text-muted-foreground">
+                  La publicidad solo se envía a quien aceptó recibirla. Para incluir a los «sin registrar», anota su
+                  consentimiento en su ficha o en el panel del chat. A quienes se dieron de baja no se les puede enviar.
+                </p>
+              )}
+              {preview.kind === "text" && (preview.excluded?.closedWindow ?? 0) + (preview.excluded?.noConversation ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Fuera de las 24 horas WhatsApp solo acepta plantillas: cambia a “Plantilla de WhatsApp” para
                   llegar a esos contactos.

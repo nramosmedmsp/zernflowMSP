@@ -1,6 +1,9 @@
 "use server";
 
+import { headers } from "next/headers";
 import { createServiceClient } from "@/lib/supabase/server";
+import { RATE_LIMIT_MESSAGE, RATE_RULES, clientIp, hashSubject } from "@/lib/rate-limit";
+import { rateLimitDecision } from "@/lib/rate-limit-http";
 import { rpcAuthUserExists } from "@/lib/supabase/extra-rpc";
 import { findAuthUserByEmail, generateAccessLink } from "@/lib/supabase/admin-users";
 import { isMailConfigured } from "@/lib/mail/settings";
@@ -34,6 +37,16 @@ export async function requestPasswordReset(rawEmail: string): Promise<{ message:
     if (!baseUrl) console.error("[requestPasswordReset] falta NEXT_PUBLIC_APP_URL");
     return { message: RESET_REQUESTED_MESSAGE };
   }
+
+  // SEG-01: tope por IP y por correo (acción pública; cada pedido invalida el
+  // enlace anterior y gasta cuota de correo). El correo se guarda con hash.
+  // El tope por correo cuenta aunque la cuenta no exista, para no revelarlo.
+  const ip = clientIp(await headers());
+  const [byIp, byEmail] = await Promise.all([
+    rateLimitDecision(RATE_RULES.passwordResetIp, hashSubject(ip)),
+    rateLimitDecision(RATE_RULES.passwordResetEmail, hashSubject(email)),
+  ]);
+  if (!byIp.allowed || !byEmail.allowed) return { message: RATE_LIMIT_MESSAGE };
 
   try {
     const { exists } = await rpcAuthUserExists(service, email);

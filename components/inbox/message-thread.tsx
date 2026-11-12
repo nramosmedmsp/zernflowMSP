@@ -1,5 +1,6 @@
 "use client";
 
+import { isSessionExpired, loginHref } from "@/lib/session-expired";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { Bot, BotOff, Check, CheckCheck, Paperclip, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -197,7 +198,22 @@ function MessageBubble({
           ) : failed && outboxId ? (
             <span role="alert" className="inline-flex items-center gap-1.5 text-destructive">
               <AlertCircle className="h-3 w-3" />
-              No se envió
+              {isSessionExpired(message.error) ? (
+                <>
+                  Tu sesión venció.
+                  <a
+                    href={loginHref(typeof window === "undefined" ? "/dashboard/inbox" : `${window.location.pathname}${window.location.search}`)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium underline underline-offset-2 hover:no-underline"
+                  >
+                    Iniciar sesión (se abre en otra pestaña)
+                  </a>
+                  y luego
+                </>
+              ) : (
+                "No se envió"
+              )}
               {onRetry && (
                 <button
                   type="button"

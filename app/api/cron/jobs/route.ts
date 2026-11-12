@@ -690,7 +690,7 @@ async function processJob(
 
       // El SDK de Zernio no lanza excepciones: deliverBroadcast revisa
       // res.error y devuelve { ok: false, error } con el motivo.
-      let delivery: { ok: true } | { ok: false; error: string };
+      let delivery: { ok: true } | { ok: false; error: string; skipped?: true };
       try {
         const { deliverBroadcast } = await import("@/lib/broadcasts/deliver");
         delivery = await deliverBroadcast(supabase, {
@@ -714,6 +714,12 @@ async function processJob(
         await supabase.rpc("increment_broadcast_sent", {
           b_id: payload.broadcastId,
         });
+      } else if (delivery.skipped) {
+        // PRIV-05: se dio de baja o no tiene consentimiento al momento de enviar. No es un fallo.
+        await supabase
+          .from("broadcast_recipients")
+          .update({ status: "skipped", error_message: delivery.error })
+          .eq("id", payload.recipientId);
       } else {
         await supabase
           .from("broadcast_recipients")

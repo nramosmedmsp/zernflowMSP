@@ -12,6 +12,10 @@
     {
       "path": "/api/cron/media-cleanup",
       "schedule": "17 8 * * *"
+    },
+    {
+      "path": "/api/cron/retention",
+      "schedule": "43 8 * * *"
     }
   ]
 }

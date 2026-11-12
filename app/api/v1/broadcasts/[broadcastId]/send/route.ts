@@ -3,6 +3,9 @@ import { requireApiAdmin } from "@/lib/api-auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { launchBroadcast } from "@/lib/broadcasts/launch";
 import { loadBroadcastForPlan } from "@/lib/broadcasts/request";
+import { enforceRateLimit } from "@/lib/rate-limit-http";
+import { RATE_RULES } from "@/lib/rate-limit";
+import { logAudit } from "@/lib/audit";
 
 /**
  * POST /api/v1/broadcasts/:broadcastId/send
@@ -20,6 +23,9 @@ export async function POST(
   const guard = await requireApiAdmin();
   if (!guard.ok) return guard.response;
   const { supabase, workspaceId } = guard.ctx;
+  // SEG-01: tope de difusiones lanzadas por usuario.
+  const limited = await enforceRateLimit(RATE_RULES.broadcastSend, guard.ctx.user.id);
+  if (limited) return limited;
 
   let body: unknown = null;
   try {
@@ -46,6 +52,15 @@ export async function POST(
     filter: loaded.filter,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+
+  // SEG-05: lanzar una difusión deja registro (quién, cuál y a cuántos).
+  await logAudit(service, {
+    workspaceId,
+    actorId: guard.ctx.user.id,
+    action: "broadcast_launched",
+    entity: "broadcast",
+    meta: { broadcast_id: broadcastId, recipients: result.totalRecipients, excluded: result.excludedTotal },
+  });
 
   return NextResponse.json({
     broadcastId,

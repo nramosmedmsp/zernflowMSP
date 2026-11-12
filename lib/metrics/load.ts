@@ -7,6 +7,7 @@ import { buildHoursInfo, scheduleForTeam } from "@/lib/cases/hours";
 import type { Db } from "@/lib/cases/io";
 import type { Json } from "@/lib/types/database";
 import { periodRange } from "./period";
+import { readAllPages } from "./paging";
 import { staleStageDaysFromSettings } from "./overdue";
 import type {
   MetricActivity,
@@ -22,9 +23,8 @@ import type {
   MetricsInput,
 } from "./types";
 
-/** Tope de gestiones leídas; si se supera, la pantalla avisa. */
-export const MAX_CASES = 5000;
-const MAX_INBOUND_EVENTS = 20_000;
+/** Tope de seguridad de gestiones leídas (se leen por páginas hasta el final); si se supera, la pantalla avisa. */
+export const MAX_CASES = 50_000;
 const PAGE = 1000;
 const CHUNK = 150;
 
@@ -91,39 +91,35 @@ export async function loadMetrics(
   const periodOr = `and(opened_at.gte.${s},opened_at.lt.${e}),and(closed_at.gte.${s},closed_at.lt.${e}),and(first_response_at.gte.${s},first_response_at.lt.${e})`;
 
   // Mensajes entrantes: solo para administradores y supervisores (el evento no
-  // guarda a quién se asignó, así que no se puede recortar por asesor). No
-  // depende de las gestiones: corre en paralelo con todo lo demás. La primera
-  // página trae el total y el resto de páginas se piden a la vez.
+  // guarda a quién se asignó, así que no se puede recortar por asesor). Los cuenta la
+  // base por hora y canal (00045): ya no se traen las filas (la API corta en 1 000
+  // y con volumen el número salía mal sin avisar).
   const loadInbound = async () => {
     const inbound: MetricInboundEvent[] = [];
-    let truncatedInbound = false;
-    if (!params.canSeeOthers) return { inbound, truncatedInbound };
-    const page = (from: number, withCount: boolean) =>
-      db
-        .from("analytics_events")
-        .select("created_at, metadata", withCount ? { count: "exact" } : undefined)
-        .eq("workspace_id", workspaceId)
-        .eq("event_type", "message_received")
-        .gte("created_at", s)
-        .lt("created_at", e)
-        .order("created_at", { ascending: true })
-        .range(from, from + PAGE - 1);
-    const first = await page(0, true);
-    const pages = [first.data ?? []];
-    const total = Math.min(first.count ?? pages[0].length, MAX_INBOUND_EVENTS);
-    if ((first.count ?? 0) > MAX_INBOUND_EVENTS) truncatedInbound = true;
-    const rest: number[] = [];
-    for (let from = PAGE; from < total; from += PAGE) rest.push(from);
-    const others = await Promise.all(rest.map((from) => page(from, false)));
-    for (const r of others) pages.push(r.data ?? []);
-    for (const rows of pages) {
-      for (const row of rows) {
-        const md = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {};
-        const platform = (md as Record<string, Json | undefined>).platform;
-        inbound.push({ created_at: row.created_at, platform: typeof platform === "string" ? platform : null });
-      }
+    if (!params.canSeeOthers) return { inbound, truncatedInbound: false };
+    const { data, error } = await db.rpc("metrics_inbound_hourly", { p_workspace: workspaceId, p_from: s, p_to: e });
+    if (error) throw new Error(`No se pudieron contar los mensajes entrantes: ${error.message}`);
+    for (const row of data ?? []) {
+      inbound.push({ created_at: row.hour_start, platform: row.platform, count: Number(row.n) });
     }
-    return { inbound, truncatedInbound };
+    return { inbound, truncatedInbound: false };
+  };
+
+  // Todas las gestiones que cumplen, por páginas hasta el final.
+  const loadCases = async (kind: "period" | "open") => {
+    const res = await readAllPages<CaseQueryRow>(
+      (from, to) => {
+        let q = dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId));
+        q = kind === "period" ? q.or(periodOr) : q.eq("status", "open");
+        return q
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: CaseQueryRow[] | null; error: { message: string } | null }>;
+      },
+      { pageSize: PAGE, max: MAX_CASES },
+    );
+    if (res.error) throw new Error(`No se pudieron leer las gestiones: ${res.error}`);
+    return res;
   };
 
   // Todo lo que depende solo del espacio, en una sola ronda. Etapas y motivos
@@ -149,14 +145,8 @@ export async function loadMetrics(
         .from("case_outcome_reasons")
         .select("id, case_type_id, name, kind, case_types!inner(workspace_id)")
         .eq("case_types.workspace_id", workspaceId),
-      dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId))
-        .or(periodOr)
-        .order("created_at", { ascending: false })
-        .limit(MAX_CASES + 1),
-      dbFilters(db.from("cases").select(CASE_COLUMNS).eq("workspace_id", workspaceId))
-        .eq("status", "open")
-        .order("created_at", { ascending: false })
-        .limit(MAX_CASES + 1),
+      loadCases("period"),
+      loadCases("open"),
       loadInbound(),
     ]);
 
@@ -164,11 +154,11 @@ export async function loadMetrics(
   const teamRows = teamsRes.data ?? [];
   const members = await params.members;
 
-  const periodRows = (periodRes.data ?? []) as unknown as CaseQueryRow[];
-  const openRows = (openRes.data ?? []) as unknown as CaseQueryRow[];
-  const truncatedCases = periodRows.length > MAX_CASES || openRows.length > MAX_CASES;
+  const periodRows = periodRes.rows;
+  const openRows = openRes.rows;
+  const truncatedCases = periodRes.truncated || openRes.truncated;
   const byId = new Map<string, MetricCase>();
-  for (const row of [...periodRows.slice(0, MAX_CASES), ...openRows.slice(0, MAX_CASES)]) {
+  for (const row of [...periodRows, ...openRows]) {
     if (!byId.has(row.id)) byId.set(row.id, toCase(row));
   }
   const cases = [...byId.values()];

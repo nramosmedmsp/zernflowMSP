@@ -107,7 +107,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
 
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [result, setResult] = useState<ImportFinalResult | null>(null);
-  const [extra, setExtra] = useState({ scheduled: 0, linked: 0 });
+  const [extra, setExtra] = useState({ scheduled: 0, linked: 0, optedOutKept: 0 });
   const fileInput = useRef<HTMLInputElement>(null);
 
   const lookups: ImportLookups = useMemo(
@@ -216,6 +216,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
       setPhase("importing");
       let scheduled = 0;
       let linked = 0;
+      let optedOutKept = 0;
       for (let i = 0; i < rows.length; i += IMPORT_BATCH_SIZE) {
         const part = rows.slice(i, i + IMPORT_BATCH_SIZE);
         const res = await processImportBatch({ batchId: started.batchId, rows: part, options });
@@ -226,6 +227,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
         }
         scheduled += res.result.scheduled;
         linked += res.result.linked;
+        optedOutKept += res.result.optedOutKept;
         setProgress({ done: Math.min(i + part.length, rows.length), total: rows.length });
       }
       setPhase("finishing");
@@ -236,7 +238,7 @@ export function ImportWizard({ context }: { context: ImportContext }) {
         setStep("preview");
         return;
       }
-      setExtra({ scheduled, linked });
+      setExtra({ scheduled, linked, optedOutKept });
       setResult(finished.result);
       setStep("done");
       toast.success(
@@ -506,6 +508,33 @@ export function ImportWizard({ context }: { context: ImportContext }) {
                 />
                 Programar gestiones según la fecha clave
               </label>
+
+              {/* PRIV-02: la declaración de consentimiento de publicidad */}
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-700/60 dark:bg-amber-900/10">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={options.consentDeclared}
+                    onChange={(e) => setOptions({ ...options, consentDeclared: e.target.checked })}
+                  />
+                  <span>
+                    <span className="font-medium">
+                      Declaro que las personas de este archivo aceptaron recibir publicidad de la tienda
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Si marcas esta casilla, quedarán registradas como «aceptó publicidad», con origen «importación», la
+                      fecha de hoy y tu nombre, y podrán recibir difusiones y secuencias. Márcala solo si tienes la
+                      prueba de que aceptaron (por ejemplo, un formulario o una venta donde lo autorizaron). Quien ya se
+                      dio de baja no se reactiva.
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Si no la marcas, entran como «sin registrar»: podrás atenderlos cuando escriban, pero no enviarles
+                      publicidad hasta que acepten.
+                    </span>
+                  </span>
+                </label>
+              </div>
             </div>
 
             <div className="overflow-hidden rounded-lg border border-border">
@@ -661,7 +690,7 @@ function DoneStep({
   onRestart,
 }: {
   result: ImportFinalResult;
-  extra: { scheduled: number; linked: number };
+  extra: { scheduled: number; linked: number; optedOutKept: number };
   options: ImportOptions;
   onErrorsCsv: () => void;
   onRestart: () => void;
@@ -686,6 +715,15 @@ function DoneStep({
           </div>
         ))}
       </div>
+      <p className="text-sm text-muted-foreground">
+        {result.consentDeclared
+          ? `Quedaron registrados como «aceptó publicidad»: ${formatNumber(result.consented)}.${
+              extra.optedOutKept > 0
+                ? ` ${formatNumber(extra.optedOutKept)} ya se habían dado de baja y siguen de baja.`
+                : ""
+            }`
+          : "Los contactos importados quedaron como «sin registrar»: no recibirán publicidad hasta que acepten."}
+      </p>
       {(options.scheduleCases || options.channelId) && (
         <p className="text-sm text-muted-foreground">
           {options.scheduleCases && <>Gestiones programadas: {formatNumber(extra.scheduled)}. </>}

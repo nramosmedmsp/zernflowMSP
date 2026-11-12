@@ -229,6 +229,17 @@ describe("buildRows", () => {
     ]);
   });
 
+  it("los chats que encontró el servidor entran aunque no coincidan con el texto en memoria", () => {
+    const cases = [kase({ id: "a", contact_id: "c1" }), kase({ id: "b", contact_id: "c2" })];
+    const grouped = groupCasesByContact(cases);
+    const convs = [conv("x1", "c1"), conv("x2", "c2")];
+    const admin = meta({ isAdmin: true });
+    const f = { ...EMPTY_FILTERS, search: "no-coincide-en-memoria" };
+    expect(buildRows(convs, grouped, "all", "all", f, admin, NOW)).toHaveLength(0);
+    const rows = buildRows(convs, grouped, "all", "all", f, admin, NOW, new Set(["x2"]));
+    expect(rows.map((r) => r.conversation.id)).toEqual(["x2"]);
+  });
+
   it("Todas incluye chats sin gestión y el filtro Sin gestión los aísla", () => {
     const cases = [kase({ id: "a", contact_id: "c1" })];
     const grouped = groupCasesByContact(cases);

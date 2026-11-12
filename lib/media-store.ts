@@ -17,6 +17,7 @@ import {
   safeFileName,
   validateOutgoingAttachment,
 } from "@/lib/chat-media";
+import { fetchInboundSafely } from "@/lib/safe-fetch";
 
 type Db = SupabaseClient<Database>;
 
@@ -134,12 +135,9 @@ export async function fetchAttachment(att: InboundAttachmentInput, apiKey: strin
   if (!plan.ok || !att.url) return { status: "failed", kind };
   if (plan.withApiKey && !apiKey) return { status: "failed", kind };
   try {
-    const res = await fetch(att.url, {
-      headers: plan.withApiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: "follow",
-    });
-    if (!res.ok) return { status: "failed", kind };
+    // SEG-11: sin seguir redirecciones a ciegas; cada salto se revalida (lib/safe-fetch.ts).
+    const res = await fetchInboundSafely(att.url, { apiKey, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res || !res.ok) return { status: "failed", kind };
     const mime = baseMime(res.headers.get("content-type"));
     const body = await readCapped(res, MAX_FILE_BYTES);
     if (body === "too_large") return { status: "too_large", kind };

@@ -14,8 +14,17 @@ import {
   replaceActiveCases,
 } from "./inbox-refresh";
 import { uniqueChannelName } from "@/lib/realtime-channel";
-
-const MAX_ACTIVE_CASES = 1000;
+import {
+  FETCH_IN_CHUNK,
+  INBOX_PAGE_SIZE,
+  MAX_INCREMENTAL_FETCH,
+  applyCaseDiff,
+  chunkList,
+  diffActiveCases,
+  loadActiveCases,
+  loadActiveStamps,
+  oldestMessageAt,
+} from "./inbox-paging";
 
 function isActive(c: InboxCase): boolean {
   return c.status === "open" || c.status === "scheduled";
@@ -32,16 +41,29 @@ export function useInboxData({
   workspaceId,
   initialConversations,
   initialCases,
+  initialCasesTruncated = false,
+  recentPage = { hasMore: false, cursor: null },
   viewing = false,
 }: {
   workspaceId: string;
   initialConversations: InboxConversation[];
   initialCases: InboxCase[];
+  /** Hay más gestiones activas que el tope de lectura: los contadores pueden quedar cortos. */
+  initialCasesTruncated?: boolean;
+  /** Primera página de chats recientes: si hay más y desde dónde seguir ("Cargar más"). */
+  recentPage?: { hasMore: boolean; cursor: string | null };
   /** "Ver como": Realtime llega con permisos del Dueño, así que solo dispara relecturas (con la identidad vista). */
   viewing?: boolean;
 }) {
   const [conversations, setConversations] = useState(initialConversations);
   const [cases, setCases] = useState(initialCases);
+  const [casesTruncated, setCasesTruncated] = useState(initialCasesTruncated);
+  // "Cargar más": solo el estado de esta pantalla; un router.refresh() no lo reinicia.
+  const [hasMore, setHasMore] = useState(recentPage.hasMore);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
+  const cursorRef = useRef<string | null>(recentPage.cursor);
+  const conversationsRef = useRef(conversations);
   const requestedContacts = useRef(new Set<string>());
 
   // Al refrescar la página (p. ej. después de sincronizar) llegan datos nuevos.
@@ -57,7 +79,63 @@ export function useInboxData({
   }, [initialConversations]);
   useEffect(() => {
     setCases(initialCases);
-  }, [initialCases]);
+    setCasesTruncated(initialCasesTruncated);
+  }, [initialCases, initialCasesTruncated]);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  /** Agrega chats traídos aparte (por ejemplo, los que encontró la búsqueda del servidor). */
+  const addConversations = useCallback((list: InboxConversation[]) => {
+    setConversations((prev) => mergeConversations(prev, list));
+  }, []);
+
+  /** Siguiente página de chats, de más reciente a más antiguo (para "Todos / Todo"). */
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setMoreError(false);
+    try {
+      const supabase = createClient();
+      let query = supabase
+        .from("conversations")
+        .select("*, contacts(*)")
+        .eq("workspace_id", workspaceId)
+        .not("last_message_at", "is", null)
+        .order("last_message_at", { ascending: false })
+        .order("id", { ascending: true })
+        .limit(INBOX_PAGE_SIZE);
+      // lte (no lt): los chats con la misma hora del borde no se saltan; los repetidos se descartan abajo.
+      if (cursorRef.current) query = query.lte("last_message_at", cursorRef.current);
+      const { data, error } = await query;
+      if (error) throw error;
+      let page = (data ?? []) as InboxConversation[];
+      const known = new Set(conversationsRef.current.map((c) => c.id));
+      let fresh = page.filter((c) => !known.has(c.id));
+      let more = page.length >= INBOX_PAGE_SIZE && fresh.length > 0;
+      if (!more) {
+        // Se acabaron los que tienen mensajes: faltan, a lo más, los chats todavía sin mensajes.
+        const nulls = await supabase
+          .from("conversations")
+          .select("*, contacts(*)")
+          .eq("workspace_id", workspaceId)
+          .is("last_message_at", null)
+          .limit(INBOX_PAGE_SIZE);
+        if (nulls.error) throw nulls.error;
+        const extra = ((nulls.data ?? []) as InboxConversation[]).filter((c) => !known.has(c.id));
+        page = [...page, ...extra];
+        fresh = [...fresh, ...extra];
+      }
+      cursorRef.current = oldestMessageAt(page) ?? cursorRef.current;
+      setConversations((prev) => mergeConversations(prev, fresh));
+      for (const c of fresh) requestedContacts.current.add(c.contact_id);
+      setHasMore(more);
+    } catch {
+      setMoreError(true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, workspaceId]);
 
   /** Trae los chats del contacto si todavía no están (RLS). Devuelve los del contacto. */
   const ensureContactConversations = useCallback(
@@ -116,23 +194,37 @@ export function useInboxData({
       if (!force && now - lastRefresh.current < CASES_REFRESH_MIN_GAP_MS) return;
       lastRefresh.current = now;
       const supabase = createClient();
-      const { data, error } = await supabase
-        .from("cases")
-        .select("*")
-        .eq("workspace_id", workspaceId)
-        .in("status", ["open", "scheduled"])
-        .order("waiting_since", { ascending: true, nullsFirst: false })
-        .limit(MAX_ACTIVE_CASES);
-      if (error || !data) return;
-      const fresh = replaceActiveCases(data as InboxCase[]);
-      const lost = lostContactIds(casesRef.current, fresh);
-      setCases(fresh);
+      // Solo id y fecha de cambio de todas las activas; completas, únicamente las nuevas o modificadas.
+      const remote = await loadActiveStamps(supabase, workspaceId);
+      if (!remote) return;
+      setCasesTruncated(remote.truncated);
+      const { removedIds, fetchIds } = diffActiveCases(casesRef.current, remote.stamps);
+      let apply: (prev: InboxCase[]) => InboxCase[];
+      if (fetchIds.length > MAX_INCREMENTAL_FETCH) {
+        try {
+          const all = await loadActiveCases(supabase, workspaceId);
+          setCasesTruncated(all.truncated);
+          apply = () => replaceActiveCases(all.cases);
+        } catch {
+          return;
+        }
+      } else {
+        const fetched: InboxCase[] = [];
+        for (const ids of chunkList(fetchIds, FETCH_IN_CHUNK)) {
+          const { data, error } = await supabase.from("cases").select("*").in("id", ids);
+          if (error || !data) return;
+          fetched.push(...(data as InboxCase[]));
+        }
+        apply = (prev) => applyCaseDiff(prev, removedIds, fetched);
+      }
+      const lost = lostContactIds(casesRef.current, apply(casesRef.current));
+      setCases(apply);
       if (lost.length === 0) return;
       const { data: visible, error: visibleError } = await supabase
         .from("conversations")
         .select("id")
         .eq("workspace_id", workspaceId)
-        .in("contact_id", lost);
+        .in("contact_id", lost.slice(0, 500));
       if (visibleError || !visible) return;
       const visibleIds = new Set(visible.map((c) => c.id as string));
       setConversations((prev) => dropHiddenConversations(prev, lost, visibleIds));
@@ -246,6 +338,12 @@ export function useInboxData({
     ensureContactConversations,
     refreshContactCases,
     refreshActiveCases,
+    casesTruncated,
+    hasMore,
+    loadingMore,
+    moreError,
+    loadMore,
+    addConversations,
     markConversationRead,
     patchContact,
     refreshContact,

@@ -21,6 +21,9 @@ import { isAdminRole } from "@/lib/permissions";
 import { createServiceClient } from "@/lib/supabase/server";
 import { isReplyFilePath, parseMediaPath, replyMediaPath, safeFileName, validateReplyAttachment } from "@/lib/chat-media";
 import { createUploadUrl, objectInfo, removeObjects } from "@/lib/media-store";
+import { RATE_LIMIT_MESSAGE, RATE_RULES } from "@/lib/rate-limit";
+import { rateLimitDecision } from "@/lib/rate-limit-http";
+import { PENDING_UPLOADS_MESSAGE, markUploadsUsed, registerUpload } from "@/lib/upload-tracking";
 import {
   hasShortcutConflict,
   validateSavedReplyInput,
@@ -250,13 +253,16 @@ async function removeReplyFile(path: string | null, workspaceId: string) {
  */
 async function writeAttachment(id: string, workspaceId: string, columns: AttachmentColumns) {
   const service = await createServiceClient();
-  return service
+  const result = await service
     .from("saved_replies")
     .update(columns)
     .eq("id", id)
     .eq("workspace_id", workspaceId)
     .select(REPLY_COLUMNS)
     .single();
+  // SEG-10: el archivo ya pertenece a una respuesta guardada; la limpieza diaria no lo toca.
+  if (!result.error && columns.attachment_url) await markUploadsUsed(service, [columns.attachment_url]);
+  return result;
 }
 
 /**
@@ -274,7 +280,15 @@ export async function createReplyUploadUrl(file: {
     const check = validateReplyAttachment(file);
     if (!check.ok) return { error: check.error };
     if (check.compress) return { error: "La foto pesa más de 5 MB." };
-    const upload = await createUploadUrl(await createServiceClient(), replyMediaPath(ctx.workspace.id, file.mime));
+    // SEG-01: mismo tope de enlaces de subida que el chat.
+    const limited = await rateLimitDecision(RATE_RULES.uploadUrl, ctx.user.id);
+    if (!limited.allowed) return { error: RATE_LIMIT_MESSAGE };
+    const service = await createServiceClient();
+    const path = replyMediaPath(ctx.workspace.id, file.mime);
+    // SEG-10: tope de subidas sin usar por usuario; la subida queda anotada para la limpieza diaria.
+    const registered = await registerUpload(service, { workspaceId: ctx.workspace.id, userId: ctx.user.id, path, source: "reply" });
+    if (!registered.ok) return { error: PENDING_UPLOADS_MESSAGE };
+    const upload = await createUploadUrl(service, path);
     if (!upload) return { error: "No se pudo preparar la subida. Inténtalo de nuevo." };
     return { ok: true, ...upload };
   } catch (err) {

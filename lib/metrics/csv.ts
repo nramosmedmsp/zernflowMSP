@@ -8,8 +8,9 @@ export type CsvCell = string | number | null | undefined;
 function cell(value: CsvCell): string {
   if (value === null || value === undefined) return "";
   let text = typeof value === "number" ? (Number.isFinite(value) ? String(value).replace(".", ",") : "") : value;
-  // Evita que Excel interprete una celda de texto como fórmula.
-  if (typeof value === "string" && /^[=+\-@]/.test(text) && !/^-?\d+([.,]\d+)?$/.test(text)) text = `'${text}`;
+  // Evita que Excel interprete una celda de texto como fórmula: = + - @ y también
+  // TAB o CR al inicio (SEG-16), que algunos programas tratan como inicio de fórmula.
+  if (typeof value === "string" && /^[=+\-@\t\r]/.test(text) && !/^-?\d+([.,]\d+)?$/.test(text)) text = `'${text}`;
   if (/[";\r\n]/.test(text)) text = `"${text.replace(/"/g, '""')}"`;
   return text;
 }

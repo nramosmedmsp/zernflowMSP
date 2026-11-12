@@ -173,3 +173,26 @@ describe("POST /api/v1/messages en canal de prueba", () => {
     expect((await post({ conversationId: conversation.id, text: "Hola" })).status).toBe(401);
   });
 });
+
+describe("POST /api/v1/messages: largo máximo (PAN-06)", () => {
+  it("rechaza un texto de más de 4 096 caracteres en WhatsApp y acepta el justo", async () => {
+    const { db, conversation } = seed("demo-whatsapp-001");
+    const tooLong = await post({ conversationId: conversation.id, text: "a".repeat(4097) });
+    expect(tooLong.status).toBe(400);
+    expect((await tooLong.json()).error).toContain("demasiado largo");
+    expect(db.rows("messages")).toHaveLength(0);
+
+    const exact = await post({ conversationId: conversation.id, text: "a".repeat(4096) });
+    expect(exact.status).toBe(201);
+  });
+
+  it("en Instagram el límite son 1 000 bytes (la ñ pesa 2)", async () => {
+    const db = new FakeDb();
+    state.db = db;
+    const [ig] = db.seed("conversations", [
+      { workspace_id: "ws-1", channel_id: "ch-1", contact_id: "ct-1", platform: "instagram", late_conversation_id: null, channels: { late_account_id: "demo-instagram-001" } },
+    ]);
+    expect((await post({ conversationId: ig.id, text: "ñ".repeat(501) })).status).toBe(400);
+    expect((await post({ conversationId: ig.id, text: "ñ".repeat(500) })).status).toBe(201);
+  });
+});

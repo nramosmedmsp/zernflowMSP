@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({ fake: null as unknown, role: "admin" as string
 vi.mock("@/lib/workspace", () => ({
   getWorkspace: async () => ({
     user: { id: "u1", email: "a@tienda.test" },
-    workspace: { id: "ws-1" },
+    workspace: { id: "ws-1", name: "Tienda" },
     role: state.role,
     supabase: state.fake,
   }),
@@ -19,6 +19,7 @@ vi.mock("@/lib/workspace-secrets", () => ({
   saveWorkspaceSecrets: async () => ({ error: null }),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
+vi.mock("@/lib/supabase/server", () => ({ createServiceClient: async () => state.fake }));
 
 import { resolveGlobalKeyword } from "@/lib/flow-engine/global-keywords";
 import { saveWorkspaceSettings } from "./settings";
@@ -63,5 +64,51 @@ describe("saveWorkspaceSettings: palabras clave globales", () => {
     const result = await save(["baja"]);
     expect(result).toHaveProperty("error");
     expect(fake.rows("workspaces")[0].global_keywords).toEqual([]);
+  });
+});
+
+// SEG-05: cambiar claves o el nombre del espacio queda registrado, sin el valor.
+describe("saveWorkspaceSettings: registro de acciones", () => {
+  const auditRows = () => fake.rows("activity").filter((a) => (a.meta as { entity?: string }).entity);
+
+  it("cambiar la clave de Zernio o de IA queda en la actividad, nunca el valor", async () => {
+    state.role = "owner";
+    const result = await saveWorkspaceSettings({
+      workspaceId: "ws-1",
+      name: "Tienda",
+      globalKeywords: [],
+      lateApiKey: "zk_SECRETA_123",
+      aiApiKey: "sk-IA-SECRETA",
+    });
+    expect(result).toMatchObject({ ok: true });
+    const rows = auditRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      type: "config_changed",
+      actor_id: "u1",
+      workspace_id: "ws-1",
+      meta: { action: "api_key_changed", entity: "secrets", zernio: true, ai: true },
+    });
+    expect(JSON.stringify(fake.rows("activity"))).not.toMatch(/SECRETA/);
+  });
+
+  it("un Administrador no puede cambiar claves y no queda ningún registro", async () => {
+    const result = await saveWorkspaceSettings({ workspaceId: "ws-1", name: "Tienda", globalKeywords: [], lateApiKey: "zk_x" });
+    expect(result).toHaveProperty("error");
+    expect(auditRows()).toHaveLength(0);
+  });
+
+  it("guardar sin tocar claves ni nombre no registra nada", async () => {
+    await save(["baja"]);
+    expect(auditRows()).toHaveLength(0);
+  });
+
+  it("cambiar el nombre del espacio queda registrado con el nombre anterior y el nuevo", async () => {
+    await saveWorkspaceSettings({ workspaceId: "ws-1", name: "Muscle Shop", globalKeywords: [] });
+    expect(auditRows()[0]).toMatchObject({
+      from_value: "Tienda",
+      to_value: "Muscle Shop",
+      meta: { action: "workspace_settings_changed", entity: "workspace", field: "name" },
+    });
   });
 });

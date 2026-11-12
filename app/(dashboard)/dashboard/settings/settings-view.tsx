@@ -294,7 +294,7 @@ export function SettingsView({
           <section>
             <div className="flex items-center gap-2">
               <Key className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Clave de API de Zernio</h2>
+              <h2 className="text-sm font-semibold">Clave de acceso a Zernio</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Tu clave de API de Zernio se usa para conectar con las redes sociales.
@@ -402,7 +402,7 @@ export function SettingsView({
           <section>
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">AI Gateway</h2>
+              <h2 className="text-sm font-semibold">Respuestas con inteligencia artificial</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Necesaria para el nodo de respuesta con IA de los flujos. Usa{" "}
@@ -428,7 +428,7 @@ export function SettingsView({
                 placeholder={
                   workspace.hasAiKey
                     ? "Ingresa una clave nueva para reemplazar la actual"
-                    : "Ingresa tu clave de API de AI Gateway"
+                    : "Escribe tu clave de acceso de Vercel AI Gateway"
                 }
                 className="w-full rounded-lg border border-input bg-background px-3 py-2 pr-10 text-sm font-mono placeholder:text-muted-foreground placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-ring"
               />
@@ -448,7 +448,7 @@ export function SettingsView({
             {workspace.hasAiKey && (
               <p className="mt-1.5 flex items-center gap-1 text-xs text-green-600">
                 <Check className="h-3 w-3" />
-                Clave de AI Gateway configurada
+                Clave de inteligencia artificial configurada
               </p>
             )}
           </section>
@@ -462,7 +462,7 @@ export function SettingsView({
               <h2 className="text-sm font-semibold">Palabras clave globales</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Si el cliente escribe solo una de estas palabras (por ejemplo BAJA o STOP), deja de recibir difusiones y secuencias; con una palabra de alta (por ejemplo ALTA) vuelve a recibirlas. El cambio queda en el historial del contacto y ese mensaje no activa ningún flujo. No se envía una respuesta automática: si quieres confirmarle, hazlo desde la conversación.
+              Si el cliente escribe solo una de estas palabras (por ejemplo BAJA o STOP), queda de baja de la publicidad y deja de recibir difusiones y secuencias; con una palabra de alta (por ejemplo ALTA) queda registrado que aceptó recibir publicidad (con la fecha y «palabra clave» como origen). El cambio queda en el historial del contacto y ese mensaje no activa ningún flujo. No se envía una respuesta automática: si quieres confirmarle, hazlo desde la conversación.
             </p>
 
             {/* Campo de palabra clave */}

@@ -10,6 +10,8 @@ import { isSupportedPlatform } from "@/lib/platforms";
 import { WORKSPACE_CHANGED_MESSAGE, requireApiAdmin } from "@/lib/api-auth";
 import { OWNER_ONLY_SECRETS_MESSAGE, canManageSecrets } from "@/lib/permissions";
 import { saveWorkspaceSecrets } from "@/lib/workspace-secrets";
+import { logAudit } from "@/lib/audit";
+import { serverError } from "@/lib/server-error";
 
 /**
  * POST /api/v1/channels/test-key
@@ -47,9 +49,13 @@ export async function POST(request: NextRequest) {
     const res = await zernio.accounts.listAccounts();
     accounts = (res.data?.accounts ?? []) as typeof accounts;
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Clave de API no válida o error de conexión";
-    return NextResponse.json({ error: message }, { status: 400 });
+    // El detalle (puede incluir texto de Zernio) solo va al log; nunca la clave.
+    return serverError(
+      "channels/test-key",
+      err instanceof Error ? err.message : err,
+      "La clave de API no es válida o no se pudo conectar con Zernio. Revísala e inténtalo de nuevo.",
+      400,
+    );
   }
 
   // If workspaceId provided, save the key and sync channels
@@ -66,11 +72,17 @@ export async function POST(request: NextRequest) {
     );
 
     if (saveErr) {
-      return NextResponse.json(
-        { error: `La clave es válida, pero no se pudo guardar: ${saveErr}` },
-        { status: 500 }
-      );
+      return serverError("channels/test-key", saveErr, "La clave es válida, pero no se pudo guardar. Inténtalo de nuevo.");
     }
+
+    // SEG-05: queda quién cambió la clave de Zernio (nunca el valor).
+    await logAudit(service, {
+      workspaceId,
+      actorId: guard.ctx.user.id,
+      action: "api_key_changed",
+      entity: "secrets",
+      meta: { zernio: true, via: "test-key" },
+    });
 
     // Register (or refresh) this deployment's webhook in Zernio so inbound
     // messages/comments reach the Inbox. Best-effort: a failure here must not

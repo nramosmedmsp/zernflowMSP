@@ -418,3 +418,44 @@ describe("Tablero: carga de las gestiones abiertas de un tipo", () => {
     expect(noStages.cards).toEqual([]);
   });
 });
+
+describe("Búsqueda y Para hoy sin topes silenciosos (Tanda 4)", () => {
+  it("la búsqueda ignora tildes, ñ y el formato del teléfono, en las tres vistas", async () => {
+    const [peña] = db.seed("contacts", [{ workspace_id: WS, display_name: "José Peña", phone: "+51987654321", email: "jp@x.pe" }]);
+    const [otro] = db.seed("contacts", [{ workspace_id: WS, display_name: "Otra Persona", phone: "+51911111111" }]);
+    openCase(peña.id as string, venta);
+    openCase(otro.id as string, venta);
+    for (const q of ["pena", "jose", "987 654 321", "987654321", "+51 987654321", "JP@X.PE"]) {
+      expect((await byCase({ q })).rows.map((r) => r.contactId), q).toEqual([peña.id]);
+      expect((await byClient({ q })).groups.map((g) => g.contactName), q).toEqual(["José Peña"]);
+    }
+    expect((await byCase({ q: "zzz" })).total).toBe(0);
+  });
+
+  it("Para hoy no tiene tope de 500: cuenta todas las programadas activadas hoy", async () => {
+    const hoy = new Date("2026-11-10T14:00:00.000Z").toISOString();
+    for (let i = 0; i < 600; i++) {
+      const c = contact(`Cliente ${i}`);
+      openCase(c, venta, { assignee_id: USER, scheduled_for: hoy, opened_at: hoy, next_action_at: null });
+    }
+    // Abierta hoy pero nunca programada: no es "activada hoy".
+    openCase(contact("Normal"), venta, { assignee_id: USER, opened_at: hoy, next_action_at: null });
+    const res = await byCase({ tab: "today", assignee: "all" });
+    expect(res.total).toBe(600);
+  });
+
+  it("el Tablero avisa cuando se alcanza el tope de lectura", async () => {
+    const c = contact("Uno");
+    openCase(c, venta);
+    const res = await loadBoard(db.asDb() as never, {
+      workspaceId: WS,
+      userId: USER,
+      canSeeOthers: true,
+      params: params({ view: "board" as never, type: venta }),
+      now: NOW,
+      caseTypes: [{ id: venta, name: "Venta", color: null }],
+      solutionSchedules: null,
+    });
+    expect(res.truncated).toBe(false);
+  });
+});

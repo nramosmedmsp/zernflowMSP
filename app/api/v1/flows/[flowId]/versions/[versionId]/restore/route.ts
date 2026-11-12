@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
 import { publishFlowVersion } from "@/lib/flow-publish";
+import { serverError } from "@/lib/server-error";
 
 /**
  * Restaurar una versión copia sus nodos, conexiones y vista al flujo SIN
@@ -48,8 +49,7 @@ export async function POST(
     .eq("workspace_id", workspaceId)
     .select("id");
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("flows/restore", error, "No se pudo restaurar la versión. Inténtalo de nuevo.");
   if (!rows || rows.length === 0)
     return NextResponse.json({ error: "No se pudo restaurar la versión." }, { status: 404 });
 
@@ -62,8 +62,7 @@ export async function POST(
     { id: flow.id, name: flow.name, version: flow.version, nodes: version.nodes, edges: version.edges, viewport: version.viewport },
     user.id,
   );
-  if ("error" in published)
-    return NextResponse.json({ error: published.error }, { status: 500 });
+  if ("error" in published) return serverError("flows/restore", published.error, "No se pudo publicar la versión restaurada. Inténtalo de nuevo.");
 
   return NextResponse.json({ ok: true, status: "published", version: published.version });
 }

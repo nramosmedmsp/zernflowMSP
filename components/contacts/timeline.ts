@@ -113,15 +113,19 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
-/** Origen de una baja o alta: un flujo o una palabra clave que escribió el cliente. */
+/** Origen de una baja o alta: un asesor, un flujo, una palabra clave del cliente o una importación. */
 function sourceDetail(meta: Record<string, unknown>): string | null {
   const source = str(meta.source);
-  if (source === "flow") return "Por un flujo";
-  if (source === "keyword") {
+  const note = str(meta.note);
+  let text: string | null = null;
+  if (source === "flow") text = "Por un flujo";
+  else if (source === "keyword") {
     const keyword = str(meta.keyword);
-    return keyword ? `Escribió la palabra clave «${keyword}»` : "Escribió una palabra clave";
-  }
-  return null;
+    text = keyword ? `Escribió la palabra clave «${keyword}»` : "Escribió una palabra clave";
+  } else if (source === "manual") text = "Anotado por un asesor";
+  else if (source === "import") text = "Declarado al importar contactos";
+  if (note && source !== "keyword") text = text ? `${text}. Nota: ${note}` : `Nota: ${note}`;
+  return text;
 }
 
 function lookup(map: Record<string, string>, id: string | null | undefined, fallback: string): string {
@@ -404,14 +408,14 @@ function activityPiece(
       return {
         kind: "system",
         tone: "muted",
-        title: "El contacto se dio de baja de los mensajes",
+        title: "El contacto se dio de baja de la publicidad",
         detail: sourceDetail(meta),
       };
     case "contact_subscribed":
       return {
         kind: "system",
         tone: "muted",
-        title: "El contacto volvió a recibir mensajes",
+        title: "Se registró el consentimiento: el contacto acepta recibir publicidad",
         detail: sourceDetail(meta),
       };
     case "automation_resumed": {
@@ -460,8 +464,10 @@ function activityPiece(
             : reason === "no_phone"
               ? "El contacto no tiene teléfono"
               : reason === "unsubscribed"
-                ? "El contacto pidió la baja"
-                : null,
+                ? "El contacto se dio de baja de la publicidad y la plantilla es de publicidad"
+                : reason === "no_consent"
+                  ? "El contacto no tiene consentimiento de publicidad registrado y la plantilla es de publicidad (o no se pudo saber su categoría)"
+                  : null,
       };
     }
     case "contacts_imported": {
@@ -556,6 +562,21 @@ function activityPiece(
     }
     case "complaint_dismissed":
       return { kind: "system", tone: "muted", title: "Se descartó el aviso de reclamo (no era un reclamo)" };
+    case "contact_data_corrected": {
+      const fields = Array.isArray(meta.fields) ? meta.fields.filter((f): f is string => typeof f === "string") : [];
+      return {
+        kind: "contact",
+        tone: "muted",
+        title: "Se corrigieron datos personales del contacto",
+        detail: fields.length ? `Se corrigió: ${fields.join(", ")}` : null,
+      };
+    }
+    case "contact_data_exported":
+      return { kind: "contact", tone: "muted", title: "Se descargó una copia de los datos del contacto" };
+    case "contact_data_erased":
+      return { kind: "contact", tone: "muted", title: "Se eliminaron los datos personales del contacto" };
+    case "contact_data_erase_files_retried":
+      return { kind: "contact", tone: "muted", title: "Se reintentó borrar los archivos del contacto" };
     default:
       return { kind: "system", tone: "muted", title: `Actividad: ${a.type}` };
   }

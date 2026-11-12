@@ -8,7 +8,7 @@ import type { Database, Json } from "@/lib/types/database";
 
 type Db = SupabaseClient<Database>;
 
-export const CRON_NAMES = ["jobs", "sequences", "media_cleanup"] as const;
+export const CRON_NAMES = ["jobs", "sequences", "media_cleanup", "retention"] as const;
 export type CronName = (typeof CRON_NAMES)[number];
 
 /** Una tarea de cada minuto se considera caída pasados 5 minutos sin terminar bien. */
@@ -17,6 +17,8 @@ export const CRON_STALE_MS: Record<CronName, number> = {
   sequences: 5 * 60_000,
   // Corre una vez al día: no entra en /api/health; esto solo marca el aviso en Configuración.
   media_cleanup: 36 * 60 * 60_000,
+  // Diaria también: no entra en /api/health (un retraso de horas no pone la salud en rojo).
+  retention: 36 * 60 * 60_000,
 };
 
 export async function recordCronStart(db: Db, name: CronName, now: Date = new Date()): Promise<void> {

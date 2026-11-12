@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
+import { serverError } from "@/lib/server-error";
 
 export async function GET(
   _request: NextRequest,
@@ -26,8 +27,7 @@ export async function GET(
     .eq("flow_id", flowId)
     .order("version", { ascending: false });
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("flows/versions", error, "No se pudo cargar el historial del flujo. Inténtalo de nuevo.");
 
   return NextResponse.json(versions || []);
 }

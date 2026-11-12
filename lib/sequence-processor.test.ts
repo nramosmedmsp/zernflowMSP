@@ -33,14 +33,14 @@ import { processSequenceSteps } from "./sequence-processor";
 const WS = "ws-1";
 let fake: FakeDb;
 
-function seed(opts: { subscribed?: boolean; steps?: unknown[]; displayName?: string; status?: string; stepId?: string | null; index?: number; settings?: unknown } = {}) {
+function seed(opts: { subscribed?: boolean; consent?: "unknown" | "accepted" | "opted_out"; steps?: unknown[]; displayName?: string; status?: string; stepId?: string | null; index?: number; settings?: unknown } = {}) {
   fake = new FakeDb();
   state.db = fake;
   state.sent = [];
   fake.seed("workspaces", [{ id: WS, name: "Muscle Shop", settings: opts.settings ?? {} }]);
   fake.seed("channels", [{ id: "ch-1", workspace_id: WS, platform: "whatsapp", late_account_id: "acc-1", is_active: true }]);
   fake.seed("contacts", [
-    { id: "ct-1", workspace_id: WS, display_name: opts.displayName ?? "Ana Pérez", is_subscribed: opts.subscribed ?? true },
+    { id: "ct-1", workspace_id: WS, display_name: opts.displayName ?? "Ana Pérez", is_subscribed: opts.subscribed ?? true, marketing_status: opts.consent ?? "accepted" },
   ]);
   fake.seed("conversations", [
     {
@@ -99,8 +99,25 @@ describe("processSequenceSteps", () => {
     await processSequenceSteps();
     expect(state.sent.map((s) => s.text)).toEqual(["Uno"]);
     fake.rows("contacts")[0].is_subscribed = false;
+    fake.rows("contacts")[0].marketing_status = "opted_out";
     await processSequenceSteps();
     expect(state.sent.map((s) => s.text)).toEqual(["Uno"]);
+    expect(enrollment().status).toBe("cancelled");
+  });
+
+  // PRIV-01: las secuencias son publicidad y exigen consentimiento registrado.
+  it("sin consentimiento registrado no se envía nada y la inscripción se cancela", async () => {
+    seed({ consent: "unknown" });
+    await processSequenceSteps();
+    expect(state.sent).toEqual([]);
+    expect(enrollment().status).toBe("cancelled");
+  });
+
+  it("un contacto con los datos eliminados no recibe la secuencia", async () => {
+    seed({});
+    fake.rows("contacts")[0].erased_at = "2026-11-01T00:00:00Z";
+    await processSequenceSteps();
+    expect(state.sent).toEqual([]);
     expect(enrollment().status).toBe("cancelled");
   });
 

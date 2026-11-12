@@ -26,6 +26,7 @@ import {
   type TextRange,
 } from "@/lib/review-items";
 import { acceptFor, canSendAttachments } from "@/lib/chat-media";
+import { checkMessage, checkNote, counterLabel } from "@/lib/message-limits";
 import type { OutboxAttachment } from "@/lib/inbox-outbox";
 import { useToast } from "@/components/ui/toast";
 import { SavedReplyPicker, type PickedReply } from "@/components/composer/saved-reply-picker";
@@ -369,7 +370,9 @@ export function Composer({
   }
 
   const hasFiles = !noteMode && attachments.items.length > 0;
-  const canSubmit = !viewing && (!!input.trim() || hasFiles) && !savingNote && !(hasFiles && attachments.preparing);
+  // PAN-06: largo máximo según el canal (o el tope de las notas); el servidor valida lo mismo.
+  const lengthCheck = noteMode ? checkNote(input) : checkMessage(input, conversation.platform);
+  const canSubmit = !viewing && (!!input.trim() || hasFiles) && !savingNote && !(hasFiles && attachments.preparing) && lengthCheck.ok;
 
   /**
    * Enter y el botón Enviar hacen lo mismo. En un mensaje: sin nada por revisar
@@ -784,6 +787,18 @@ export function Composer({
             )}
           </button>
         </div>
+        {lengthCheck.showCounter && (
+          <p
+            role={lengthCheck.ok ? undefined : "alert"}
+            aria-live="polite"
+            className={cn(
+              "px-1 pt-1 text-right text-xs",
+              lengthCheck.ok ? "text-muted-foreground" : "font-medium text-destructive",
+            )}
+          >
+            {counterLabel(lengthCheck)}
+          </p>
+        )}
         <ReviewStrip
           items={items}
           reviewing={reviewMode && !noteMode}

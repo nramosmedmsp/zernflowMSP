@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiMember } from "@/lib/api-auth";
+import { serverError } from "@/lib/server-error";
 
 // Columnas públicas del canal: channels.webhook_secret (secreto heredado por
 // canal) no se envía al navegador.
@@ -17,8 +18,7 @@ export async function GET() {
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("channels", error, "No se pudieron cargar los canales. Inténtalo de nuevo.");
 
   return NextResponse.json(channels);
 }

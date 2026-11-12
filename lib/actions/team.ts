@@ -4,6 +4,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import { releaseMemberWork } from "@/lib/cases/member-removal";
 import { logActivity, type Db } from "@/lib/cases/io";
+import { logAudit } from "@/lib/audit";
+import { isRoleDowngrade, revokeUserSessions } from "@/lib/session-revoke";
 import { rpcAuthUserExists } from "@/lib/supabase/extra-rpc";
 import { findAuthUserByEmail, generateAccessLink } from "@/lib/supabase/admin-users";
 import type { WorkspaceRole } from "@/lib/types/database";
@@ -331,6 +333,16 @@ export async function createTeamUser(
   }
   await markAccepted();
 
+  // SEG-05: alta de un usuario nuevo, con su rol (nunca el enlace de acceso).
+  await logAudit(service, {
+    workspaceId,
+    actorId: ctx.user.id,
+    action: "member_created",
+    entity: "team",
+    toValue: role,
+    meta: { user_id: link.user.id, email, role },
+  });
+
   const member = memberViewFromUser(link.user, { userId: link.user.id, role, joinedAt });
   const delivery = await deliverAccessLink(service, {
     to: email,
@@ -404,6 +416,14 @@ export async function sendAccessEmail(
     inviterName: inviterNameOf(ctx.user),
     workspaceName: ctx.workspace.name,
   });
+  // SEG-05: se generó un enlace de acceso nuevo (invalida el anterior). Sin la URL.
+  await logAudit(service, {
+    workspaceId,
+    actorId: ctx.user.id,
+    action: "access_email_sent",
+    entity: "team",
+    meta: { user_id: userId, target_role: membership.role, link_type: link.type, email_sent: delivery.sent },
+  });
   return { ok: true, delivery };
 }
 
@@ -460,6 +480,15 @@ export async function copyAccessLink(
   });
   if (!link.ok) return { error: link.error };
 
+  // SEG-05: quien genera el enlace para copiarlo queda registrado (sin la URL).
+  await logAudit(service, {
+    workspaceId,
+    actorId: ctx.user.id,
+    action: "access_link_copied",
+    entity: "team",
+    meta: { user_id: userId, target_role: membership.role, link_type: link.type },
+  });
+
   return { ok: true, url: link.url, type: link.type };
 }
 
@@ -493,12 +522,15 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
     return { error: "No se pudo quitar al miembro. Inténtalo de nuevo." };
   }
 
+  // SEG-09: se cierran sus sesiones abiertas (ver lib/session-revoke.ts).
+  const sessionsRevoked = await revokeUserSessions(service, userId);
+
   await logActivity(service as unknown as Db, {
     workspace_id: workspaceId,
     type: "config_changed",
     actor_id: ctx.user.id,
     from_value: membership.role,
-    meta: { action: "member_removed", entity: "team", user_id: userId, role: membership.role },
+    meta: { action: "member_removed", entity: "team", user_id: userId, role: membership.role, sessions_revoked: sessionsRevoked },
   });
 
   // R2-2: su trabajo no se queda colgado de una persona que ya no está.
@@ -638,6 +670,10 @@ export async function updateTeamMember(
     updatedUser = data.user;
   }
 
+  // SEG-09: cambiar el correo o bajar el rol cierra las sesiones abiertas de la persona.
+  const mustRevoke = emailChanged || (roleChanged && isRoleDowngrade(membership.role, newRole));
+  const sessionsRevoked = mustRevoke ? await revokeUserSessions(service, userId) : undefined;
+
   const base = { workspace_id: workspaceId, type: "config_changed" as const, actor_id: ctx.user.id };
   const logs = [];
   if (nameChanged) {
@@ -653,7 +689,7 @@ export async function updateTeamMember(
       ...base,
       from_value: target.email,
       to_value: email,
-      meta: { action: "member_email_changed", entity: "team", user_id: userId },
+      meta: { action: "member_email_changed", entity: "team", user_id: userId, sessions_revoked: sessionsRevoked ?? false },
     });
   }
   if (roleChanged) {
@@ -661,7 +697,12 @@ export async function updateTeamMember(
       ...base,
       from_value: membership.role,
       to_value: newRole,
-      meta: { action: "member_role_changed", entity: "team", user_id: userId },
+      meta: {
+        action: "member_role_changed",
+        entity: "team",
+        user_id: userId,
+        ...(sessionsRevoked !== undefined ? { sessions_revoked: sessionsRevoked } : {}),
+      },
     });
   }
   if (logs.length > 0) await logActivity(service as unknown as Db, logs);

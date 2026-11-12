@@ -5,6 +5,7 @@
 // de lib/permissions.ts y lib/cases/access.ts, antes de usar el cliente de
 // servicio. Devuelven { ok: true, ... } o { error } con el mensaje en español.
 
+import { checkNote } from "@/lib/message-limits";
 import { after } from "next/server";
 import { unstable_cache } from "next/cache";
 import { createRawServiceClient, createServiceClient } from "@/lib/supabase/server";
@@ -743,9 +744,10 @@ export async function setConversationBotPaused(
 export async function changeCaseStage(
   caseId: string,
   stageId: string,
-  options?: { jump?: boolean },
+  options?: { jump?: boolean; fromStageId?: string | null },
 ): Promise<CaseActionResult<{ move?: StageMoveView }>> {
   if (!isId(stageId)) return { error: INVALID };
+  if (options?.fromStageId != null && !isId(options.fromStageId)) return { error: INVALID };
   const ctx = await withCase(caseId, (p) => p.canEdit);
   if ("error" in ctx) return ctx;
   const canSupervise = isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id);
@@ -754,6 +756,8 @@ export async function changeCaseStage(
     stageId,
     actorId: ctx.s.userId,
     guide: { canSupervise, jump: options?.jump === true },
+    // La etapa que la persona veía: si otra la movió antes, no se pisa (CONF-11).
+    ...(options && "fromStageId" in options ? { expectedStageId: options.fromStageId ?? null } : {}),
   });
   if ("error" in result) return result;
   return {
@@ -930,6 +934,8 @@ export async function addCaseNote(
     return { error: INVALID };
   }
   if (!optionalId(conversationId)) return { error: INVALID };
+  const noteLength = checkNote(body);
+  if (!noteLength.ok) return { error: `La nota es demasiado larga: máximo ${noteLength.max.toLocaleString("es-PE")} caracteres y tiene ${noteLength.used.toLocaleString("es-PE")}.` };
   const ctx = await withCase(caseId, (p) => p.canNote);
   if ("error" in ctx) return ctx;
   return engine.addNote(ctx.s.db, {

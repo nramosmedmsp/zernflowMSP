@@ -9,6 +9,7 @@
 //   responsable (o a supervisores/administradores si no tiene).
 
 import { isDemoChannel } from "@/lib/demo";
+import { normalizeMarketingStatus, templateSendDecision } from "@/lib/consent";
 import { displayName } from "@/lib/team-rules";
 import { phoneDigits } from "@/lib/whatsapp-templates";
 import { loadAssignmentContext, type AssignmentContextCache } from "./assign";
@@ -41,7 +42,10 @@ export type { AutoTemplateVars };
 export type AutoTemplateOutcome =
   | { status: "none" }
   | { status: "sent"; params: string[] }
-  | { status: "skipped"; reason: "not_open" | "already_sent" | "no_whatsapp_channel" | "no_phone" | "unsubscribed" }
+  | {
+      status: "skipped";
+      reason: "not_open" | "already_sent" | "no_whatsapp_channel" | "no_phone" | "unsubscribed" | "no_consent";
+    }
   | { status: "failed"; error: string };
 
 interface WhatsAppTarget {
@@ -108,8 +112,8 @@ export async function sendAutoTemplate(
   if (!contact) return { status: "skipped", reason: "not_open" };
   const base = { workspace_id: row.workspace_id, case_id: row.id, contact_id: row.contact_id };
 
-  // R2: quien pidió la baja no recibe la plantilla automática (igual que flujos, difusiones y secuencias).
-  if (contact.is_subscribed === false) {
+  // Los datos del cliente ya se eliminaron: no se le escribe más.
+  if (contact.erased_at) {
     await logActivity(db, { ...base, type: "auto_template_skipped", meta: { template_name: template.template_name, reason: "unsubscribed" } });
     return { status: "skipped", reason: "unsubscribed" };
   }
@@ -118,6 +122,31 @@ export async function sendAutoTemplate(
   if (!target.lateAccountId || !target.phone) {
     const reason = !target.lateAccountId ? "no_whatsapp_channel" : "no_phone";
     await logActivity(db, { ...base, type: "auto_template_skipped", meta: { template_name: template.template_name, reason } });
+    return { status: "skipped", reason };
+  }
+
+  // PRIV-05: una plantilla de servicio (pedido, pago, entrega) sale a cualquiera; una de
+  // publicidad, o de categoría desconocida, solo a quien aceptó. Quien pidió la baja
+  // (R2) solo recibe plantillas de servicio.
+  const messenger = params.messenger ?? zernioMessenger(db);
+  const kind = messenger.templateKind
+    ? await messenger.templateKind({
+        workspaceId: row.workspace_id,
+        lateAccountId: target.lateAccountId,
+        templateName: template.template_name,
+      })
+    : "unknown";
+  const decision = templateSendDecision(
+    { marketing_status: contact.is_subscribed === false ? "opted_out" : normalizeMarketingStatus(contact.marketing_status) },
+    kind,
+  );
+  if (!decision.allowed) {
+    const reason = decision.reason === "opted_out" ? "unsubscribed" : "no_consent";
+    await logActivity(db, {
+      ...base,
+      type: "auto_template_skipped",
+      meta: { template_name: template.template_name, reason, template_kind: kind },
+    });
     return { status: "skipped", reason };
   }
 
@@ -138,7 +167,7 @@ export async function sendAutoTemplate(
   });
 
   const sent = built.ok
-    ? await (params.messenger ?? zernioMessenger(db)).sendTemplate({
+    ? await messenger.sendTemplate({
         workspaceId: row.workspace_id,
         lateAccountId: target.lateAccountId,
         phone: target.phone,

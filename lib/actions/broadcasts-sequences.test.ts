@@ -99,13 +99,15 @@ describe("secuencias", () => {
   it("no inscribe a un contacto dado de baja", async () => {
     const id = await newSequence([{ type: "message", content: "Hola" }], "active");
     fake.seed("contacts", [
-      { id: "c-baja", workspace_id: "ws-1", is_subscribed: false },
-      { id: "c-ok", workspace_id: "ws-1", is_subscribed: true },
+      { id: "c-baja", workspace_id: "ws-1", is_subscribed: false, marketing_status: "opted_out" },
+      { id: "c-sin", workspace_id: "ws-1", is_subscribed: true, marketing_status: "unknown" },
+      { id: "c-ok", workspace_id: "ws-1", is_subscribed: true, marketing_status: "accepted" },
     ]);
     fake.seed("channels", [{ id: "ch-1", workspace_id: "ws-1" }]);
     expect(await enrollContact(id, "c-baja", "ch-1")).toEqual({
-      error: "El contacto canceló su suscripción y no puede recibir la secuencia",
+      error: "El contacto se dio de baja de la publicidad y no puede recibir la secuencia",
     });
+    expect(await enrollContact(id, "c-sin", "ch-1")).toMatchObject({ error: expect.stringContaining("aún no aceptó recibir publicidad") });
     expect(await enrollContact(id, "c-ok", "ch-1")).toMatchObject({ ok: true });
   });
 });

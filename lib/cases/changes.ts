@@ -2,6 +2,7 @@
 // valida quien llama (lib/actions/cases.ts). Aquí se valida que todo lo que
 // se referencia pertenezca al espacio de la gestión.
 
+import { CASE_CHANGED_MESSAGE } from "./conflict";
 import { isActiveCaseStatus } from "@/lib/permissions";
 import { CASE_NOT_FOUND } from "./access";
 import { assignCase, loadAssignmentContext } from "./assign";
@@ -92,10 +93,17 @@ export async function changeStage(
     /** Flujos que ya corrieron en esta cadena de eventos (evita bucles; ver case-triggers.ts). */
     flowChain?: readonly string[];
     guide?: { canSupervise: boolean; jump?: boolean };
+    /**
+     * Comprobación optimista: la etapa que la persona veía al moverla. Si la gestión ya
+     * está en otra (alguien la movió antes), no se cambia nada y se devuelve CASE_CHANGED_MESSAGE.
+     * Ausente = sin comprobar (flujos, reglas y cron).
+     */
+    expectedStageId?: string | null;
   },
 ): Promise<EngineResult<{ move?: StageMove }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
+  if (params.expectedStageId !== undefined && row.stage_id !== params.expectedStageId) return { error: CASE_CHANGED_MESSAGE };
   if (!row.case_type_id) return { error: "Clasifica la gestión antes de cambiar la etapa." };
   if (row.stage_id === params.stageId) return { ok: true };
 
@@ -137,8 +145,12 @@ export async function changeStage(
     if (blocked) return { error: blocked };
   }
 
-  const { error } = await db.from("cases").update({ stage_id: stage.id }).eq("id", row.id);
+  // Solo si la gestión sigue abierta y en la etapa que leímos: si otra persona la movió o la
+  // cerró en este instante, no se pisa (antes podía quedar cerrada con una etapa abierta).
+  const guardedStage = db.from("cases").update({ stage_id: stage.id }).eq("id", row.id).eq("status", row.status);
+  const { data: moved, error } = await (row.stage_id ? guardedStage.eq("stage_id", row.stage_id) : guardedStage.is("stage_id", null)).select("id");
   if (error) return { error: GENERIC_ERROR };
+  if (!moved || moved.length === 0) return { error: CASE_CHANGED_MESSAGE };
 
   await logActivity(db, {
     workspace_id: row.workspace_id,
@@ -582,11 +594,13 @@ export async function transferCase(
   }
   if (row.team_id === params.teamId && row.assignee_id === assigneeId) return { ok: true };
 
-  const { error } = await db
-    .from("cases")
-    .update({ team_id: params.teamId, assignee_id: assigneeId })
-    .eq("id", row.id);
+  // Solo si el equipo y el responsable siguen como los leímos: el reparto automático (u otra
+  // persona) pudo asignarla hace un instante y este cambio no debe pisarlo sin avisar.
+  const guardedTransfer = db.from("cases").update({ team_id: params.teamId, assignee_id: assigneeId }).eq("id", row.id).eq("status", row.status);
+  const withTeam = row.team_id ? guardedTransfer.eq("team_id", row.team_id) : guardedTransfer.is("team_id", null);
+  const { data: transferred, error } = await (row.assignee_id ? withTeam.eq("assignee_id", row.assignee_id) : withTeam.is("assignee_id", null)).select("id");
   if (error) return { error: GENERIC_ERROR };
+  if (!transferred || transferred.length === 0) return { error: CASE_CHANGED_MESSAGE };
 
   const base = { workspace_id: row.workspace_id, case_id: row.id, contact_id: row.contact_id, actor_id: params.actorId };
   await logActivity(db, [

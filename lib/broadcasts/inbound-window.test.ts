@@ -15,7 +15,7 @@ function setup(lastInboundAt: string | null) {
   const db = new FakeDb();
   db.seed("workspaces", [{ id: WS, name: "Tienda", slug: "t" }]);
   db.seed("channels", [{ id: "ch-1", workspace_id: WS, platform: "whatsapp", late_account_id: "acc-real", is_active: true }]);
-  db.seed("contacts", [{ id: "ct-1", workspace_id: WS, display_name: "Lucía", is_subscribed: true, phone: null }]);
+  db.seed("contacts", [{ id: "ct-1", workspace_id: WS, display_name: "Lucía", is_subscribed: true, marketing_status: "accepted", phone: null }]);
   db.seed("contact_channels", [{ contact_id: "ct-1", channel_id: "ch-1", platform_sender_id: "51999111222" }]);
   db.seed("conversations", [
     { id: "cv-1", workspace_id: WS, channel_id: "ch-1", contact_id: "ct-1", platform: "whatsapp", late_conversation_id: "z-1", last_inbound_at: lastInboundAt },

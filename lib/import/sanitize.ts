@@ -57,5 +57,6 @@ export function sanitizeImportOptions(raw: unknown): ImportOptions | null {
     createTags: typeof o.createTags === "boolean" ? o.createTags : DEFAULT_IMPORT_OPTIONS.createTags,
     channelId: isUuid(o.channelId) ? o.channelId : null,
     scheduleCases: o.scheduleCases === true,
+    consentDeclared: o.consentDeclared === true,
   };
 }

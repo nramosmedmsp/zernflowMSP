@@ -2,7 +2,6 @@
 // filtros de la URL y arma la consulta que corre en el servidor con el cliente
 // del usuario, para que la RLS decida qué contactos ve.
 
-import { ilikePattern } from "@/components/cases/case-filters";
 import { isDateString } from "@/lib/cases/dates";
 import { NO_VALUE_FILTER } from "./contact-filters";
 
@@ -29,6 +28,8 @@ export interface ContactListParams {
   /** Rango de fecha clave "YYYY-MM-DD"; "" = sin límite. */
   keyFrom: string;
   keyTo: string;
+  /** Publicidad: "" = todos, o 'unknown' (sin registrar), 'accepted' (aceptó), 'opted_out' (de baja). */
+  marketing: "" | "unknown" | "accepted" | "opted_out";
   sort: ContactSort;
   dir: "asc" | "desc";
   /** Desde 1. */
@@ -61,6 +62,8 @@ function idParam(value: string): string {
   return value === NO_VALUE_FILTER || UUID_RE.test(value) ? value : "";
 }
 
+export const MARKETING_FILTERS = ["unknown", "accepted", "opted_out"] as const;
+
 /** Rango de fechas siempre con «desde» antes de «hasta» (un rango invertido no devolvería nada). */
 export function orderedRange(from: string, to: string): { keyFrom: string; keyTo: string } {
   return from && to && from > to ? { keyFrom: to, keyTo: from } : { keyFrom: from, keyTo: to };
@@ -83,6 +86,9 @@ export function parseContactListParams(raw: RawParams): ContactListParams {
     teamId: idParam(read(raw, "team")),
     tagId: UUID_RE.test(tag) ? tag : "",
     ...orderedRange(isDateString(from) ? from : "", isDateString(to) ? to : ""),
+    marketing: (MARKETING_FILTERS as readonly string[]).includes(read(raw, "marketing"))
+      ? (read(raw, "marketing") as ContactListParams["marketing"])
+      : "",
     sort,
     dir,
     page: Number.isFinite(page) && page >= 1 ? Math.min(page, 100_000) : 1,
@@ -99,6 +105,7 @@ export function contactListSearchParams(p: ContactListParams): URLSearchParams {
   if (p.tagId) out.set("tag", p.tagId);
   if (p.keyFrom) out.set("from", p.keyFrom);
   if (p.keyTo) out.set("to", p.keyTo);
+  if (p.marketing) out.set("marketing", p.marketing);
   if (p.sort !== "recent") out.set("sort", p.sort);
   if (p.dir !== DEFAULT_DIR[p.sort]) out.set("dir", p.dir);
   if (p.page > 1) out.set("page", String(p.page));
@@ -111,7 +118,7 @@ export function contactListHref(p: ContactListParams, basePath = "/dashboard/con
 }
 
 export function hasContactFilters(p: ContactListParams): boolean {
-  return !!(p.search || p.typeId || p.ownerId || p.teamId || p.tagId || p.keyFrom || p.keyTo);
+  return !!(p.search || p.typeId || p.ownerId || p.teamId || p.tagId || p.keyFrom || p.keyTo || p.marketing);
 }
 
 /** Rango (desde, hasta) de filas de PostgREST para la página; `to` es inclusivo. */
@@ -153,18 +160,21 @@ function applyId<Q extends ContactQueryBuilder>(q: Q, column: string, value: str
   return value === NO_VALUE_FILTER ? q.is(column, null) : q.eq(column, value);
 }
 
+/** Texto que se manda a search_contacts; vacío = sin búsqueda. */
+export function contactSearchText(p: ContactListParams): string {
+  return cleanSearch(p.search);
+}
+
 /** Filtros, orden y página sobre una consulta de `contacts` (el espacio se filtra aparte). */
 export function applyContactListQuery<Q extends ContactQueryBuilder>(query: Q, p: ContactListParams): Q {
   let q = query;
-  const text = cleanSearch(p.search);
-  if (text) {
-    const pattern = ilikePattern(text);
-    q = q.or(`display_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern}`);
-  }
+  // La búsqueda por texto NO se aplica aquí: se hace en la base con search_contacts
+  // (sin tildes ni ñ ni formato de teléfono, con índice); ver contactListBase().
   q = applyId(q, "contact_type_id", p.typeId);
   q = applyId(q, "owner_id", p.ownerId);
   q = applyId(q, "team_id", p.teamId);
   if (p.tagId) q = q.eq("tag_filter.tag_id", p.tagId);
+  if (p.marketing) q = q.eq("marketing_status", p.marketing);
   if (p.keyFrom) q = q.gte("key_date", p.keyFrom);
   if (p.keyTo) q = q.lte("key_date", p.keyTo);
 

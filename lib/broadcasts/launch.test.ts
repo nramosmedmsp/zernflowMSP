@@ -25,9 +25,11 @@ beforeEach(() => {
   fake.seed("workspaces", [{ id: WS, name: "Muscle Shop" }]);
   fake.seed("channels", [{ id: "ch-wa", workspace_id: WS, platform: "whatsapp", is_active: true }]);
   fake.seed("contacts", [
-    { id: "c1", workspace_id: WS, display_name: "Ana Pérez", phone: "+51 987 654 321", is_subscribed: true },
-    { id: "c2", workspace_id: WS, display_name: "Luis Gómez", phone: "+51 987 654 322", is_subscribed: true },
-    { id: "c3", workspace_id: WS, display_name: "Baja Total", phone: "+51 987 654 323", is_subscribed: false },
+    { id: "c1", workspace_id: WS, display_name: "Ana Pérez", phone: "+51 987 654 321", is_subscribed: true, marketing_status: "accepted" },
+    { id: "c2", workspace_id: WS, display_name: "Luis Gómez", phone: "+51 987 654 322", is_subscribed: true, marketing_status: "accepted" },
+    { id: "c3", workspace_id: WS, display_name: "Baja Total", phone: "+51 987 654 323", is_subscribed: false, marketing_status: "opted_out" },
+    { id: "c4", workspace_id: WS, display_name: "Sin Registrar", phone: "+51 987 654 324", is_subscribed: true, marketing_status: "unknown" },
+    { id: "c5", workspace_id: WS, display_name: "Sin Dato", phone: "+51 987 654 325", is_subscribed: true },
   ]);
   const [b] = fake.seed("broadcasts", [
     { workspace_id: WS, name: "Promo", status: "draft", message_content: PROMO, total_recipients: 0 },
@@ -36,12 +38,33 @@ beforeEach(() => {
 });
 
 describe("launchBroadcast", () => {
-  it("crea un destinatario por contacto suscrito, programa un trabajo por cada uno y deja la difusión enviándose", async () => {
+  it("crea un destinatario por contacto que aceptó publicidad, programa un trabajo por cada uno y deja la difusión enviándose", async () => {
     const res = await launchBroadcast(fake.asDb(), params());
     expect(res).toMatchObject({ ok: true, totalRecipients: 2 });
     expect(fake.rows("broadcast_recipients").map((r) => r.contact_id).sort()).toEqual(["c1", "c2"]);
     expect(fake.rows("scheduled_jobs")).toHaveLength(2);
     expect(broadcast()).toMatchObject({ status: "sending", total_recipients: 2 });
+  });
+
+  // PRIV-01 / PRIV-05: la publicidad solo sale a quien aceptó, y se cuenta a quienes quedan fuera.
+  it("deja fuera a quien no tiene consentimiento o se dio de baja, y lo cuenta", async () => {
+    const res = await launchBroadcast(fake.asDb(), params());
+    expect(res).toMatchObject({
+      ok: true,
+      totalRecipients: 2,
+      excludedTotal: 3,
+      excluded: { optedOut: 1, noConsent: 2 },
+    });
+    expect(fake.rows("broadcast_recipients").map((r) => r.contact_id)).not.toContain("c4");
+    expect(fake.rows("broadcast_recipients").map((r) => r.contact_id)).not.toContain("c5");
+  });
+
+  it("si nadie aceptó publicidad no lanza nada y explica por qué", async () => {
+    fake.rows("contacts").forEach((c) => (c.marketing_status = "unknown"));
+    const res = await launchBroadcast(fake.asDb(), params());
+    expect(res).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("sin consentimiento de publicidad registrado") });
+    expect(broadcast().status).toBe("draft");
+    expect(fake.rows("broadcast_recipients")).toHaveLength(0);
   });
 
   it("dos envíos a la vez (doble clic): solo uno prospera y no hay destinatarios repetidos", async () => {

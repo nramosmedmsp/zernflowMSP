@@ -13,6 +13,8 @@ import { scheduleCasesForKeyDate } from "@/lib/cases";
 import { GENERIC_ERROR, logActivity, type Db } from "@/lib/cases/io";
 import { confirmContactTypesRows, recordContactTypeChanges } from "@/lib/cases/contact-type";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
+import { RATE_LIMIT_MESSAGE, RATE_RULES } from "@/lib/rate-limit";
+import { rateLimitDecision } from "@/lib/rate-limit-http";
 import { MAX_IMPORT_ROWS } from "@/lib/import/mapping";
 import { normalizeImportPhone, senderIdFromPhone } from "@/lib/import/phone";
 import { isUuid, sanitizeImportOptions, sanitizeImportRows } from "@/lib/import/sanitize";
@@ -25,6 +27,7 @@ import {
   type ImportOptions,
   type ValidatedRow,
 } from "@/lib/import/validate";
+import { IMPORT_DECLARATION_VERSION, NOTE_MAX, normalizeMarketingStatus } from "@/lib/consent";
 import type { Json } from "@/lib/types/database";
 
 export type ImportActionResult<T extends object = object> = ({ ok: true } & T) | { error: string };
@@ -39,6 +42,10 @@ export interface ImportContext {
 }
 
 export interface ImportBatchResult {
+  /** Contactos que quedaron con consentimiento por la declaración (PRIV-02). */
+  consented: number;
+  /** Contactos que ya estaban de baja: la importación no los reactiva. */
+  optedOutKept: number;
   created: number;
   updated: number;
   skipped: number;
@@ -49,6 +56,10 @@ export interface ImportBatchResult {
 }
 
 export interface ImportFinalResult {
+  /** Se declaró el consentimiento de la lista. */
+  consentDeclared: boolean;
+  /** Contactos que quedaron como "aceptó publicidad" en esta importación. */
+  consented: number;
   batchId: string;
   fileName: string;
   total: number;
@@ -203,6 +214,9 @@ export async function startImport(input: {
   }
   const s = await adminSession();
   if ("error" in s) return s;
+  // SEG-01: tope de importaciones iniciadas por usuario.
+  const limited = await rateLimitDecision(RATE_RULES.importStart, s.userId);
+  if (!limited.allowed) return { error: RATE_LIMIT_MESSAGE };
   if (options.channelId) {
     const { data: channel } = await s.db
       .from("channels")
@@ -245,6 +259,17 @@ export async function finishImport(batchId: string): Promise<ImportActionResult<
     .maybeSingle();
   if (!batch) return { error: "No se encontró la importación." };
   const errors = (Array.isArray(batch.errors) ? batch.errors : []) as unknown as ImportErrorEntry[];
+  const consentDeclared = consentWasDeclared(batch.options);
+  let consented = 0;
+  if (consentDeclared) {
+    const { count } = await s.db
+      .from("contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", s.workspaceId)
+      .eq("marketing_source", "import")
+      .ilike("marketing_note", `%(#${batch.id.slice(0, 8)})%`);
+    consented = count ?? 0;
+  }
   await logActivity(s.db, {
     workspace_id: s.workspaceId,
     type: "contacts_imported",
@@ -258,11 +283,15 @@ export async function finishImport(batchId: string): Promise<ImportActionResult<
       updated: batch.updated,
       skipped: batch.skipped,
       errors: errors.length,
+      consent_declared: consentDeclared,
+      consented,
     },
   });
   return {
     ok: true,
     result: {
+      consentDeclared,
+      consented,
       batchId: batch.id,
       fileName: batch.file_name,
       total: batch.total,
@@ -309,9 +338,32 @@ async function resolveTags(
   return ids;
 }
 
-function contactPayload(r: ValidatedRow, workspaceId: string, fileName: string) {
+/** ¿La importación se hizo con la declaración de consentimiento? Se lee del registro guardado al empezar. */
+function consentWasDeclared(batchOptions: unknown): boolean {
+  return !!batchOptions && typeof batchOptions === "object" && (batchOptions as { consentDeclared?: unknown }).consentDeclared === true;
+}
+
+/** Marca que queda en cada contacto cuyo consentimiento se declaró al importar (fecha, origen, quién y qué se afirmó). */
+function importConsentPatch(batch: { id: string; file_name: string }, userId: string, at: string) {
+  return {
+    marketing_status: "accepted" as const,
+    marketing_status_at: at,
+    marketing_source: "import",
+    marketing_set_by: userId,
+    marketing_note: `${IMPORT_DECLARATION_VERSION}: el archivo «${batch.file_name}» (#${batch.id.slice(0, 8)}) viene de personas que aceptaron recibir publicidad`.slice(0, NOTE_MAX),
+    is_subscribed: true,
+  };
+}
+
+function contactPayload(
+  r: ValidatedRow,
+  workspaceId: string,
+  fileName: string,
+  consent: ReturnType<typeof importConsentPatch> | null = null,
+) {
   const c = r.contact;
   return {
+    ...(consent ?? {}),
     workspace_id: workspaceId,
     display_name: c.displayName ?? c.phone ?? c.email,
     email: c.email,
@@ -350,7 +402,9 @@ export async function processImportBatch(input: {
     return { error: "El lote supera el total de filas de la importación." };
   }
 
-  const result: ImportBatchResult = { created: 0, updated: 0, skipped: 0, scheduled: 0, linked: 0, errors: [] };
+  const result: ImportBatchResult = { consented: 0, optedOutKept: 0, created: 0, updated: 0, skipped: 0, scheduled: 0, linked: 0, errors: [] };
+  // PRIV-02: con la declaración, los contactos del archivo quedan como "aceptó" (origen importación).
+  const consent = consentWasDeclared(batch.options) ? importConsentPatch(batch, userId, new Date().toISOString()) : null;
 
   // Duplicados dentro del lote, además de los que marcó el navegador entre lotes.
   const dups = findFileDuplicates(rows);
@@ -380,12 +434,13 @@ export async function processImportBatch(input: {
   const toCreate = validated.filter((v) => v.status === "create");
   const toUpdate = validated.filter((v) => v.status === "update");
   const touched: { contactId: string; row: ValidatedRow }[] = [];
+  const updatedIds: string[] = [];
   // Cambios de tipo que trae el archivo: quedan en el historial (origen 'importación') y confirman el tipo.
   const typeChanges: { contactId: string; from: string | null; to: string }[] = [];
 
   // Crear: en bloque; si el bloque falla, de a una para aislar la fila mala.
   for (const part of chunks(toCreate, CHUNK)) {
-    const payload = part.map((r) => contactPayload(r, workspaceId, batch.file_name));
+    const payload = part.map((r) => contactPayload(r, workspaceId, batch.file_name, consent));
     const { data, error } = await db.from("contacts").insert(payload).select("id");
     if (!error && data && data.length === part.length) {
       data.forEach((c, i) => {
@@ -394,6 +449,7 @@ export async function processImportBatch(input: {
         if (to) typeChanges.push({ contactId: c.id, from: null, to });
       });
       result.created += part.length;
+      if (consent) result.consented += part.length;
       continue;
     }
     if (error) console.error("[import] bulk insert", error.message);
@@ -407,6 +463,7 @@ export async function processImportBatch(input: {
         const to = part[i].contact.contactTypeId;
         if (to) typeChanges.push({ contactId: one.data.id, from: null, to });
         result.created++;
+        if (consent) result.consented++;
       }
     }
   }
@@ -445,8 +502,31 @@ export async function processImportBatch(input: {
       }
     }
     touched.push({ contactId: r.existingId as string, row: r });
+    updatedIds.push(r.existingId as string);
     if (c.contactTypeId) typeChanges.push({ contactId: r.existingId as string, from: previousType, to: c.contactTypeId });
     result.updated++;
+  }
+
+  // Con la declaración, los existentes "sin registrar" pasan a "aceptó". Quien ya se dio de baja
+  // NO se reactiva por importar una lista: la baja manda.
+  if (consent && updatedIds.length > 0) {
+    for (const part of chunks(updatedIds, CHUNK)) {
+      const { data: current, error: currentError } = await db
+        .from("contacts")
+        .select("id, marketing_status")
+        .eq("workspace_id", workspaceId)
+        .in("id", part);
+      if (currentError) {
+        console.error("[import] consentimiento (lectura)", currentError.message);
+        continue;
+      }
+      const unknownIds = (current ?? []).filter((c) => normalizeMarketingStatus(c.marketing_status) === "unknown").map((c) => c.id);
+      result.optedOutKept += (current ?? []).filter((c) => normalizeMarketingStatus(c.marketing_status) === "opted_out").length;
+      if (unknownIds.length === 0) continue;
+      const { error } = await db.from("contacts").update(consent).eq("workspace_id", workspaceId).in("id", unknownIds);
+      if (error) console.error("[import] consentimiento", error.message);
+      else result.consented += unknownIds.length;
+    }
   }
 
   // Historial del tipo (solo donde cambió) y confirmación de los que el archivo trae con tipo.

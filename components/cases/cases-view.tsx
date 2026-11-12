@@ -173,9 +173,9 @@ export function CasesView(props: CasesViewProps) {
                   : `${formatNumber(total)} ${total === 1 ? "gestión" : "gestiones"}`}
               {params.tab === "today" && !isBoard && " para hoy"}
             </p>
-            {byClient && props.clientTotals?.truncated && (
-              <p className="mt-1 text-xs text-amber-700">
-                Hay muchas gestiones: se muestran las más recientes. Usa los filtros para acotar.
+            {((byClient && props.clientTotals?.truncated) || (isBoard && props.board?.truncated)) && (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                Hay muchas gestiones: se muestran las más recientes y los totales pueden quedar cortos. Usa los filtros para acotar.
               </p>
             )}
           </div>

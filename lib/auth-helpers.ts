@@ -30,8 +30,35 @@ export function validateNewPassword(password: string, confirmation: string): str
   if (!password || password.length < MIN_PASSWORD_LENGTH) {
     return `La contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`;
   }
+  const weak = weakPasswordReason(password);
+  if (weak) return weak;
   if (password !== confirmation) {
     return "Las contraseñas no coinciden.";
+  }
+  return null;
+}
+
+const COMMON_PASSWORDS = new Set([
+  "password", "password1", "passw0rd", "contrasena", "contrasena1", "qwertyui", "qwerty123", "qwertyuiop",
+  "abcd1234", "abc12345", "iloveyou", "admin123", "administrador", "bienvenido", "bienvenida", "musclehop",
+  "muscleshop", "musclesho1", "12345678", "123456789", "1234567890", "87654321", "11111111", "00000000", "12341234",
+]);
+
+/**
+ * Regla mínima sensata para las pantallas (la regla fuerte del servidor es un ajuste del
+ * dueño en Supabase): nada de contraseñas comunes, de un solo carácter repetido ni de
+ * secuencias seguidas ("12345678", "abcdefgh"). Devuelve el aviso en español o null.
+ */
+export function weakPasswordReason(password: string): string | null {
+  const plain = password.trim().toLowerCase();
+  const sameChar = /^(.)\1+$/u.test(plain);
+  let sequence = plain.length >= 6;
+  for (let i = 1; sequence && i < plain.length; i++) {
+    const step = plain.charCodeAt(i) - plain.charCodeAt(i - 1);
+    if (step !== 1 && step !== -1) sequence = false;
+  }
+  if (COMMON_PASSWORDS.has(plain) || sameChar || sequence) {
+    return "Esa contraseña es muy fácil de adivinar. Elige otra más difícil (mezcla letras y números).";
   }
   return null;
 }

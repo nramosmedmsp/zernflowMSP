@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { confirmNextPath, parseEmailOtpType } from "@/lib/auth-helpers";
+import { isSameOriginRequest } from "@/lib/view-as/guard";
 
 // Valida el enlace de acceso (activación y recuperación, generados con
 // auth.admin.generateLink) solo cuando la persona pulsa «Continuar» en
@@ -13,6 +14,13 @@ function redirectTo(request: NextRequest, path: string) {
 }
 
 export async function POST(request: NextRequest) {
+  // SEG-14: el formulario de /auth/confirm es de esta misma app. Una página ajena
+  // no puede enviar aquí el token de otra cuenta (login CSRF): sin Origin propio
+  // no se toca el token ni se crea ninguna sesión.
+  if (!isSameOriginRequest(request.headers)) {
+    return redirectTo(request, "/login?error=enlace");
+  }
+
   let form: FormData | null = null;
   try {
     form = await request.formData();

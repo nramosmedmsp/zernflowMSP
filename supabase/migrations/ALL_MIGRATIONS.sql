@@ -5926,3 +5926,906 @@ begin
 
   raise notice '00042: % políticas reescritas con (select auth.uid())', v_changed;
 end $$;
+
+
+
+-- ============================================================
+-- MIGRATION 43: DEFENSA (TOPES, REGISTRO DE SUBIDAS, CIERRE DE SESIONES)
+-- ============================================================
+-- Tanda 2 (previa a producción): defensa y abuso.
+--
+-- Qué hace (tres temas, todo aditivo e idempotente):
+--
+-- 1. Topes de frecuencia por usuario (SEG-01). Las funciones de Vercel no
+--    comparten memoria, así que el contador vive en la base:
+--      * rate_limit_hits: una fila por (clave, ventana). La clave la arma el
+--        servidor ("message_send:min:<usuario>"); no guarda correos ni datos
+--        personales (los correos se mezclan con un hash antes de llegar aquí).
+--      * rate_limit_hit(clave, tope, segundos): suma 1 en la ventana fija actual
+--        de forma ATÓMICA (insert ... on conflict do update) y devuelve si aún
+--        está dentro del tope, cuántos van y cuántos segundos faltan para que
+--        la ventana se reinicie. Solo la puede ejecutar el servidor (service_role).
+--      La poda de filas viejas la hace el cron diario (media-cleanup).
+--
+-- 2. media_uploads (SEG-10): registro de los enlaces de subida que se entregaron
+--    (chat o respuesta guardada). Sirve para (a) poner un tope de subidas sin
+--    enviar por usuario y (b) que el cron diario borre del bucket los archivos
+--    que nadie llegó a enviar ni a guardar en una respuesta. Se marca used_at
+--    cuando el archivo se usa; el cron además comprueba message_media y
+--    saved_replies antes de borrar nada.
+--
+-- 3. revoke_user_sessions (SEG-09): cierra TODAS las sesiones abiertas de una
+--    persona (borra sus filas de auth.sessions y de auth.refresh_tokens). La
+--    API de administración de supabase-js 2.95 solo sabe cerrar la sesión de un
+--    JWT concreto (auth.admin.signOut(jwt)), no la de un usuario por id; esta
+--    función es la forma de hacerlo sin conocer su token. Solo service_role.
+--
+-- RLS activada SIN políticas y sin permisos para anon/authenticated en las dos
+-- tablas, como cron_runs (00041): solo el servidor las toca.
+--
+-- Orden de despliegue: aplicar esta migración ANTES de desplegar el código. Es
+-- segura con el código anterior (solo agrega objetos nuevos que ese código no
+-- usa). Si el código nuevo corre sin la migración, los topes de frecuencia
+-- "dejan pasar" (y lo registran), el registro de subidas no se anota y el cierre
+-- de sesiones se omite con un aviso en el log: nada se bloquea.
+-- Es idempotente: se puede volver a ejecutar.
+
+-- ============================================================
+-- 1. Topes de frecuencia
+-- ============================================================
+
+create table if not exists public.rate_limit_hits (
+  bucket text not null,
+  window_start timestamptz not null,
+  hits integer not null default 0,
+  primary key (bucket, window_start)
+);
+
+-- La poda diaria borra por antigüedad de la ventana.
+create index if not exists rate_limit_hits_window_idx
+  on public.rate_limit_hits (window_start);
+
+alter table public.rate_limit_hits enable row level security;
+-- Sin políticas a propósito. Sin permisos para usuarios ni anónimos.
+revoke all on public.rate_limit_hits from public, anon, authenticated;
+grant select, insert, update, delete on public.rate_limit_hits to service_role;
+
+comment on table public.rate_limit_hits is
+  'Contadores de ventana fija para los topes de frecuencia (lib/rate-limit.ts). Se podan a diario desde /api/cron/media-cleanup.';
+
+create or replace function public.rate_limit_hit(
+  p_bucket text,
+  p_limit integer,
+  p_window_seconds integer
+)
+returns table (allowed boolean, current_hits integer, retry_after_seconds integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_now timestamptz := clock_timestamp();
+  v_start timestamptz;
+  v_hits integer;
+begin
+  if p_bucket is null or length(p_bucket) = 0 or length(p_bucket) > 200 then
+    raise exception 'rate_limit_invalid_bucket';
+  end if;
+  if p_limit is null or p_limit < 1 or p_window_seconds is null
+     or p_window_seconds < 1 or p_window_seconds > 86400 then
+    raise exception 'rate_limit_invalid_args';
+  end if;
+
+  -- Ventana fija alineada al reloj (epoch): todos los servidores coinciden.
+  v_start := to_timestamp(floor(extract(epoch from v_now) / p_window_seconds) * p_window_seconds);
+
+  -- Un solo enunciado: dos peticiones simultáneas nunca leen el mismo valor.
+  insert into public.rate_limit_hits as r (bucket, window_start, hits)
+  values (p_bucket, v_start, 1)
+  on conflict (bucket, window_start) do update set hits = r.hits + 1
+  returning r.hits into v_hits;
+
+  allowed := v_hits <= p_limit;
+  current_hits := v_hits;
+  retry_after_seconds := greatest(
+    1,
+    ceil(extract(epoch from (v_start + make_interval(secs => p_window_seconds) - v_now)))::integer
+  );
+  return next;
+end;
+$$;
+
+revoke all on function public.rate_limit_hit(text, integer, integer) from public, anon, authenticated;
+grant execute on function public.rate_limit_hit(text, integer, integer) to service_role;
+
+-- ============================================================
+-- 2. Subidas pendientes (SEG-10)
+-- ============================================================
+
+create table if not exists public.media_uploads (
+  path text primary key,
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  -- Sin llave foránea: si se borra la cuenta, el cron igual debe poder limpiar el archivo.
+  user_id uuid not null,
+  source text not null check (source in ('chat', 'reply')),
+  created_at timestamptz not null default now(),
+  used_at timestamptz
+);
+
+-- Tope por usuario (subidas sin usar recientes) y limpieza por antigüedad.
+create index if not exists media_uploads_pending_user_idx
+  on public.media_uploads (user_id, created_at)
+  where used_at is null;
+create index if not exists media_uploads_pending_age_idx
+  on public.media_uploads (created_at)
+  where used_at is null;
+
+alter table public.media_uploads enable row level security;
+revoke all on public.media_uploads from public, anon, authenticated;
+grant select, insert, update, delete on public.media_uploads to service_role;
+
+comment on table public.media_uploads is
+  'Enlaces de subida entregados (chat o respuesta guardada). used_at se llena al enviar o guardar; el cron borra del bucket lo que sigue sin usar pasadas 48 h.';
+
+-- ============================================================
+-- 3. Cerrar las sesiones de una persona (SEG-09)
+-- ============================================================
+
+create or replace function public.revoke_user_sessions(p_user_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_count integer := 0;
+begin
+  if p_user_id is null then
+    raise exception 'revoke_user_sessions_invalid_user';
+  end if;
+
+  -- Borrar la sesión impide renovar el token (refresh) y hace que Auth rechace
+  -- el token de acceso restante cuando se le consulta. Los tokens de refresco
+  -- caen en cascada; el segundo delete es un cinturón por si no hubiera cascada.
+  delete from auth.sessions where user_id = p_user_id;
+  get diagnostics v_count = row_count;
+
+  begin
+    delete from auth.refresh_tokens where user_id::text = p_user_id::text;
+  exception when others then
+    null; -- esquema distinto de Auth: la sesión ya se borró, que es lo que importa
+  end;
+
+  return v_count;
+end;
+$$;
+
+revoke all on function public.revoke_user_sessions(uuid) from public, anon, authenticated;
+grant execute on function public.revoke_user_sessions(uuid) to service_role;
+
+notify pgrst, 'reload schema';
+
+
+
+-- ============================================================
+-- MIGRATION 44: CONSENTIMIENTO DE PUBLICIDAD Y DATOS DEL CLIENTE
+-- ============================================================
+-- Tanda 3 (previa a producción): consentimiento de publicidad y datos del cliente.
+--
+-- Qué hace (todo aditivo e idempotente):
+--
+-- 1. Consentimiento de publicidad en `contacts` (PRIV-01). Cinco columnas nuevas:
+--      marketing_status      'unknown' (sin registrar) | 'accepted' (aceptó) | 'opted_out' (baja)
+--      marketing_status_at   cuándo se anotó el estado actual
+--      marketing_source      de dónde salió: 'manual' (un asesor), 'keyword' (palabra clave de
+--                            Configuración), 'import' (declaración al importar), 'flow' (un flujo),
+--                            'legacy' (ya estaba de baja antes de esta migración), 'erased'
+--      marketing_set_by      quién lo anotó (null = el propio cliente o el sistema)
+--      marketing_note        nota libre o versión del texto que aceptó
+--    Los contactos existentes pasan a 'unknown', salvo los que ya tenían
+--    is_subscribed = false, que pasan a 'opted_out' (origen 'legacy').
+--
+-- 2. Convivencia con `is_subscribed` (que mucho código y los flujos siguen usando).
+--    Regla: is_subscribed = (marketing_status <> 'opted_out'), es decir "no se dio de
+--    baja". Un trigger BEFORE INSERT/UPDATE (sync_contact_consent) lo mantiene siempre
+--    coherente, venga el cambio de donde venga:
+--      * Código nuevo: cambia marketing_status y el trigger ajusta is_subscribed.
+--      * Código anterior o flujos: cambian is_subscribed = false -> baja ('flow');
+--        is_subscribed = true sobre una baja -> 'accepted' (origen 'flow', el cliente
+--        pidió el alta). Poner true sobre quien no estaba de baja no cambia nada.
+--    Así el código anterior sigue funcionando con la migración aplicada.
+--    La publicidad (difusiones, secuencias, plantillas de publicidad) pide
+--    marketing_status = 'accepted'; is_subscribed solo dice "no está de baja".
+--
+-- 3. Borrado de los datos de un cliente (PRIV-06 / BD-10, solo contacto):
+--      * contact_erasures: registro de cada borrado (quién, cuándo, qué se quitó y qué
+--        archivos faltan por borrar del almacenamiento). Los administradores lo leen;
+--        escribe solo el servidor.
+--      * erase_contact_data(espacio, contacto, quien): UNA transacción que anonimiza el
+--        contacto y borra mensajes, archivos (filas), notas, canales, campos, etiquetas,
+--        sesiones de flujo, inscripciones, destinatarios de difusión y avisos del
+--        cliente. Conserva la fila del contacto SIN datos personales ("Cliente
+--        eliminado", de baja) y sus gestiones sin texto libre (los reclamos conservan
+--        además la solución escrita). Devuelve la lista de archivos del almacenamiento
+--        para que la app los borre y, si falla, quede pendiente y se pueda reintentar.
+--      * Se quita el borrado directo de contactos para usuarios (contacts_delete): un
+--        borrado por la API dejaba archivos huérfanos y sin registro. La app no lo usa
+--        (sus borrados internos van con la clave de servicio).
+--
+-- Orden de despliegue: aplicar esta migración ANTES de desplegar el código. Es segura
+-- con el código anterior (solo agrega columnas con valor por defecto, un trigger que
+-- mantiene is_subscribed y objetos nuevos que ese código no usa). Si el código nuevo
+-- corriera SIN la migración, las pantallas de contactos y las difusiones fallarían
+-- (consultan las columnas nuevas): por eso va primero.
+-- Es idempotente: se puede volver a ejecutar.
+
+set local lock_timeout = '10s';
+
+-- ============================================================
+-- 1. Columnas de consentimiento
+-- ============================================================
+
+alter table public.contacts
+  add column if not exists marketing_status text not null default 'unknown',
+  add column if not exists marketing_status_at timestamptz,
+  add column if not exists marketing_source text,
+  add column if not exists marketing_set_by uuid references auth.users(id) on delete set null,
+  add column if not exists marketing_note text,
+  add column if not exists erased_at timestamptz,
+  add column if not exists erased_by uuid references auth.users(id) on delete set null;
+
+alter table public.contacts drop constraint if exists contacts_marketing_status_check;
+alter table public.contacts
+  add constraint contacts_marketing_status_check
+  check (marketing_status in ('unknown', 'accepted', 'opted_out'));
+
+alter table public.contacts drop constraint if exists contacts_marketing_note_check;
+alter table public.contacts
+  add constraint contacts_marketing_note_check
+  check (marketing_note is null or char_length(marketing_note) <= 500);
+
+comment on column public.contacts.marketing_status is
+  'Consentimiento de publicidad: unknown (sin registrar), accepted (aceptó), opted_out (baja). is_subscribed = (marketing_status <> ''opted_out'') lo mantiene el trigger sync_contact_consent.';
+comment on column public.contacts.marketing_source is
+  'Origen del estado: manual, keyword, import, flow, legacy, erased.';
+comment on column public.contacts.erased_at is
+  'Cuándo se borraron los datos personales del cliente (la fila queda anónima). Ver erase_contact_data.';
+
+-- Contactos que ya estaban de baja antes de esta migración.
+update public.contacts
+   set marketing_status = 'opted_out',
+       marketing_status_at = now(),
+       marketing_source = 'legacy'
+ where is_subscribed = false
+   and marketing_status = 'unknown';
+
+-- Apoyo del filtro de Contactos y del cálculo de destinatarios.
+create index if not exists idx_contacts_marketing_status
+  on public.contacts (workspace_id, marketing_status);
+
+-- ============================================================
+-- 2. Trigger de convivencia con is_subscribed
+-- ============================================================
+
+create or replace function public.sync_contact_consent()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'INSERT' then
+    -- Código anterior que crea un contacto ya dado de baja.
+    if new.is_subscribed is false and new.marketing_status = 'unknown' then
+      new.marketing_status := 'opted_out';
+      new.marketing_status_at := coalesce(new.marketing_status_at, now());
+      new.marketing_source := coalesce(new.marketing_source, 'legacy');
+    end if;
+    new.is_subscribed := (new.marketing_status <> 'opted_out');
+    return new;
+  end if;
+
+  if new.marketing_status is distinct from old.marketing_status then
+    -- Cambio hecho con el modelo nuevo: gana marketing_status.
+    if new.marketing_status_at is not distinct from old.marketing_status_at then
+      new.marketing_status_at := now();
+    end if;
+    new.is_subscribed := (new.marketing_status <> 'opted_out');
+  elsif new.is_subscribed is distinct from old.is_subscribed then
+    -- Cambio hecho con el código anterior o por un flujo (baja o alta).
+    if new.is_subscribed is false then
+      new.marketing_status := 'opted_out';
+      new.marketing_source := 'flow';
+      new.marketing_set_by := null;
+      new.marketing_note := null;
+      new.marketing_status_at := now();
+    elsif old.marketing_status = 'opted_out' then
+      new.marketing_status := 'accepted';
+      new.marketing_source := 'flow';
+      new.marketing_set_by := null;
+      new.marketing_note := null;
+      new.marketing_status_at := now();
+    else
+      -- Ya no estaba de baja: is_subscribed vuelve a decir lo que corresponde.
+      new.is_subscribed := true;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.sync_contact_consent() from public, anon, authenticated;
+
+drop trigger if exists sync_contact_consent on public.contacts;
+create trigger sync_contact_consent
+  before insert or update on public.contacts
+  for each row execute function public.sync_contact_consent();
+
+-- ============================================================
+-- 3. Registro de borrados y borrado de un cliente
+-- ============================================================
+
+create table if not exists public.contact_erasures (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  -- Sin llave foránea a propósito: es solo la constancia; la fila anónima del contacto sigue existiendo.
+  contact_id uuid not null,
+  requested_by uuid references auth.users(id) on delete set null,
+  requested_at timestamptz not null default now(),
+  -- Cuántas cosas se quitaron y qué se conservó (solo números, sin datos personales).
+  summary jsonb not null default '{}'::jsonb,
+  -- Archivos del almacenamiento que faltan por borrar (vacío = todo borrado).
+  files_pending text[] not null default '{}',
+  files_total integer not null default 0,
+  files_done_at timestamptz,
+  last_file_error text,
+  file_attempts integer not null default 0
+);
+
+create index if not exists idx_contact_erasures_contact on public.contact_erasures (contact_id, requested_at desc);
+create index if not exists idx_contact_erasures_workspace on public.contact_erasures (workspace_id, requested_at desc);
+
+alter table public.contact_erasures enable row level security;
+drop policy if exists contact_erasures_select on public.contact_erasures;
+create policy contact_erasures_select on public.contact_erasures
+  for select using (public.is_ws_admin(workspace_id));
+revoke all on public.contact_erasures from public, anon, authenticated;
+grant select on public.contact_erasures to authenticated;
+grant select, insert, update, delete on public.contact_erasures to service_role;
+
+comment on table public.contact_erasures is
+  'Constancia de cada borrado de datos de un cliente y de los archivos que faltan por quitar del almacenamiento (lib/contact-erase.ts).';
+
+create or replace function public.erase_contact_data(
+  p_workspace_id uuid,
+  p_contact_id uuid,
+  p_actor_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_contact public.contacts%rowtype;
+  v_paths text[];
+  v_extra text[];
+  v_erasure uuid;
+  v_conversations integer;
+  v_messages integer;
+  v_files integer;
+  v_notes integer;
+  v_cases integer;
+  v_claims integer;
+begin
+  select * into v_contact
+    from public.contacts
+   where id = p_contact_id and workspace_id = p_workspace_id
+   for update;
+  if not found then
+    raise exception 'contact_not_found' using errcode = 'P0002';
+  end if;
+  if v_contact.erased_at is not null then
+    return jsonb_build_object('already_erased', true);
+  end if;
+
+  -- Archivos: los que registran las filas de message_media y cualquier otro que haya
+  -- quedado en la carpeta de sus chats (por ejemplo un archivo subido y nunca enviado).
+  select coalesce(array_agg(distinct mm.storage_path) filter (where mm.storage_path is not null), '{}')
+    into v_paths
+    from public.message_media mm
+    join public.conversations c on c.id = mm.conversation_id
+   where c.contact_id = p_contact_id;
+
+  -- Los archivos sueltos son un extra: si el almacenamiento no se puede consultar desde aquí,
+  -- se sigue solo con los que registra message_media (nunca se aborta el borrado por esto).
+  if to_regclass('storage.objects') is not null then
+    begin
+      execute $q$
+        select coalesce(array_agg(distinct o.name), '{}')
+          from storage.objects o
+          join public.conversations c
+            on o.name like $1 || '/conv/' || c.id::text || '/%'
+         where o.bucket_id = 'chat-media'
+           and c.contact_id = $2
+      $q$ into v_extra using p_workspace_id::text, p_contact_id;
+      select coalesce(array_agg(distinct p), '{}') into v_paths
+        from unnest(v_paths || coalesce(v_extra, '{}')) as p;
+    exception when others then
+      raise warning 'erase_contact_data: no se pudo listar el almacenamiento (%)', sqlerrm;
+    end;
+  end if;
+
+  select count(*) into v_conversations from public.conversations where contact_id = p_contact_id;
+  select count(*) into v_messages
+    from public.messages m join public.conversations c on c.id = m.conversation_id
+   where c.contact_id = p_contact_id;
+  select count(*) into v_files
+    from public.message_media mm join public.conversations c on c.id = mm.conversation_id
+   where c.contact_id = p_contact_id;
+  select count(*) into v_notes from public.case_notes where contact_id = p_contact_id;
+  select count(*) into v_cases from public.cases where contact_id = p_contact_id;
+  select count(*) into v_claims
+    from public.cases ca join public.case_types ct on ct.id = ca.case_type_id
+   where ca.contact_id = p_contact_id and ct.protected;
+
+  -- Mensajes y archivos (las conversaciones quedan vacías, sin vínculo con la plataforma).
+  delete from public.message_media
+   where conversation_id in (select id from public.conversations where contact_id = p_contact_id);
+  delete from public.messages
+   where conversation_id in (select id from public.conversations where contact_id = p_contact_id);
+  update public.conversations
+     set late_conversation_id = null,
+         last_message_preview = null,
+         complaint_excerpt = null,
+         status = 'closed',
+         unread_count = 0
+   where contact_id = p_contact_id;
+
+  -- Notas internas (texto libre).
+  delete from public.case_notes where contact_id = p_contact_id;
+
+  -- Gestiones: se conservan con su tipo, pasos, fechas y resultado, sin texto libre.
+  -- En los reclamos (tipos protegidos) se conserva además la solución escrita.
+  update public.cases c
+     set next_action_note = null,
+         close_request = null,
+         outcome_note = case
+           when coalesce((select ct.protected from public.case_types ct where ct.id = c.case_type_id), false)
+           then c.outcome_note end,
+         solution_note = case
+           when coalesce((select ct.protected from public.case_types ct where ct.id = c.case_type_id), false)
+           then c.solution_note end
+   where c.contact_id = p_contact_id;
+
+  -- Historial: el que no es de una gestión se borra; el de las gestiones pierde el texto libre.
+  delete from public.activity where contact_id = p_contact_id and case_id is null;
+  update public.activity
+     set meta = meta - 'text' - 'name' - 'comment' - 'excerpt' - 'params' - 'error' - 'keyword' - 'note'
+   where contact_id = p_contact_id and case_id is not null;
+
+  -- Identificadores, campos, etiquetas y todo lo que ligue a la persona.
+  delete from public.contact_channels where contact_id = p_contact_id;
+  delete from public.contact_custom_fields where contact_id = p_contact_id;
+  delete from public.contact_tags where contact_id = p_contact_id;
+  delete from public.flow_sessions where contact_id = p_contact_id;
+  delete from public.sequence_enrollments where contact_id = p_contact_id;
+  delete from public.broadcast_recipients where contact_id = p_contact_id;
+  delete from public.notifications where link like '%' || p_contact_id::text || '%';
+  delete from public.scheduled_jobs where status = 'pending' and payload::text like '%' || p_contact_id::text || '%';
+  update public.analytics_events set contact_id = null where contact_id = p_contact_id;
+
+  -- El contacto queda anónimo y de baja de publicidad para siempre.
+  update public.contacts
+     set display_name = 'Cliente eliminado',
+         email = null,
+         phone = null,
+         avatar_url = null,
+         metadata = null,
+         source = jsonb_build_object('erased', true),
+         key_date = null,
+         is_subscribed = false,
+         marketing_status = 'opted_out',
+         marketing_status_at = now(),
+         marketing_source = 'erased',
+         marketing_set_by = p_actor_id,
+         marketing_note = null,
+         erased_at = now(),
+         erased_by = p_actor_id
+   where id = p_contact_id;
+
+  insert into public.contact_erasures (workspace_id, contact_id, requested_by, summary, files_pending, files_total)
+  values (
+    p_workspace_id,
+    p_contact_id,
+    p_actor_id,
+    jsonb_build_object(
+      'conversations', v_conversations,
+      'messages', v_messages,
+      'files', v_files,
+      'notes', v_notes,
+      'cases_kept', v_cases,
+      'claims_kept', v_claims
+    ),
+    v_paths,
+    coalesce(array_length(v_paths, 1), 0)
+  )
+  returning id into v_erasure;
+
+  -- Si no había archivos, el borrado ya está completo.
+  update public.contact_erasures set files_done_at = now()
+   where id = v_erasure and files_total = 0;
+
+  insert into public.activity (workspace_id, contact_id, type, actor_id, meta)
+  values (
+    p_workspace_id,
+    p_contact_id,
+    'contact_data_erased',
+    p_actor_id,
+    jsonb_build_object('erasure_id', v_erasure, 'cases_kept', v_cases, 'claims_kept', v_claims)
+  );
+
+  return jsonb_build_object(
+    'already_erased', false,
+    'erasure_id', v_erasure,
+    'paths', to_jsonb(v_paths),
+    'summary', jsonb_build_object(
+      'conversations', v_conversations,
+      'messages', v_messages,
+      'files', v_files,
+      'notes', v_notes,
+      'cases_kept', v_cases,
+      'claims_kept', v_claims
+    )
+  );
+end;
+$$;
+
+revoke all on function public.erase_contact_data(uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.erase_contact_data(uuid, uuid, uuid) to service_role;
+
+-- ============================================================
+-- 4. Sin borrado directo de contactos para usuarios
+-- ============================================================
+-- El borrado de un cliente se hace con erase_contact_data (deja constancia y borra los
+-- archivos). El administrador ya no puede borrar contactos por la API de datos.
+drop policy if exists contacts_delete on public.contacts;
+revoke delete on public.contacts from anon, authenticated;
+
+
+
+-- ============================================================
+-- MIGRATION 45: BUSQUEDA SIN TILDES Y VOLUMEN
+-- ============================================================
+-- Tanda 4 (volumen y mejoras de uso): búsqueda sin tildes ni formato de
+-- teléfono hecha en la base, y conteos agregados para Analítica y Métricas.
+--
+-- QUÉ HACE
+--   1. Extensión `unaccent` y tres funciones inmutables de normalización:
+--        f_unaccent(texto)       quita tildes (ñ -> n)
+--        f_norm(texto)           minúsculas, sin tildes ("Peña" -> "pena")
+--        f_phone_digits(texto)   solo los dígitos ("+51 987 654 321" -> "51987654321")
+--   2. Índices GIN trigram sobre esas expresiones (nombre, correo y teléfono de
+--      contactos; vista previa del último mensaje de los chats) y un índice de
+--      eventos de analítica por (espacio, tipo, fecha).
+--   3. Funciones de búsqueda (devuelven filas completas de la tabla, así que la
+--      app puede seguir encadenando filtros, orden, página y conteo):
+--        search_contacts(espacio, texto)  -> contactos
+--        search_cases(espacio, texto)     -> gestiones de los contactos que coinciden
+--        search_inbox(espacio, texto, n)  -> chats (por contacto o por último mensaje)
+--   4. Conteos agregados (SECURITY INVOKER: corren con los permisos de quien
+--      llama, la RLS decide qué cuenta):
+--        analytics_flow_stats   inicios y terminaciones por flujo
+--        analytics_daily        enviados / fallidos / contactos nuevos por día (hora de Lima)
+--        metrics_inbound_hourly mensajes entrantes por hora y canal
+--
+-- POR QUÉ LAS BÚSQUEDAS SON SECURITY DEFINER (razón escrita)
+--   Con RLS, Postgres evalúa la política (can_see_contact_row) ANTES que un
+--   `ilike` del usuario, porque `ilike` no es "leakproof"; por eso el índice
+--   trigram NO se usa si se busca con la tabla directa (medido: lectura
+--   secuencial de toda la tabla, con can_see_contact_row en cada fila: 0,6 s
+--   para un administrador y 1,5 s para un asesor con solo 40 000 contactos, y
+--   crece linealmente). Las funciones buscan primero por índice y aplican DESPUÉS,
+--   solo a las filas que coinciden, el MISMO permiso que la política:
+--   can_see_contact_row(...) (que lee auth.uid(), así que "Ver como" funciona
+--   igual) y exigen ser miembro del espacio. Un asesor no recibe por la función
+--   nada que no vea por la tabla. El ayudante crm_private.contact_match vive en
+--   un esquema que la API no expone y nadie puede ejecutarlo directamente.
+--
+-- ÍNDICES NUEVOS FRENTE A LOS DE LA 00042 (no se borra ninguno)
+--   idx_contacts_display_name_trgm / _email_trgm / _phone_trgm (00042) indexan el
+--   texto crudo y sirven para `ilike` con la tabla directa. Los nuevos
+--   (idx_contacts_name_norm_trgm, _email_norm_trgm, _phone_digits_trgm) indexan
+--   el texto normalizado y son los que usa la búsqueda desde ahora. En la
+--   práctica los de la 00042 quedan sin uso (la app ya no hace `ilike` directo
+--   sobre esas columnas): se pueden retirar con calma tras 2-4 semanas
+--   mirando pg_stat_user_indexes, en otra migración.
+--
+-- BLOQUEOS Y DURACIÓN
+--   CREATE INDEX (sin CONCURRENTLY, por la transacción) bloquea las ESCRITURAS
+--   de la tabla mientras se construye. Con decenas de miles de contactos son
+--   segundos. Con lock_timeout de 10 s: si hay una transacción larga, falla
+--   limpio y se vuelve a ejecutar. Los índices sobre conversations penalizan un
+--   poco cada mensaje nuevo (la vista previa cambia): es el costo de buscar por
+--   texto del mensaje con índice.
+--
+-- ORDEN DE DESPLIEGUE: aplicar ANTES de desplegar el código. Es aditiva e
+-- idempotente y no cambia nada para el código anterior (que no usa estas
+-- funciones). El código nuevo, si la migración falta, no encuentra las
+-- funciones: la búsqueda muestra un aviso en vez de resultados.
+
+set local lock_timeout = '10s';
+
+-- ============================================================
+-- 1. unaccent y normalización
+-- ============================================================
+
+do $$
+declare
+  v_schema text;
+begin
+  select n.nspname into v_schema
+  from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+  where e.extname = 'unaccent';
+  if v_schema is null then
+    v_schema := case when exists (select 1 from pg_namespace where nspname = 'extensions')
+                     then 'extensions' else 'public' end;
+    execute format('create extension if not exists unaccent with schema %I', v_schema);
+  end if;
+
+  -- El envoltorio fija el diccionario por nombre completo: así es inmutable y se puede indexar.
+  execute format($f$
+    create or replace function public.f_unaccent(p text)
+    returns text
+    language sql
+    immutable
+    parallel safe
+    strict
+    as $body$ select %1$I.unaccent('%1$I.unaccent'::regdictionary, p) $body$
+  $f$, v_schema);
+end $$;
+
+create or replace function public.f_norm(p text)
+returns text
+language sql
+immutable
+parallel safe
+as $$ select lower(public.f_unaccent(coalesce(p, ''))) $$;
+
+create or replace function public.f_phone_digits(p text)
+returns text
+language sql
+immutable
+parallel safe
+as $$ select regexp_replace(coalesce(p, ''), '\D', '', 'g') $$;
+
+-- ============================================================
+-- 2. Índices de texto sobre lo normalizado (+ eventos de analítica)
+-- ============================================================
+
+do $$
+declare
+  v_schema text;
+begin
+  select n.nspname into v_schema
+  from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+  where e.extname = 'pg_trgm';
+  if v_schema is null then
+    v_schema := case when exists (select 1 from pg_namespace where nspname = 'extensions')
+                     then 'extensions' else 'public' end;
+    execute format('create extension if not exists pg_trgm with schema %I', v_schema);
+  end if;
+
+  execute format('create index if not exists idx_contacts_name_norm_trgm on public.contacts using gin ((public.f_norm(display_name)) %I.gin_trgm_ops)', v_schema);
+  execute format('create index if not exists idx_contacts_email_norm_trgm on public.contacts using gin ((public.f_norm(email)) %I.gin_trgm_ops)', v_schema);
+  execute format('create index if not exists idx_contacts_phone_digits_trgm on public.contacts using gin ((public.f_phone_digits(phone)) %I.gin_trgm_ops)', v_schema);
+  execute format('create index if not exists idx_conversations_preview_norm_trgm on public.conversations using gin ((public.f_norm(last_message_preview)) %I.gin_trgm_ops)', v_schema);
+end $$;
+
+-- Conteos de Analítica y Métricas por espacio, tipo y fecha.
+create index if not exists idx_analytics_events_ws_type_created
+  on public.analytics_events (workspace_id, event_type, created_at);
+
+-- ============================================================
+-- 3. Búsqueda
+-- ============================================================
+
+-- Ayudante interno: contactos del espacio que coinciden Y que la persona puede ver.
+-- Texto: nombre o correo sin tildes; si parece un teléfono (solo dígitos, espacios,
+-- + - . ( )), también por los dígitos del teléfono guardado.
+create or replace function crm_private.contact_match(p_workspace uuid, p_q text)
+returns table (id uuid)
+language plpgsql
+stable
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_q text := public.f_norm(btrim(coalesce(p_q, '')));
+  v_digits text := public.f_phone_digits(p_q);
+  v_pat text;
+  v_dpat text;
+  v_phoneish boolean;
+begin
+  if v_q = '' or p_workspace is null or auth.uid() is null then
+    return;
+  end if;
+  -- Debe ser miembro del espacio (can_see_contact_row también lo exige, pero así
+  -- ni siquiera se busca).
+  if not public.is_workspace_member(p_workspace) then
+    return;
+  end if;
+  v_pat := '%' || replace(replace(replace(v_q, '\', '\\'), '%', '\%'), '_', '\_') || '%';
+  v_phoneish := p_q ~ '^[0-9+()\s.-]+$' and length(v_digits) >= 3;
+  v_dpat := '%' || v_digits || '%';
+
+  -- Primero los candidatos por índice (un SELECT por columna, cada uno con su índice
+  -- trigram) y SOLO a ellos se les aplica el permiso: así el costo no depende del
+  -- tamaño de la tabla sino del número de coincidencias.
+  return query
+    with cand as materialized (
+      select c.id, c.workspace_id, c.owner_id, c.team_id
+      from public.contacts c
+      where c.workspace_id = p_workspace and public.f_norm(c.display_name) like v_pat
+      union
+      select c.id, c.workspace_id, c.owner_id, c.team_id
+      from public.contacts c
+      where c.workspace_id = p_workspace and public.f_norm(c.email) like v_pat
+      union
+      select c.id, c.workspace_id, c.owner_id, c.team_id
+      from public.contacts c
+      where v_phoneish and c.workspace_id = p_workspace and public.f_phone_digits(c.phone) like v_dpat
+    )
+    select k.id
+    from cand k
+    where public.can_see_contact_row(k.workspace_id, k.id, k.owner_id, k.team_id);
+end;
+$$;
+revoke all on function crm_private.contact_match(uuid, text) from public, anon, authenticated;
+
+create or replace function public.search_contacts(p_workspace uuid, p_q text)
+returns setof public.contacts
+language sql
+stable
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+  select c.*
+  from public.contacts c
+  where c.id in (select m.id from crm_private.contact_match(p_workspace, p_q) m);
+$$;
+
+create or replace function public.search_cases(p_workspace uuid, p_q text)
+returns setof public.cases
+language sql
+stable
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+  select k.*
+  from public.cases k
+  where k.workspace_id = p_workspace
+    and k.contact_id in (select m.id from crm_private.contact_match(p_workspace, p_q) m);
+$$;
+
+-- Chats: por nombre/correo/teléfono del contacto o por el último mensaje. Los más recientes primero.
+create or replace function public.search_inbox(p_workspace uuid, p_q text, p_limit integer default 100)
+returns setof public.conversations
+language plpgsql
+stable
+security definer
+set search_path = public, extensions, pg_temp
+as $$
+declare
+  v_q text := public.f_norm(btrim(coalesce(p_q, '')));
+  v_pat text;
+begin
+  if v_q = '' or p_workspace is null or auth.uid() is null
+     or not public.is_workspace_member(p_workspace) then
+    return;
+  end if;
+  v_pat := '%' || replace(replace(replace(v_q, '\', '\\'), '%', '\%'), '_', '\_') || '%';
+
+  return query
+    select v.*
+    from public.conversations v
+    where v.id in (
+      select cv.id from public.conversations cv
+      where cv.workspace_id = p_workspace
+        and cv.contact_id in (select m.id from crm_private.contact_match(p_workspace, p_q) m)
+      union
+      select cv.id from public.conversations cv
+      where cv.workspace_id = p_workspace
+        and public.f_norm(cv.last_message_preview) like v_pat
+        and public.can_see_contact(cv.contact_id)
+    )
+    order by v.last_message_at desc nulls last, v.id
+    limit greatest(1, least(coalesce(p_limit, 100), 500));
+end;
+$$;
+
+revoke all on function public.search_contacts(uuid, text) from public, anon;
+revoke all on function public.search_cases(uuid, text) from public, anon;
+revoke all on function public.search_inbox(uuid, text, integer) from public, anon;
+grant execute on function public.search_contacts(uuid, text) to authenticated, service_role;
+grant execute on function public.search_cases(uuid, text) to authenticated, service_role;
+grant execute on function public.search_inbox(uuid, text, integer) to authenticated, service_role;
+
+-- ============================================================
+-- 4. Conteos agregados (SECURITY INVOKER: la RLS de quien llama decide)
+-- ============================================================
+
+-- Inicios y terminaciones de cada flujo en el rango [p_from, p_to].
+create or replace function public.analytics_flow_stats(p_workspace uuid, p_from timestamptz, p_to timestamptz)
+returns table (flow_id uuid, starts bigint, completions bigint)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select e.flow_id,
+         count(*) filter (where e.event_type = 'flow_started'),
+         count(*) filter (where e.event_type = 'flow_completed')
+  from public.analytics_events e
+  where e.workspace_id = p_workspace
+    and e.event_type in ('flow_started', 'flow_completed')
+    and e.flow_id is not null
+    and e.created_at >= p_from and e.created_at <= p_to
+  group by e.flow_id;
+$$;
+
+-- Mensajes enviados / fallidos y contactos nuevos por día (hora de Lima) en el rango.
+create or replace function public.analytics_daily(p_workspace uuid, p_from timestamptz, p_to timestamptz)
+returns table (day date, sent bigint, failed bigint, new_contacts bigint)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select d.day,
+         coalesce(sum(d.sent), 0)::bigint,
+         coalesce(sum(d.failed), 0)::bigint,
+         coalesce(sum(d.new_contacts), 0)::bigint
+  from (
+    select (e.created_at at time zone 'America/Lima')::date as day,
+           (e.event_type = 'message_sent')::int as sent,
+           (e.event_type = 'message_failed')::int as failed,
+           0 as new_contacts
+    from public.analytics_events e
+    where e.workspace_id = p_workspace
+      and e.event_type in ('message_sent', 'message_failed')
+      and e.created_at >= p_from and e.created_at <= p_to
+    union all
+    select (c.created_at at time zone 'America/Lima')::date, 0, 0, 1
+    from public.contacts c
+    where c.workspace_id = p_workspace
+      and c.created_at >= p_from and c.created_at <= p_to
+  ) d
+  group by d.day
+  order by d.day;
+$$;
+
+-- Mensajes entrantes por hora (UTC, que coincide con la hora de Lima: UTC-5 fijo) y canal.
+create or replace function public.metrics_inbound_hourly(p_workspace uuid, p_from timestamptz, p_to timestamptz)
+returns table (hour_start timestamptz, platform text, n bigint)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select date_trunc('hour', e.created_at),
+         e.metadata->>'platform',
+         count(*)
+  from public.analytics_events e
+  where e.workspace_id = p_workspace
+    and e.event_type = 'message_received'
+    and e.created_at >= p_from and e.created_at < p_to
+  group by 1, 2;
+$$;
+
+revoke all on function public.analytics_flow_stats(uuid, timestamptz, timestamptz) from public, anon;
+revoke all on function public.analytics_daily(uuid, timestamptz, timestamptz) from public, anon;
+revoke all on function public.metrics_inbound_hourly(uuid, timestamptz, timestamptz) from public, anon;
+grant execute on function public.analytics_flow_stats(uuid, timestamptz, timestamptz) to authenticated, service_role;
+grant execute on function public.analytics_daily(uuid, timestamptz, timestamptz) to authenticated, service_role;
+grant execute on function public.metrics_inbound_hourly(uuid, timestamptz, timestamptz) to authenticated, service_role;
+
+notify pgrst, 'reload schema';

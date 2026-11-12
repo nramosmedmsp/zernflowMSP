@@ -22,7 +22,16 @@ import {
   type WorkspaceActor,
 } from "@/lib/cases/visibility";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
-import { normalizePhone } from "@/components/contacts/contact-labels";
+import { normalizeContactEmail, normalizeContactName, normalizePhone } from "@/components/contacts/contact-labels";
+import { isViewAsLocked, markReadOnlyHit, VIEW_AS_LOCKED_MESSAGE } from "@/lib/view-as/lock";
+import {
+  availableConsentActions,
+  buildConsentChange,
+  normalizeMarketingStatus,
+  validateConsentNote,
+  type ConsentAction,
+  type MarketingStatus,
+} from "@/lib/consent";
 import { normalizeImportPhone, senderIdFromPhone } from "@/lib/import/phone";
 import { ilikePattern } from "@/components/cases/case-filters";
 
@@ -84,7 +93,20 @@ interface ContactAccess {
     phone: string | null;
     key_date: string | null;
     contact_type_confirmed_at?: string | null;
+    display_name?: string | null;
+    email?: string | null;
+    marketing_status?: string | null;
+    erased_at?: string | null;
   };
+}
+
+const ERASED_MESSAGE = "Los datos de este cliente ya fueron eliminados.";
+
+/** "Ver como" es solo lectura: se avisa con claridad antes de intentar escribir. */
+async function blockedByViewAs(): Promise<{ error: string } | null> {
+  if (!(await isViewAsLocked())) return null;
+  await markReadOnlyHit();
+  return { error: VIEW_AS_LOCKED_MESSAGE };
 }
 
 /** Carga el contacto del espacio actual y comprueba que el usuario lo ve. */
@@ -108,7 +130,15 @@ async function withContact(contactId: unknown): Promise<ContactAccess | { error:
 
 async function updateContact(
   ctx: ContactAccess,
-  patch: { contact_type_id?: string | null; owner_id?: string | null; team_id?: string | null; phone?: string | null; key_date?: string | null },
+  patch: {
+    contact_type_id?: string | null;
+    owner_id?: string | null;
+    team_id?: string | null;
+    phone?: string | null;
+    key_date?: string | null;
+    display_name?: string | null;
+    email?: string | null;
+  },
 ): Promise<{ error: string } | null> {
   const { error } = await ctx.s.db
     .from("contacts")
@@ -385,9 +415,18 @@ export async function updateContactPhone(
   };
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
+  if (ctx.contact.erased_at) return { error: ERASED_MESSAGE };
   if (ctx.contact.phone !== normalized.value) {
     const failure = await updateContact(ctx, { phone: normalized.value });
     if (failure) return failure;
+    // Corregir un dato personal deja constancia de quién y cuándo (sin copiar el valor).
+    await logActivity(ctx.s.db, {
+      workspace_id: ctx.s.workspaceId,
+      type: "contact_data_corrected",
+      contact_id: ctx.contact.id,
+      actor_id: ctx.s.userId,
+      meta: { fields: ["teléfono"] },
+    });
   }
   return { ok: true, phone: normalized.value };
 }
@@ -503,4 +542,132 @@ export async function removeContactTag(contactId: string, tagId: string): Promis
     return { error: GENERIC_ERROR };
   }
   return { ok: true };
+}
+
+// ── Consentimiento de publicidad (PRIV-04) ─────────────────────────────────
+
+export interface MarketingSnapshot {
+  status: MarketingStatus;
+  at: string;
+  source: string;
+  note: string | null;
+}
+
+/**
+ * Registrar consentimiento, dar de baja de publicidad o reactivar. Lo puede
+ * hacer cualquiera que vea el contacto; cada cambio queda en el historial
+ * (quién, cuándo y la nota). Reactivar a quien se dio de baja exige anotar la
+ * evidencia.
+ */
+export async function setMarketingConsent(
+  contactId: string,
+  action: ConsentAction,
+  note?: string | null,
+): Promise<ContactActionResult<{ marketing: MarketingSnapshot }>> {
+  if (action !== "accept" && action !== "opt_out" && action !== "reactivate") return { error: INVALID };
+  const blocked = await blockedByViewAs();
+  if (blocked) return blocked;
+  const checked = validateConsentNote(action, note);
+  if (!checked.ok) return { error: checked.error };
+  const ctx = await withContact(contactId);
+  if ("error" in ctx) return ctx;
+  const { s, contact } = ctx;
+  if (contact.erased_at) return { error: ERASED_MESSAGE };
+
+  const current = normalizeMarketingStatus(contact.marketing_status);
+  if (!availableConsentActions(current).includes(action)) {
+    return { error: "El estado de publicidad de este contacto ya cambió. Recarga la página para ver el estado actual." };
+  }
+  const at = new Date().toISOString();
+  const change = buildConsentChange({ from: current, action, source: "manual", by: s.userId, note: checked.note, at });
+  const { error } = await s.db
+    .from("contacts")
+    .update(change.patch)
+    .eq("id", contact.id)
+    .eq("workspace_id", s.workspaceId);
+  if (error) {
+    console.error("[contacts] consentimiento", error.message);
+    return { error: GENERIC_ERROR };
+  }
+  await logActivity(s.db, {
+    workspace_id: s.workspaceId,
+    type: change.activity.type,
+    contact_id: contact.id,
+    actor_id: s.userId,
+    from_value: change.activity.from,
+    to_value: change.activity.to,
+    meta: { source: "manual", ...(checked.note ? { note: checked.note } : {}) },
+  });
+  return {
+    ok: true,
+    marketing: { status: change.patch.marketing_status, at, source: "manual", note: checked.note },
+  };
+}
+
+// ── Corregir datos personales (PRIV-06, rectificación) ─────────────────────
+
+export interface ContactDetailsInput {
+  displayName?: string;
+  email?: string | null;
+  phone?: string | null;
+}
+
+/**
+ * Corrige nombre, correo y teléfono desde la ficha. Solo Dueño o Administrador
+ * (el teléfono también lo puede cambiar cualquiera con updateContactPhone, que
+ * sigue igual). Deja en el historial QUÉ campos se corrigieron, sin copiar los
+ * valores.
+ */
+export async function updateContactDetails(
+  contactId: string,
+  input: ContactDetailsInput,
+): Promise<ContactActionResult<{ displayName: string | null; email: string | null; phone: string | null }>> {
+  if (!input || typeof input !== "object") return { error: INVALID };
+  const blocked = await blockedByViewAs();
+  if (blocked) return blocked;
+
+  const patch: Parameters<typeof updateContact>[1] = {};
+  const fields: string[] = [];
+  if (input.displayName !== undefined) {
+    const name = normalizeContactName(input.displayName);
+    if (!name.ok) return { error: name.error };
+    patch.display_name = name.value;
+  }
+  if (input.email !== undefined) {
+    const email = normalizeContactEmail(input.email);
+    if (!email.ok) return { error: email.error };
+    patch.email = email.value;
+  }
+  if (input.phone !== undefined) {
+    const phone = normalizePhone(input.phone);
+    if (!phone.ok) return { error: phone.error };
+    patch.phone = phone.value === null ? null : canonicalPhone(phone.value).value;
+  }
+
+  const ctx = await withContact(contactId);
+  if ("error" in ctx) return ctx;
+  const { s, contact } = ctx;
+  if (!isAdminRole(s.actor.role)) return { error: ADMIN_ONLY_MESSAGE };
+  if (contact.erased_at) return { error: ERASED_MESSAGE };
+
+  if (patch.display_name !== undefined && patch.display_name !== (contact.display_name ?? null)) fields.push("nombre");
+  if (patch.email !== undefined && patch.email !== (contact.email ?? null)) fields.push("correo");
+  if (patch.phone !== undefined && patch.phone !== (contact.phone ?? null)) fields.push("teléfono");
+  const result = {
+    displayName: patch.display_name ?? contact.display_name ?? null,
+    email: patch.email === undefined ? (contact.email ?? null) : patch.email,
+    phone: patch.phone === undefined ? (contact.phone ?? null) : patch.phone,
+  };
+  if (fields.length === 0) return { ok: true, ...result };
+
+  const failure = await updateContact(ctx, patch);
+  if (failure) return failure;
+  await logActivity(s.db, {
+    workspace_id: s.workspaceId,
+    type: "contact_data_corrected",
+    contact_id: contact.id,
+    actor_id: s.userId,
+    meta: { fields },
+  });
+  return { ok: true, ...result };
 }

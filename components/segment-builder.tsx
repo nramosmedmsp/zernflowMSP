@@ -746,7 +746,7 @@ function ExportPreview({ filter }: { filter: SegmentFilter }) {
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
       >
-        <span>JSON del filtro</span>
+        <span>Ver el filtro como código (avanzado)</span>
         <ChevronDown
           className={cn(
             "h-3.5 w-3.5 transition-transform",

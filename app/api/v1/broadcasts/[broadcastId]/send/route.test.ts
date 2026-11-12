@@ -34,7 +34,7 @@ beforeEach(() => {
   fake.seed("workspaces", [{ id: "ws-1", name: "Muscle Shop" }]);
   fake.seed("channels", [{ id: "ch", workspace_id: "ws-1", platform: "whatsapp", is_active: true }]);
   fake.seed("contacts", [
-    { id: "c1", workspace_id: "ws-1", display_name: "Ana", phone: "+51 987 654 321", is_subscribed: true },
+    { id: "c1", workspace_id: "ws-1", display_name: "Ana", phone: "+51 987 654 321", is_subscribed: true, marketing_status: "accepted" },
   ]);
   const [b] = fake.seed("broadcasts", [
     { workspace_id: "ws-1", name: "Promo", status: "draft", message_content: PROMO, total_recipients: 0 },

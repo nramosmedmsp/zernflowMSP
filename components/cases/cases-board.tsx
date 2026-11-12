@@ -10,6 +10,7 @@
 // mismos destinos con sus candados. API nativa de arrastrar y soltar (sin
 // dependencias); en pantallas táctiles se usa el menú.
 
+import { isCaseConflict } from "@/lib/cases/conflict";
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -187,7 +188,7 @@ export function CasesBoard({ board, tab, nowIso, memberName, solutionSchedules, 
     setBusyId(card.id);
     let result: Awaited<ReturnType<typeof changeCaseStage>>;
     try {
-      result = await changeCaseStage(card.id, verdict.stageId, verdict.jump ? { jump: true } : undefined);
+      result = await changeCaseStage(card.id, verdict.stageId, { fromStageId, ...(verdict.jump ? { jump: true } : {}) });
     } catch {
       result = { error: GENERIC_ERROR };
     }
@@ -195,6 +196,8 @@ export function CasesBoard({ board, tab, nowIso, memberName, solutionSchedules, 
     if ("error" in result) {
       setStage(card.id, fromStageId);
       setToast({ kind: "error", text: result.error });
+      // Otra persona la movió antes: se recarga el tablero para ver cómo quedó.
+      if (isCaseConflict(result.error)) router.refresh();
       return;
     }
     if (result.move) {

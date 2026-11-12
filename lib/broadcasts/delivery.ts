@@ -28,7 +28,12 @@ export interface DeliveryContext {
 
 export type DeliveryResult =
   | { ok: true; messageId: string | null; params?: string[]; /** Texto enviado, con las variables ya puestas. */ text?: string }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** No es un fallo: el contacto ya no puede recibir publicidad (baja o sin consentimiento) y no se le envió nada. */
+      skipped?: true;
+    };
 
 export async function loadDeliveryContext(
   db: Db,
