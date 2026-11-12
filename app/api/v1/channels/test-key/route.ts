@@ -9,7 +9,7 @@ import { backfillInboxConversations } from "@/lib/inbox-sync";
 import { isSupportedPlatform } from "@/lib/platforms";
 import { WORKSPACE_CHANGED_MESSAGE, requireApiAdmin } from "@/lib/api-auth";
 import { OWNER_ONLY_SECRETS_MESSAGE, canManageSecrets } from "@/lib/permissions";
-import { saveWorkspaceSecrets } from "@/lib/workspace-secrets";
+import { getLateApiKey, saveWorkspaceSecrets } from "@/lib/workspace-secrets";
 import { logAudit } from "@/lib/audit";
 import { serverError } from "@/lib/server-error";
 
@@ -64,6 +64,9 @@ export async function POST(request: NextRequest) {
     // workspace_secrets solo se escribe con el cliente de servicio (rol ya validado).
     const service = await createServiceClient();
 
+    // Para el registro: ¿la clave es distinta de la que ya estaba guardada? (probar la misma no es un cambio)
+    const previousKey = await getLateApiKey(workspaceId, service);
+
     // Save the API key
     const { error: saveErr } = await saveWorkspaceSecrets(
       workspaceId,
@@ -75,14 +78,17 @@ export async function POST(request: NextRequest) {
       return serverError("channels/test-key", saveErr, "La clave es válida, pero no se pudo guardar. Inténtalo de nuevo.");
     }
 
-    // SEG-05: queda quién cambió la clave de Zernio (nunca el valor).
-    await logAudit(service, {
-      workspaceId,
-      actorId: guard.ctx.user.id,
-      action: "api_key_changed",
-      entity: "secrets",
-      meta: { zernio: true, via: "test-key" },
-    });
+    // SEG-05: queda quién cambió la clave de Zernio (nunca el valor). Solo se anota cuando la clave
+    // realmente se guardó y es distinta de la anterior; solo probarla (sin workspaceId) no deja fila.
+    if (previousKey !== apiKey.trim()) {
+      await logAudit(service, {
+        workspaceId,
+        actorId: guard.ctx.user.id,
+        action: "api_key_changed",
+        entity: "secrets",
+        meta: { zernio: true, via: "test-key", first_time: previousKey === null },
+      });
+    }
 
     // Register (or refresh) this deployment's webhook in Zernio so inbound
     // messages/comments reach the Inbox. Best-effort: a failure here must not

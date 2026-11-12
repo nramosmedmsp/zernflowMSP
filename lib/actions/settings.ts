@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { getWorkspace } from "@/lib/workspace";
 import { auditAction as audit } from "@/lib/audit-server";
 import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
+import { keywordsChangeMeta, pairIfChanged, type AuditScalar } from "@/lib/audit-changes";
+import { parseOffHoursReply, parseReassignAfterMinutes } from "@/lib/business-hours";
 import {
   ADMIN_ONLY_MESSAGE,
   OWNER_ONLY_SECRETS_MESSAGE,
@@ -11,6 +13,7 @@ import {
   isAdminRole,
 } from "@/lib/permissions";
 import {
+  attentionFromSettings,
   mergeAttentionSettings,
   parseAttentionInput,
   type AttentionSettings,
@@ -90,6 +93,24 @@ export async function saveWorkspaceSettings(
     return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
   }
 
+  // Registro de cambios: palabras clave globales (baja / alta) agregadas, quitadas o con otra acción.
+  const keywordsMeta = keywordsChangeMeta(
+    normalizeGlobalKeywords((workspace as { global_keywords?: unknown }).global_keywords).map((k) => ({
+      keyword: k.keyword.toLowerCase(),
+      action: isKeywordAction(k.action) ? k.action : DEFAULT_KEYWORD_ACTION,
+    })),
+    keywords,
+  );
+  if (keywordsMeta) {
+    await audit({
+      workspaceId: workspace.id,
+      actorId: user.id,
+      action: "global_keywords_changed",
+      entity: "workspace",
+      meta: keywordsMeta,
+    });
+  }
+
   if (changesSecrets) {
     const { error } = await saveWorkspaceSecrets(workspace.id, secrets);
     if (error) return { error };
@@ -129,7 +150,7 @@ export async function saveAttentionSettings(
   workspaceId: string,
   input: AttentionSettings,
 ): Promise<{ error: string } | { ok: true }> {
-  const { workspace, role, supabase } = await getWorkspace();
+  const { workspace, role, supabase, user } = await getWorkspace();
   if (workspace.id !== workspaceId) return { error: WORKSPACE_CHANGED };
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
@@ -153,6 +174,17 @@ export async function saveAttentionSettings(
     return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
   }
 
+  const before = attentionFromSettings(current.settings);
+  const after = parsed.value;
+  const meta: Record<string, AuditScalar> = {};
+  pairIfChanged(meta, "visibility", before.agentVisibility, after.agentVisibility);
+  pairIfChanged(meta, "assignment", before.assignmentMode, after.assignmentMode);
+  pairIfChanged(meta, "return_queue", before.agentCanReturnToQueue, after.agentCanReturnToQueue);
+  pairIfChanged(meta, "stale_days", before.staleStageDays, after.staleStageDays);
+  if (Object.keys(meta).length > 0) {
+    await audit({ workspaceId: workspace.id, actorId: user.id, action: "attention_settings_changed", entity: "attention", meta });
+  }
+
   revalidatePath("/dashboard/settings/attention");
   return { ok: true };
 }
@@ -166,7 +198,7 @@ export async function saveAttentionAutomation(
   workspaceId: string,
   input: AutomationForm,
 ): Promise<{ error: string } | { ok: true }> {
-  const { workspace, role, supabase } = await getWorkspace();
+  const { workspace, role, supabase, user } = await getWorkspace();
   if (workspace.id !== workspaceId) return { error: WORKSPACE_CHANGED };
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
@@ -188,6 +220,19 @@ export async function saveAttentionAutomation(
   if (updateError) {
     console.error("[saveAttentionAutomation]", updateError);
     return { error: "No se pudo guardar la configuración. Inténtalo de nuevo." };
+  }
+
+  // Del texto de la respuesta solo se anota que cambió, no el texto.
+  const prev = (current.settings ?? {}) as Record<string, unknown>;
+  const beforeReply = parseOffHoursReply(prev.off_hours_reply);
+  const afterReply = parsed.value.offHoursReply;
+  const meta: Record<string, AuditScalar> = {};
+  pairIfChanged(meta, "off_hours_enabled", beforeReply?.enabled ?? false, afterReply.enabled);
+  if ((beforeReply?.text ?? "") !== afterReply.text) meta.off_hours_text_changed = true;
+  pairIfChanged(meta, "min_hours", beforeReply?.min_hours_between ?? null, afterReply.min_hours_between ?? null);
+  pairIfChanged(meta, "reassign_minutes", parseReassignAfterMinutes(prev.reassign_after_minutes), parsed.value.reassignAfterMinutes);
+  if (Object.keys(meta).length > 0) {
+    await audit({ workspaceId: workspace.id, actorId: user.id, action: "attention_automation_changed", entity: "attention", meta });
   }
 
   revalidatePath("/dashboard/settings/attention");

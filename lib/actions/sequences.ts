@@ -4,6 +4,7 @@
 // (00019) lo exige también.
 
 import { getWorkspace } from "@/lib/workspace";
+import { auditAction } from "@/lib/audit-server";
 import { revalidatePath } from "next/cache";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { marketingDecision } from "@/lib/consent";
@@ -15,7 +16,7 @@ import type { SequenceStep } from "@/lib/types/database";
 const GENERIC_ERROR = "No se pudo completar la operación. Inténtalo de nuevo.";
 
 export async function createSequence(name: string) {
-  const { workspace, supabase, role } = await getWorkspace();
+  const { workspace, supabase, role, user } = await getWorkspace();
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   const trimmed = name.trim();
@@ -32,6 +33,15 @@ export async function createSequence(name: string) {
     return { error: GENERIC_ERROR };
   }
 
+  await auditAction({
+    workspaceId: workspace.id,
+    actorId: user.id,
+    action: "sequence_created",
+    entity: "sequence",
+    toValue: trimmed,
+    meta: { name: trimmed },
+  });
+
   revalidatePath("/dashboard/sequences");
   return { ok: true, sequence: data };
 }
@@ -45,13 +55,13 @@ export async function updateSequence(
     status?: "draft" | "active" | "paused";
   }
 ) {
-  const { workspace, supabase, role } = await getWorkspace();
+  const { workspace, supabase, role, user } = await getWorkspace();
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: existing } = await supabase
     .from("sequences")
-    .select("id, status, steps")
+    .select("id, name, description, status, steps")
     .eq("id", sequenceId)
     .eq("workspace_id", workspace.id)
     .single();
@@ -87,14 +97,24 @@ export async function updateSequence(
     return { error: GENERIC_ERROR };
   }
 
+  await auditSequenceChange(workspace.id, user.id, existing, updates, stepsWithIds);
+
   revalidatePath("/dashboard/sequences");
   revalidatePath(`/dashboard/sequences/${sequenceId}`);
   return { ok: true, sequence: data };
 }
 
 export async function deleteSequence(sequenceId: string) {
-  const { workspace, supabase, role } = await getWorkspace();
+  const { workspace, supabase, role, user } = await getWorkspace();
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
+
+  // Se lee antes de borrar para que el registro diga cuál secuencia fue.
+  const { data: before } = await supabase
+    .from("sequences")
+    .select("name")
+    .eq("id", sequenceId)
+    .eq("workspace_id", workspace.id)
+    .maybeSingle();
 
   const { error } = await supabase
     .from("sequences")
@@ -105,6 +125,17 @@ export async function deleteSequence(sequenceId: string) {
   if (error) {
     console.error("[sequences] delete", error.message);
     return { error: GENERIC_ERROR };
+  }
+
+  if (before) {
+    await auditAction({
+      workspaceId: workspace.id,
+      actorId: user.id,
+      action: "sequence_deleted",
+      entity: "sequence",
+      fromValue: before.name,
+      meta: { name: before.name },
+    });
   }
 
   revalidatePath("/dashboard/sequences");
@@ -219,5 +250,53 @@ async function stampLegacyEnrollments(
     const id = old[e.current_step_index]?.id ?? newSteps[e.current_step_index]?.id ?? null;
     if (!id) continue;
     await supabase.from("sequence_enrollments").update({ current_step_id: id }).eq("id", e.id);
+  }
+}
+
+/** Pasos sin el id estable ni el texto: solo importa si cambió la lista (para no anotar un cambio falso). */
+function stepsSignature(steps: unknown): string {
+  const list = (Array.isArray(steps) ? steps : []) as SequenceStep[];
+  return JSON.stringify(list.map((st) => [st.type, st.content ?? null, st.delayMinutes ?? null, st.template ?? null]));
+}
+
+/**
+ * Registro de cambios de una secuencia: activar o pausar, y editar nombre, descripción o pasos.
+ * Del contenido solo se anota cuántos pasos había y cuántos hay (nunca el texto de un paso).
+ */
+async function auditSequenceChange(
+  workspaceId: string,
+  actorId: string,
+  before: { name: string; description: string | null; status: string; steps: unknown },
+  updates: { name?: string; description?: string | null; steps?: SequenceStep[]; status?: "draft" | "active" | "paused" },
+  newSteps: readonly SequenceStep[] | undefined,
+): Promise<void> {
+  const name = updates.name?.trim() || before.name;
+  const fields: string[] = [];
+  if (updates.name !== undefined && updates.name.trim() !== before.name) fields.push("nombre");
+  if (updates.description !== undefined && (updates.description ?? "") !== (before.description ?? "")) fields.push("descripción");
+  const meta: Record<string, string | number> = { name };
+  if (newSteps && stepsSignature(newSteps) !== stepsSignature(before.steps)) {
+    fields.push("pasos");
+    meta.steps_from = Array.isArray(before.steps) ? before.steps.length : 0;
+    meta.steps_to = newSteps.length;
+  }
+  if (updates.status !== undefined && updates.status !== before.status) {
+    const action = updates.status === "active" ? "sequence_activated" : updates.status === "paused" ? "sequence_paused" : null;
+    if (action) {
+      await auditAction({ workspaceId, actorId, action, entity: "sequence", fromValue: before.status, toValue: updates.status, meta: { name } });
+    } else {
+      fields.push("estado");
+    }
+  }
+  if (fields.length > 0) {
+    await auditAction({
+      workspaceId,
+      actorId,
+      action: "sequence_edited",
+      entity: "sequence",
+      fromValue: updates.name !== undefined && updates.name.trim() !== before.name ? before.name : null,
+      toValue: updates.name !== undefined && updates.name.trim() !== before.name ? updates.name.trim() : null,
+      meta: { ...meta, fields: fields.join(", ") },
+    });
   }
 }

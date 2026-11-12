@@ -124,6 +124,17 @@ describe("SEG-05: acciones sensibles de canales y flujos quedan registradas", ()
     });
   });
 
+  it("borrar un canal guarda su nombre y su red (leídos antes de borrar)", async () => {
+    fake.rows("channels")[0].display_name = "WhatsApp Ventas";
+    await channelDelete(req("DELETE"), ctx("ch-1"));
+    expect(fake.rows("activity")[0].meta).toMatchObject({
+      action: "channel_deleted",
+      channel_id: "ch-1",
+      channel_name: "WhatsApp Ventas",
+      platform: "whatsapp",
+    });
+  });
+
   it("encender o apagar un canal deja registro", async () => {
     await channelPatch(req("PATCH", { is_active: false }), ctx("ch-1"));
     expect(fake.rows("activity")[0]).toMatchObject({ to_value: "off", meta: { action: "channel_toggled", channel_id: "ch-1" } });

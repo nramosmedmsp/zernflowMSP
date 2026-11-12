@@ -26,7 +26,7 @@ export async function DELETE(
 
   const { data: channel } = await supabase
     .from("channels")
-    .select("id, late_account_id")
+    .select("id, late_account_id, display_name, username, platform")
     .eq("id", channelId)
     .eq("workspace_id", workspace.id)
     .single();
@@ -66,7 +66,13 @@ export async function DELETE(
     actorId: guard.ctx.user.id,
     action: "channel_deleted",
     entity: "channel",
-    meta: { channel_id: channelId, late_account_id: channel.late_account_id },
+    // El nombre y la red se anotan antes de que el canal desaparezca, para que el registro diga cuál fue.
+    meta: {
+      channel_id: channelId,
+      late_account_id: channel.late_account_id,
+      channel_name: channel.display_name || channel.username || null,
+      platform: channel.platform,
+    },
   });
 
   return NextResponse.json({ ok: true });

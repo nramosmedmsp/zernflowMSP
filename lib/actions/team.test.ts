@@ -117,6 +117,26 @@ describe("quitar a una persona del espacio", () => {
     expect(fake.rows("activity").some((a) => a.type === "unassigned" && a.case_id === c.id)).toBe(true);
   });
 
+  it("el registro guarda el nombre y el correo de quien se quitó (leídos antes de borrar)", async () => {
+    fake.users.set(ANA, { id: ANA, email: "ana@x.pe", user_metadata: { full_name: "Ana Asesora" } });
+    expect(await removeTeamMember(WS, ANA)).toEqual({ ok: true });
+    const row = fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")!;
+    expect(row).toMatchObject({
+      type: "config_changed",
+      actor_id: OWNER,
+      from_value: "member",
+      meta: { entity: "team", user_id: ANA, role: "member", name: "Ana Asesora", email: "ana@x.pe" },
+    });
+  });
+
+  it("si no se puede leer la cuenta, se quita igual y el registro queda sin nombre (frase general)", async () => {
+    expect(await removeTeamMember(WS, BETO)).toEqual({ ok: true });
+    const row = fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")!;
+    expect(row.meta).toMatchObject({ user_id: BETO, role: "member" });
+    expect(row.meta).not.toHaveProperty("name");
+    expect(row.meta).not.toHaveProperty("email");
+  });
+
   it("un Miembro no puede quitar a nadie", async () => {
     as(ANA, "member");
     expect(await removeTeamMember(WS, BETO)).toMatchObject({ error: expect.any(String) });

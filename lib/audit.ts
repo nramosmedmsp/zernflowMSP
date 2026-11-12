@@ -25,9 +25,51 @@ export type AuditAction =
   | "data_exported"
   | "workspace_settings_changed"
   | "flow_deleted"
-  | "flow_published";
+  | "flow_published"
+  | "hours_changed"
+  | "holiday_added"
+  | "holiday_removed"
+  | "holidays_loaded"
+  | "attention_settings_changed"
+  | "attention_automation_changed"
+  | "global_keywords_changed"
+  | "team_created"
+  | "team_renamed"
+  | "team_archived"
+  | "team_restored"
+  | "team_default_changed"
+  | "team_assignment_mode_changed"
+  | "team_supervisor_skips_changed"
+  | "team_member_added"
+  | "team_member_removed"
+  | "team_member_role_changed"
+  | "saved_reply_created"
+  | "saved_reply_updated"
+  | "saved_reply_deleted"
+  | "spell_word_added"
+  | "spell_word_approved"
+  | "spell_word_rejected"
+  | "spell_word_removed"
+  | "sequence_created"
+  | "sequence_activated"
+  | "sequence_paused"
+  | "sequence_edited"
+  | "sequence_deleted";
 
-export type AuditEntity = "team" | "secrets" | "channel" | "broadcast" | "export" | "workspace" | "flow";
+export type AuditEntity =
+  | "team"
+  | "secrets"
+  | "channel"
+  | "broadcast"
+  | "export"
+  | "workspace"
+  | "flow"
+  | "hours"
+  | "attention"
+  | "teams"
+  | "saved_reply"
+  | "dictionary"
+  | "sequence";
 
 export interface AuditInput {
   workspaceId: string;

@@ -19,6 +19,8 @@ import { getWorkspace } from "@/lib/workspace";
 import { viewAsActorOverride } from "@/lib/view-as/rules";
 import { isAdminRole } from "@/lib/permissions";
 import { createServiceClient } from "@/lib/supabase/server";
+import { auditAction } from "@/lib/audit-server";
+import type { AuditAction } from "@/lib/audit";
 import { isReplyFilePath, parseMediaPath, replyMediaPath, safeFileName, validateReplyAttachment } from "@/lib/chat-media";
 import { createUploadUrl, objectInfo, removeObjects } from "@/lib/media-store";
 import { RATE_LIMIT_MESSAGE, RATE_RULES } from "@/lib/rate-limit";
@@ -133,6 +135,30 @@ async function loadAccess(ctx: Ctx): Promise<Access> {
     teams: teams ?? [],
     supervised: new Set((memberships ?? []).filter((m) => m.role === "supervisor").map((m) => m.team_id)),
   };
+}
+
+/**
+ * Registro de cambios: solo las respuestas compartidas (de la empresa o de un equipo); las personales
+ * de cada asesor no se anotan. Guarda el título, nunca el texto. Un fallo no rompe la acción.
+ */
+async function auditSharedReply(
+  ctx: Ctx,
+  access: Access,
+  action: AuditAction,
+  row: { scope: SavedReplyScope; team_id: string | null; title: string },
+  extra: { fromValue?: string | null; toValue?: string | null; fields?: string } = {},
+): Promise<void> {
+  if (row.scope === "personal") return;
+  const teamName = row.team_id ? (access.teams.find((t) => t.id === row.team_id)?.name ?? null) : null;
+  await auditAction({
+    workspaceId: ctx.workspace.id,
+    actorId: ctx.user.id,
+    action,
+    entity: "saved_reply",
+    fromValue: extra.fromValue ?? null,
+    toValue: extra.toValue ?? null,
+    meta: { name: row.title, scope: row.scope, team_name: teamName, ...(extra.fields ? { fields: extra.fields } : {}) },
+  });
 }
 
 function canWrite(
@@ -439,6 +465,7 @@ export async function createSavedReply(
       }
       created = withFile.data as ReplyRow;
     }
+    await auditSharedReply(ctx, access, "saved_reply_created", created);
     return { ok: true, reply: toView(created, access, ctx.user.id) };
   } catch (err) {
     console.error("[saved-replies] create", err);
@@ -507,6 +534,19 @@ export async function updateSavedReply(
         await removeReplyFile(row.attachment_url, ctx.workspace.id);
       }
     }
+    const changed: string[] = [];
+    if (row.title !== updated.title) changed.push("título");
+    if (row.shortcut !== updated.shortcut) changed.push("atajo");
+    if (row.body !== updated.body) changed.push("texto");
+    if (row.case_type_id !== updated.case_type_id) changed.push("tipo de gestión");
+    if (row.attachment_url !== updated.attachment_url) changed.push("archivo adjunto");
+    if (changed.length > 0) {
+      await auditSharedReply(ctx, access, "saved_reply_updated", updated, {
+        fromValue: row.title !== updated.title ? row.title : null,
+        toValue: row.title !== updated.title ? updated.title : null,
+        fields: changed.join(", "),
+      });
+    }
     return { ok: true, reply: toView(updated, access, ctx.user.id) };
   } catch (err) {
     console.error("[saved-replies] update", err);
@@ -540,6 +580,7 @@ export async function deleteSavedReply(id: string): Promise<SavedReplyResult> {
       return { error: "No se pudo borrar la respuesta. Inténtalo de nuevo." };
     }
     await removeReplyFile(row.attachment_url, ctx.workspace.id);
+    await auditSharedReply(ctx, access, "saved_reply_deleted", row);
     return { ok: true };
   } catch (err) {
     console.error("[saved-replies] delete", err);

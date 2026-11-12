@@ -111,6 +111,44 @@ describe("describeAudit: una frase por cada acción que hoy se registra", () => 
     ["data_exported", config("data_exported", { file: "metricas-asesores.csv", format: "csv" }, null, "metricas-asesores.csv"), "Descargó el archivo «metricas-asesores.csv»", []],
     ["data_exported con filas", config("data_exported", { file: "contactos.csv", rows: 1250 }), "Descargó el archivo «contactos.csv» (1,250 filas)", []],
     ["source_downloaded", config("source_downloaded"), "Descargó el código de la app", []],
+    // Nombres que antes se perdían
+    ["member_removed con nombre guardado", config("member_removed", { user_id: "no-existe", name: "Andrés Asesor", email: "a@x.pe", role: "member" }, "member"), "Quitó a Andrés Asesor del equipo", ["Correo: a@x.pe", "Rol que tenía: Miembro"]],
+    ["member_removed fila antigua sin nombre", config("member_removed", { user_id: "no-existe", role: "member" }, "member"), "Quitó a una persona del equipo", ["Rol que tenía: Miembro"]],
+    ["channel_deleted con nombre", config("channel_deleted", { channel_id: "no-existe", channel_name: "WhatsApp Ventas", platform: "whatsapp" }), "Eliminó el canal «WhatsApp Ventas»", ["Red: WhatsApp"]],
+    // Horario, feriados y atención
+    ["hours_changed empresa", config("hours_changed", { scope: "company", day_mon_from: "09:00-21:00", day_mon_to: "09:00-20:00", day_sun_from: "Cerrado", day_sun_to: "10:00-14:00, 15:00-18:00" }), "Cambió el horario de atención de la empresa", ["Lunes: 09:00–21:00 → 09:00–20:00", "Domingo: Cerrado → 10:00–14:00, 15:00–18:00"]],
+    ["hours_changed equipo", config("hours_changed", { scope: "team", team_name: "Ventas", uses_company_hours: true, day_tue_from: "09:00-18:00", day_tue_to: "Cerrado" }), "Cambió el horario de atención del equipo «Ventas»", ["Martes: 09:00–18:00 → Cerrado", "Ahora usa el horario de la empresa"]],
+    ["holiday_added", config("holiday_added", { name: "Día del Maestro", date: "2026-07-06" }), "Añadió el feriado «Día del Maestro» (6 de julio de 2026)", ["Aplica a toda la empresa"]],
+    ["holiday_removed de un equipo", config("holiday_removed", { name: "Aniversario", date: "2026-12-01", team_name: "Ventas" }), "Quitó el feriado «Aniversario» (1 de diciembre de 2026)", ["Aplica al equipo «Ventas»"]],
+    ["holidays_loaded", config("holidays_loaded", { year: 2027, added: 14 }), "Cargó los feriados de Perú de 2027", ["14 feriados agregados", "Aplica a toda la empresa"]],
+    ["attention_settings_changed", config("attention_settings_changed", { visibility_from: "own", visibility_to: "team", assignment_from: "round_robin", assignment_to: "least_load", return_queue_from: false, return_queue_to: true, stale_days_from: 7, stale_days_to: 10 }), "Cambió los ajustes de atención", ["Qué gestiones ve el asesor: Solo sus gestiones → Todas las de su equipo", "Reparto cuando no hay equipos: Por turnos → Al de menor carga", "El asesor puede devolver gestiones a la cola: No → Sí", "Días en la misma etapa para marcar una gestión como atrasada: 7 → 10"]],
+    ["attention_automation_changed", config("attention_automation_changed", { off_hours_enabled_from: false, off_hours_enabled_to: true, off_hours_text_changed: true, min_hours_from: null, min_hours_to: 4, reassign_minutes_from: null, reassign_minutes_to: 30 }), "Cambió la atención automática", ["Respuesta fuera de horario: Desactivada → Activada", "Se cambió el texto de la respuesta fuera de horario (no se guarda en el registro)", "Horas entre respuestas fuera de horario: una sola vez por gestión → 4 horas", "Reasignación por espera: Desactivada → 30 minutos"]],
+    ["global_keywords_changed", config("global_keywords_changed", { added: "stop (baja)", removed: "hola (alta)", total: 3 }), "Cambió las palabras clave globales del espacio", ["Agregó: stop (baja)", "Quitó: hola (alta)", "Quedan 3 palabras"]],
+    // Equipos de trabajo
+    ["team_created", config("team_created", { team_name: "Ventas" }, null, "Ventas"), "Creó el equipo «Ventas»", []],
+    ["team_renamed", config("team_renamed", { team_name: "Ventas Lima" }, "Ventas", "Ventas Lima"), "Cambió el nombre del equipo «Ventas» a «Ventas Lima»", []],
+    ["team_archived", config("team_archived", { team_name: "Ventas" }), "Archivó el equipo «Ventas»", []],
+    ["team_restored", config("team_restored", { team_name: "Ventas" }), "Restauró el equipo «Ventas»", []],
+    ["team_default_changed", config("team_default_changed", { team_name: "Soporte" }, "Ventas", "Soporte"), "Marcó el equipo «Soporte» como equipo por defecto", ["Antes era «Ventas»"]],
+    ["team_assignment_mode_changed", config("team_assignment_mode_changed", { team_name: "Ventas" }, "round_robin", "manual"), "Cambió el modo de reparto del equipo «Ventas»", ["Modo de reparto: Por turnos → Manual"]],
+    ["team_supervisor_skips_changed", config("team_supervisor_skips_changed", { team_name: "Ventas" }, null, "on"), "Cambió si el supervisor recibe chats en el equipo «Ventas»", ["El supervisor no recibe chats: No → Sí"]],
+    ["team_member_added", config("team_member_added", { team_name: "Ventas", user_id: U1 }, null, "agent"), "Añadió a Andrés Asesor al equipo «Ventas»", ["Rol en el equipo: Asesor"]],
+    ["team_member_removed", config("team_member_removed", { team_name: "Ventas", user_id: U1 }, "supervisor"), "Quitó a Andrés Asesor del equipo «Ventas»", ["Rol que tenía en el equipo: Supervisor"]],
+    ["team_member_role_changed", config("team_member_role_changed", { team_name: "Ventas", user_id: U1 }, "agent", "supervisor"), "Cambió el rol de Andrés Asesor en el equipo «Ventas» de Asesor a Supervisor", []],
+    // Respuestas compartidas, diccionario
+    ["saved_reply_created", config("saved_reply_created", { name: "Saludo", scope: "workspace", team_name: null }), "Creó la respuesta guardada «Saludo» de la empresa", []],
+    ["saved_reply_updated", config("saved_reply_updated", { name: "Saludo nuevo", scope: "team", team_name: "Ventas", fields: "título, texto" }, "Saludo", "Saludo nuevo"), "Cambió la respuesta guardada «Saludo nuevo» del equipo «Ventas»", ["Título: Saludo → Saludo nuevo", "Se cambió: título, texto (el texto no se guarda en el registro)"]],
+    ["saved_reply_deleted", config("saved_reply_deleted", { name: "Saludo", scope: "workspace" }), "Eliminó la respuesta guardada «Saludo» de la empresa", []],
+    ["spell_word_added", config("spell_word_added", { word: "creatina" }, null, "creatina"), "Agregó «creatina» al diccionario de la tienda", []],
+    ["spell_word_approved", config("spell_word_approved", { word: "whey" }, null, "whey"), "Aprobó «whey» para el diccionario de la tienda", []],
+    ["spell_word_rejected", config("spell_word_rejected", { word: "xyz" }, null, "xyz"), "Rechazó el pedido de agregar «xyz» al diccionario de la tienda", []],
+    ["spell_word_removed", config("spell_word_removed", { word: "whey" }, null, "whey"), "Quitó «whey» del diccionario de la tienda", []],
+    // Secuencias
+    ["sequence_created", config("sequence_created", { name: "Bienvenida" }, null, "Bienvenida"), "Creó la secuencia «Bienvenida»", []],
+    ["sequence_activated", config("sequence_activated", { name: "Bienvenida" }, "draft", "active"), "Activó la secuencia «Bienvenida»", []],
+    ["sequence_paused", config("sequence_paused", { name: "Bienvenida" }, "active", "paused"), "Pausó la secuencia «Bienvenida»", []],
+    ["sequence_edited", config("sequence_edited", { name: "Bienvenida 2", steps_from: 2, steps_to: 3, fields: "nombre, pasos" }, "Bienvenida", "Bienvenida 2"), "Cambió la secuencia «Bienvenida 2»", ["Nombre: Bienvenida → Bienvenida 2", "Pasos: 2 → 3", "Se cambió: nombre, pasos"]],
+    ["sequence_deleted", config("sequence_deleted", { name: "Bienvenida" }, "Bienvenida"), "Eliminó la secuencia «Bienvenida»", []],
     // Tipos propios de auditoría
     ["contacts_imported", { type: "contacts_imported", from_value: null, to_value: "b", meta: { file_name: "clientes.csv", total: 120, created: 100, updated: 20, skipped: 0, errors: 2, consent_declared: true, consented: 100 } }, "Importó contactos desde «clientes.csv»", ["120 filas en el archivo", "100 contactos nuevos", "20 contactos actualizados", "2 filas con error", "Se declaró que aceptaron publicidad (100 contactos)"]],
     ["contact_data_erased", { type: "contact_data_erased", from_value: null, to_value: null, meta: { erasure_id: "e", cases_kept: 2, claims_kept: 1 } }, "Eliminó los datos de un cliente", ["Se conservaron 2 gestiones sin datos personales", "Se conservó 1 reclamo sin datos personales"]],
@@ -210,6 +248,35 @@ describe("describeAudit: respaldo y seguridad", () => {
     const d = describeAudit(config("case_type_created", { name: `  ${"x".repeat(500)}\n\n  ` }), ctx);
     expect(d.title.length).toBeLessThan(160);
     expect(d.title).toContain("…");
+  });
+
+  it("las acciones nuevas caen en categorías del filtro y las secuencias van con las difusiones", () => {
+    const labels = Object.fromEntries(AUDIT_CATEGORIES.map((c) => [c.value, c.label]));
+    expect(labels.broadcasts).toBe("Difusiones y secuencias");
+    for (const [action, def] of Object.entries(AUDIT_ACTIONS)) {
+      expect(labels[def.category], action).toBeDefined();
+    }
+    expect(AUDIT_ACTIONS.sequence_created.category).toBe("broadcasts");
+    expect(AUDIT_ACTIONS.team_member_added.category).toBe("team");
+    expect(AUDIT_ACTIONS.hours_changed.category).toBe("config");
+    expect(auditCategoryFilter("broadcasts")).toContain("sequence_deleted");
+  });
+
+  it("una acción nueva desconocida de una entidad nueva cae en su categoría", () => {
+    const d = describeAudit({ type: "config_changed", from_value: null, to_value: null, meta: { action: "algo_mas", entity: "sequence" } });
+    expect(d.title).toBe("Hizo un cambio en una secuencia");
+    expect(d.category).toBe("broadcasts");
+  });
+
+  it("los cambios nuevos no copian textos de respuestas, pasos ni campos fuera de la lista", () => {
+    const rows: AuditRowInput[] = [
+      config("saved_reply_updated", { name: "Saludo", scope: "workspace", body: "SECRETO-1 texto completo", text: "SECRETO-2", fields: "texto" }),
+      config("sequence_edited", { name: "Seq", content: "SECRETO-3 paso", steps_from: 1, steps_to: 2, steps: "SECRETO-4" }),
+      config("attention_automation_changed", { off_hours_text_changed: true, off_hours_text: "SECRETO-5" }),
+      config("hours_changed", { scope: "company", token: "SECRETO-6" }),
+      config("member_removed", { user_id: U1, name: "Andrés", api_key: "SECRETO-7" }),
+    ];
+    for (const row of rows) expect(JSON.stringify(describeAudit(row, ctx))).not.toMatch(/SECRETO/);
   });
 
   it("cada categoría del filtro tiene al menos una acción o tipo", () => {

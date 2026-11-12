@@ -9,6 +9,8 @@
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
+import { auditAction } from "@/lib/audit-server";
+import type { AuditAction } from "@/lib/audit";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import {
   isAssignmentMode,
@@ -32,6 +34,7 @@ type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 interface AdminContext {
   db: ServiceClient;
   workspaceId: string;
+  userId: string;
 }
 
 function isId(value: unknown): value is string {
@@ -39,16 +42,33 @@ function isId(value: unknown): value is string {
 }
 
 async function adminContext(): Promise<AdminContext | { error: string }> {
-  const { workspace, role } = await getWorkspace();
+  const { workspace, role, user } = await getWorkspace();
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
-  return { db: await createServiceClient(), workspaceId: workspace.id };
+  return { db: await createServiceClient(), workspaceId: workspace.id, userId: user.id };
+}
+
+/** Registro de cambios (nunca rompe la acción): quién y qué equipo, con antes → después si aplica. */
+async function auditTeam(
+  ctx: AdminContext,
+  action: AuditAction,
+  details: { fromValue?: string | null; toValue?: string | null; meta?: Record<string, unknown> },
+): Promise<void> {
+  await auditAction({
+    workspaceId: ctx.workspaceId,
+    actorId: ctx.userId,
+    action,
+    entity: "teams",
+    fromValue: details.fromValue ?? null,
+    toValue: details.toValue ?? null,
+    meta: details.meta,
+  });
 }
 
 async function loadTeam(ctx: AdminContext, teamId: unknown) {
   if (!isId(teamId)) return null;
   const { data } = await ctx.db
     .from("teams")
-    .select("id, name, is_default, archived_at")
+    .select("id, name, is_default, archived_at, assignment_mode, supervisor_skips_chats")
     .eq("id", teamId)
     .eq("workspace_id", ctx.workspaceId)
     .maybeSingle();
@@ -107,6 +127,7 @@ export async function createTeam(
     console.error("[teams] createTeam", error?.message);
     return { error: GENERIC_ERROR };
   }
+  await auditTeam(ctx, "team_created", { toValue: parsed.name, meta: { team_name: parsed.name } });
   return done({ teamId: data.id });
 }
 
@@ -126,6 +147,9 @@ export async function renameTeam(teamId: string, name: string): Promise<TeamActi
   if (error) {
     console.error("[teams] renameTeam", error.message);
     return { error: GENERIC_ERROR };
+  }
+  if (team.name !== parsed.name) {
+    await auditTeam(ctx, "team_renamed", { fromValue: team.name, toValue: parsed.name, meta: { team_name: parsed.name } });
   }
   return done();
 }
@@ -179,6 +203,10 @@ export async function setTeamArchived(teamId: string, archived: boolean): Promis
     console.error("[teams] setTeamArchived", error.message);
     return { error: GENERIC_ERROR };
   }
+  // Solo si de verdad cambió de estado (archivar uno ya archivado no deja fila).
+  if (archived !== !!team.archived_at) {
+    await auditTeam(ctx, archived ? "team_archived" : "team_restored", { meta: { team_name: team.name } });
+  }
   return done();
 }
 
@@ -212,6 +240,13 @@ export async function setDefaultTeam(teamId: string | null): Promise<TeamActionR
   const team = await loadTeam(ctx, teamId);
   if (!team) return { error: TEAM_NOT_FOUND };
   if (team.archived_at) return { error: "Reactiva el equipo antes de marcarlo como equipo por defecto." };
+  const { data: previousDefault } = await ctx.db
+    .from("teams")
+    .select("name")
+    .eq("workspace_id", ctx.workspaceId)
+    .eq("is_default", true)
+    .neq("id", team.id)
+    .maybeSingle();
 
   // Primero se libera el actual: el índice único solo admite un equipo por defecto activo.
   const { error: clearError } = await ctx.db
@@ -228,6 +263,13 @@ export async function setDefaultTeam(teamId: string | null): Promise<TeamActionR
   if (error) {
     console.error("[teams] setDefaultTeam", error.message);
     return { error: GENERIC_ERROR };
+  }
+  if (!team.is_default) {
+    await auditTeam(ctx, "team_default_changed", {
+      fromValue: previousDefault?.name ?? null,
+      toValue: team.name,
+      meta: { team_name: team.name },
+    });
   }
   return done();
 }
@@ -246,6 +288,13 @@ export async function setTeamAssignmentMode(
   if (error) {
     console.error("[teams] setTeamAssignmentMode", error.message);
     return { error: GENERIC_ERROR };
+  }
+  if (team.assignment_mode !== mode) {
+    await auditTeam(ctx, "team_assignment_mode_changed", {
+      fromValue: team.assignment_mode,
+      toValue: mode,
+      meta: { team_name: team.name },
+    });
   }
   return done();
 }
@@ -266,6 +315,9 @@ export async function setTeamSupervisorSkipsChats(teamId: string, skips: boolean
   if (error) {
     console.error("[teams] setTeamSupervisorSkipsChats", error.message);
     return { error: GENERIC_ERROR };
+  }
+  if (!!team.supervisor_skips_chats !== skips) {
+    await auditTeam(ctx, "team_supervisor_skips_changed", { toValue: skips ? "on" : "off", meta: { team_name: team.name } });
   }
   return done();
 }
@@ -327,7 +379,7 @@ export async function addTeamMember(
 
   const { data: existing } = await ctx.db
     .from("team_members")
-    .select("user_id")
+    .select("user_id, role")
     .eq("team_id", team.id)
     .eq("user_id", userId)
     .maybeSingle();
@@ -348,6 +400,18 @@ export async function addTeamMember(
     console.error("[teams] addTeamMember", error.message);
     return { error: GENERIC_ERROR };
   }
+  if (!existing) {
+    await auditTeam(ctx, "team_member_added", {
+      toValue: checked.role,
+      meta: { team_name: team.name, user_id: userId },
+    });
+  } else if (existing.role !== checked.role) {
+    await auditTeam(ctx, "team_member_role_changed", {
+      fromValue: existing.role,
+      toValue: checked.role,
+      meta: { team_name: team.name, user_id: userId },
+    });
+  }
   return done();
 }
 
@@ -366,6 +430,13 @@ export async function updateTeamMember(
   const checked = await checkMemberInput(ctx, input);
   if ("error" in checked) return checked;
 
+  const { data: before } = await ctx.db
+    .from("team_members")
+    .select("role")
+    .eq("team_id", team.id)
+    .eq("user_id", userId)
+    .maybeSingle();
+
   const { data, error } = await ctx.db
     .from("team_members")
     .update({ role: checked.role, case_type_ids: checked.caseTypeIds })
@@ -377,6 +448,13 @@ export async function updateTeamMember(
     return { error: GENERIC_ERROR };
   }
   if (!data || data.length === 0) return { error: "Esa persona no está en el equipo." };
+  if (before && before.role !== checked.role) {
+    await auditTeam(ctx, "team_member_role_changed", {
+      fromValue: before.role,
+      toValue: checked.role,
+      meta: { team_name: team.name, user_id: userId },
+    });
+  }
   return done();
 }
 
@@ -387,14 +465,21 @@ export async function removeTeamMember(teamId: string, userId: string): Promise<
   if (!team) return { error: TEAM_NOT_FOUND };
   if (!isId(userId)) return { error: MEMBER_NOT_FOUND };
 
-  const { error } = await ctx.db
+  const { data: removed, error } = await ctx.db
     .from("team_members")
     .delete()
     .eq("team_id", team.id)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .select("role");
   if (error) {
     console.error("[teams] removeTeamMember", error.message);
     return { error: GENERIC_ERROR };
+  }
+  if (removed && removed.length > 0) {
+    await auditTeam(ctx, "team_member_removed", {
+      fromValue: removed[0].role,
+      meta: { team_name: team.name, user_id: userId },
+    });
   }
   return done();
 }

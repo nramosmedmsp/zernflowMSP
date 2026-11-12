@@ -28,6 +28,16 @@ describe("recordDataExport", () => {
     });
   });
 
+  it("guarda el número de filas cuando llega como entero razonable", async () => {
+    await recordDataExport("metricas-volumen.csv", 30);
+    await recordDataExport("metricas-motivos.csv", -1);
+    await recordDataExport("metricas-embudo.csv", "9" as never);
+    const rows = fake.rows("activity").map((a) => a.meta as Record<string, unknown>);
+    expect(rows[0]).toMatchObject({ file: "metricas-volumen.csv", rows: 30 });
+    expect(rows[1]).not.toHaveProperty("rows");
+    expect(rows[2]).not.toHaveProperty("rows");
+  });
+
   it("ignora nombres raros que mande el navegador", async () => {
     for (const bad of ["../../etc/passwd", "a b.csv", "", "x".repeat(200), 5 as never, "<img src=x>.csv"]) {
       await recordDataExport(bad);

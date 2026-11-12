@@ -4,12 +4,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeDb } from "@/lib/cases/fake-db.test-helper";
 
-const state = vi.hoisted(() => ({ fake: null as unknown, role: "admin" as string }));
+const state = vi.hoisted(() => ({ fake: null as unknown, role: "admin" as string, keywords: [] as unknown[] }));
 
 vi.mock("@/lib/workspace", () => ({
   getWorkspace: async () => ({
     user: { id: "u1", email: "a@tienda.test" },
-    workspace: { id: "ws-1", name: "Tienda" },
+    workspace: { id: "ws-1", name: "Tienda", global_keywords: state.keywords },
     role: state.role,
     supabase: state.fake,
   }),
@@ -32,6 +32,7 @@ beforeEach(() => {
   fake = new FakeDb();
   state.fake = fake;
   state.role = "admin";
+  state.keywords = [];
   fake.seed("workspaces", [{ id: "ws-1", name: "Tienda", slug: "tienda", global_keywords: [] }]);
 });
 
@@ -99,8 +100,29 @@ describe("saveWorkspaceSettings: registro de acciones", () => {
   });
 
   it("guardar sin tocar claves ni nombre no registra nada", async () => {
+    state.keywords = [{ keyword: "baja", action: "unsubscribe" }];
     await save(["baja"]);
     expect(auditRows()).toHaveLength(0);
+  });
+
+  it("agregar, quitar o cambiar de acción una palabra clave global queda registrado", async () => {
+    state.keywords = [
+      { keyword: "baja", action: "unsubscribe" },
+      { keyword: "stop", action: "unsubscribe" },
+    ];
+    await save([
+      { keyword: "baja", action: "subscribe" },
+      { keyword: "alta", action: "subscribe" },
+    ]);
+    expect(auditRows()).toHaveLength(1);
+    expect(auditRows()[0].meta).toMatchObject({
+      action: "global_keywords_changed",
+      entity: "workspace",
+      added: "alta (alta)",
+      removed: "stop (baja)",
+      changed: "baja (alta)",
+      total: 2,
+    });
   });
 
   it("cambiar el nombre del espacio queda registrado con el nombre anterior y el nuevo", async () => {

@@ -94,7 +94,7 @@ export function AgentsTab({ report, mode }: TabProps) {
     <Card
       title="Rendimiento por asesor"
       subtitle="Tiempos medianos. La tasa de cierre es ganadas entre ganadas más perdidas."
-      action={<ExportButton filename="metricas-asesores.csv" build={() => agentsCsv(rows, mode)} disabled={rows.length === 0} />}
+      action={<ExportButton filename="metricas-asesores.csv" build={() => agentsCsv(rows, mode)} rows={rows.length} disabled={rows.length === 0} />}
     >
       {rows.length === 0 ? (
         <EmptyState>Aún no hay gestiones atendidas en este periodo.</EmptyState>
@@ -141,7 +141,7 @@ export function FunnelTab({ report, mode }: TabProps) {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <ExportButton filename="metricas-embudo.csv" build={() => funnelCsv(funnel, mode)} disabled={funnel.length === 0} />
+        <ExportButton filename="metricas-embudo.csv" build={() => funnelCsv(funnel, mode)} rows={funnel.reduce((n, t) => n + t.stages.length, 0)} disabled={funnel.length === 0} />
       </div>
       {funnel.length === 0 ? (
         <EmptyState>Aún no hay gestiones nuevas en este periodo para armar el embudo.</EmptyState>
@@ -220,7 +220,7 @@ export function ResultsTab({ report }: { report: MetricsReport }) {
 
       <Card
         title="Motivos"
-        action={<ExportButton filename="metricas-motivos.csv" build={() => reasonsCsv(r.reasons)} disabled={r.reasons.length === 0} />}
+        action={<ExportButton filename="metricas-motivos.csv" build={() => reasonsCsv(r.reasons)} rows={r.reasons.length} disabled={r.reasons.length === 0} />}
       >
         {r.reasons.length === 0 ? (
           <EmptyState>Aún no hay gestiones cerradas en este periodo.</EmptyState>
@@ -249,7 +249,7 @@ export function ResultsTab({ report }: { report: MetricsReport }) {
       <Card
         title="Recompra y renovación"
         subtitle="Gestiones proactivas activadas en el periodo y cuántas se ganaron"
-        action={<ExportButton filename="metricas-recompra-renovacion.csv" build={() => proactiveCsv(r.proactive)} disabled={r.proactive.length === 0} />}
+        action={<ExportButton filename="metricas-recompra-renovacion.csv" build={() => proactiveCsv(r.proactive)} rows={r.proactive.length} disabled={r.proactive.length === 0} />}
       >
         {r.proactive.length === 0 ? (
           <EmptyState>Aún no se activaron gestiones de recompra o renovación en este periodo.</EmptyState>
@@ -299,7 +299,7 @@ export function OverdueTab({
     <Card
       title="Gestiones atrasadas"
       subtitle={`Abiertas con la próxima acción vencida o con ${staleDays} ${staleDays === 1 ? "día" : "días"} o más en la misma etapa`}
-      action={<ExportButton filename="metricas-atrasados.csv" build={() => overdueCsv(items, nameOf)} disabled={items.length === 0} />}
+      action={<ExportButton filename="metricas-atrasados.csv" build={() => overdueCsv(items, nameOf)} rows={items.length} disabled={items.length === 0} />}
     >
       {items.length === 0 ? (
         <EmptyState>No hay gestiones atrasadas. Buen trabajo.</EmptyState>
@@ -430,7 +430,7 @@ export function VolumeTab({ report, showMessages }: { report: MetricsReport; sho
             Gestiones nuevas
           </button>
         </div>
-        <ExportButton filename="metricas-volumen.csv" build={() => volumeCsv(v.daily, showMessages)} disabled={v.daily.length === 0} />
+        <ExportButton filename="metricas-volumen.csv" build={() => volumeCsv(v.daily, showMessages)} rows={v.daily.length} disabled={v.daily.length === 0} />
       </div>
       {!showMessages && (
         <p className="text-xs text-muted-foreground">

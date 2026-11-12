@@ -286,3 +286,54 @@ describe("acciones de equipos: miembros", () => {
     expect(fake.rows("team_members")).toHaveLength(0);
   });
 });
+
+// Registro de cambios: cada cambio confirmado deja una fila con el nombre del equipo.
+describe("acciones de equipos: registro de cambios", () => {
+  const audits = () =>
+    fake
+      .rows("activity")
+      .filter((a) => (a.meta as { entity?: string }).entity === "teams")
+      .map((a) => ({ action: (a.meta as Record<string, unknown>).action, team: (a.meta as Record<string, unknown>).team_name, from: a.from_value, to: a.to_value, actor: a.actor_id }));
+
+  it("crear, renombrar, archivar y restaurar dejan una fila con el nombre del equipo", async () => {
+    await createTeam(WS, "Recepción");
+    const id = fake.rows("teams").find((t) => t.name === "Recepción")!.id as string;
+    await renameTeam(id, "Recepción Lima");
+    await setTeamArchived(id, true);
+    await setTeamArchived(id, true); // ya archivado: no es un cambio
+    await setTeamArchived(id, false);
+    expect(audits()).toEqual([
+      { action: "team_created", team: "Recepción", from: null, to: "Recepción", actor: OWNER },
+      { action: "team_renamed", team: "Recepción Lima", from: "Recepción", to: "Recepción Lima", actor: OWNER },
+      { action: "team_archived", team: "Recepción Lima", from: null, to: null, actor: OWNER },
+      { action: "team_restored", team: "Recepción Lima", from: null, to: null, actor: OWNER },
+    ]);
+  });
+
+  it("modo de reparto, supervisor, equipo por defecto y miembros", async () => {
+    await setTeamAssignmentMode(SEDE_A, "manual");
+    await setTeamAssignmentMode(SEDE_A, "manual"); // igual: sin fila
+    await setTeamSupervisorSkipsChats(SEDE_A, true);
+    await setDefaultTeam(SEDE_B);
+    await addTeamMember(SEDE_B, ANA, { role: "agent", caseTypeIds: null });
+    await updateTeamMember(SEDE_B, ANA, { role: "supervisor", caseTypeIds: null });
+    await removeTeamMember(SEDE_B, ANA);
+    expect(audits()).toEqual([
+      { action: "team_assignment_mode_changed", team: "Sede A", from: "round_robin", to: "manual", actor: OWNER },
+      { action: "team_supervisor_skips_changed", team: "Sede A", from: null, to: "on", actor: OWNER },
+      { action: "team_default_changed", team: "Sede B", from: "Sede A", to: "Sede B", actor: OWNER },
+      { action: "team_member_added", team: "Sede B", from: null, to: "agent", actor: OWNER },
+      { action: "team_member_role_changed", team: "Sede B", from: "agent", to: "supervisor", actor: OWNER },
+      { action: "team_member_removed", team: "Sede B", from: "supervisor", to: null, actor: OWNER },
+    ]);
+    const added = fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "team_member_added")!;
+    expect(added.meta).toMatchObject({ user_id: ANA });
+  });
+
+  it("una acción rechazada no deja fila", async () => {
+    as(ANA, "member");
+    await createTeam(WS, "Nuevo");
+    await renameTeam(FOREIGN_TEAM, "Hackeado");
+    expect(audits()).toEqual([]);
+  });
+});

@@ -509,6 +509,22 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
   });
   if (denied) return { error: denied };
 
+  // Registro de cambios: el nombre y el correo se leen ANTES de borrar, para que la pantalla
+  // pueda decir a quién se quitó aunque la cuenta ya no exista después.
+  let removedName: string | null = null;
+  let removedEmail: string | null = null;
+  try {
+    const {
+      data: { user: removedUser },
+    } = await service.auth.admin.getUserById(userId);
+    if (removedUser) {
+      removedName = displayName(removedUser);
+      removedEmail = removedUser.email ?? null;
+    }
+  } catch {
+    // sin nombre: la pantalla usará la frase general
+  }
+
   const { error: deleteError } = await service
     .from("workspace_members")
     .delete()
@@ -530,7 +546,15 @@ export async function removeTeamMember(workspaceId: string, userId: string) {
     type: "config_changed",
     actor_id: ctx.user.id,
     from_value: membership.role,
-    meta: { action: "member_removed", entity: "team", user_id: userId, role: membership.role, sessions_revoked: sessionsRevoked },
+    meta: {
+      action: "member_removed",
+      entity: "team",
+      user_id: userId,
+      role: membership.role,
+      sessions_revoked: sessionsRevoked,
+      ...(removedName ? { name: removedName } : {}),
+      ...(removedEmail ? { email: removedEmail } : {}),
+    },
   });
 
   // R2-2: su trabajo no se queda colgado de una persona que ya no está.

@@ -25,7 +25,7 @@ export const AUDIT_CATEGORIES: { value: AuditCategory; label: string }[] = [
   { value: "config", label: "Configuración" },
   { value: "channels", label: "Canales" },
   { value: "contacts", label: "Clientes y datos" },
-  { value: "broadcasts", label: "Difusiones" },
+  { value: "broadcasts", label: "Difusiones y secuencias" },
   { value: "flows", label: "Flujos" },
   { value: "exports", label: "Exportaciones e importaciones" },
 ];
@@ -46,6 +46,33 @@ export const AUDIT_ACTIONS: Record<string, { entity: string; category: AuditCate
   member_role_changed: { entity: "team", category: "team" },
   access_link_copied: { entity: "team", category: "team" },
   access_email_sent: { entity: "team", category: "team" },
+  // Equipos de trabajo (lib/actions/teams.ts)
+  team_created: { entity: "teams", category: "team" },
+  team_renamed: { entity: "teams", category: "team" },
+  team_archived: { entity: "teams", category: "team" },
+  team_restored: { entity: "teams", category: "team" },
+  team_default_changed: { entity: "teams", category: "team" },
+  team_assignment_mode_changed: { entity: "teams", category: "team" },
+  team_supervisor_skips_changed: { entity: "teams", category: "team" },
+  team_member_added: { entity: "teams", category: "team" },
+  team_member_removed: { entity: "teams", category: "team" },
+  team_member_role_changed: { entity: "teams", category: "team" },
+  // Horario, feriados y atención
+  hours_changed: { entity: "hours", category: "config" },
+  holiday_added: { entity: "hours", category: "config" },
+  holiday_removed: { entity: "hours", category: "config" },
+  holidays_loaded: { entity: "hours", category: "config" },
+  attention_settings_changed: { entity: "attention", category: "config" },
+  attention_automation_changed: { entity: "attention", category: "config" },
+  // Respuestas compartidas, diccionario y palabras clave
+  saved_reply_created: { entity: "saved_reply", category: "config" },
+  saved_reply_updated: { entity: "saved_reply", category: "config" },
+  saved_reply_deleted: { entity: "saved_reply", category: "config" },
+  spell_word_added: { entity: "dictionary", category: "config" },
+  spell_word_approved: { entity: "dictionary", category: "config" },
+  spell_word_rejected: { entity: "dictionary", category: "config" },
+  spell_word_removed: { entity: "dictionary", category: "config" },
+  global_keywords_changed: { entity: "workspace", category: "config" },
   // Claves, espacio y correo
   api_key_changed: { entity: "secrets", category: "config" },
   workspace_settings_changed: { entity: "workspace", category: "config" },
@@ -103,6 +130,12 @@ export const AUDIT_ACTIONS: Record<string, { entity: string; category: AuditCate
   broadcast_resumed: { entity: "broadcast", category: "broadcasts" },
   broadcast_cancelled: { entity: "broadcast", category: "broadcasts" },
   broadcast_auto_paused: { entity: "broadcast", category: "broadcasts" },
+  // Secuencias (se muestran junto con las difusiones)
+  sequence_created: { entity: "sequence", category: "broadcasts" },
+  sequence_activated: { entity: "sequence", category: "broadcasts" },
+  sequence_paused: { entity: "sequence", category: "broadcasts" },
+  sequence_edited: { entity: "sequence", category: "broadcasts" },
+  sequence_deleted: { entity: "sequence", category: "broadcasts" },
   // Flujos
   flow_published: { entity: "flow", category: "flows" },
   flow_deleted: { entity: "flow", category: "flows" },
@@ -114,8 +147,10 @@ export const AUDIT_ACTIONS: Record<string, { entity: string; category: AuditCate
 /** Categoría de una entidad desconocida (para acciones nuevas que aún no están en la lista). */
 const ENTITY_CATEGORY: Record<string, AuditCategory> = {
   team: "team",
+  teams: "team",
   channel: "channels",
   broadcast: "broadcasts",
+  sequence: "broadcasts",
   flow: "flows",
   export: "exports",
   source_code: "exports",
@@ -310,6 +345,90 @@ function changeLines(changes: unknown): string[] {
   return lines;
 }
 
+// ── Cambios con antes → después (horario, atención, equipos...) ───────────
+
+function has(m: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(m, key);
+}
+
+const DAY_ORDER: [string, string][] = [
+  ["mon", "Lunes"],
+  ["tue", "Martes"],
+  ["wed", "Miércoles"],
+  ["thu", "Jueves"],
+  ["fri", "Viernes"],
+  ["sat", "Sábado"],
+  ["sun", "Domingo"],
+];
+
+/** «09:00-21:00, 14:00-18:00» → «09:00–21:00, 14:00–18:00». */
+function hoursText(value: unknown): string {
+  const t = text(value);
+  return t ? t.replace(/(\d{2}:\d{2})-(\d{2}:\d{2})/g, "$1–$2") : "Cerrado";
+}
+
+const MONTH_NAMES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+/** «2026-07-06» → «6 de julio de 2026» (sin pasar por zonas horarias). */
+function dateText(value: unknown): string | null {
+  const t = text(value);
+  const match = t ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(t) : null;
+  if (!match) return null;
+  const month = MONTH_NAMES[Number(match[2]) - 1];
+  return month ? `${Number(match[3])} de ${month} de ${match[1]}` : null;
+}
+
+const VISIBILITY_LABELS: Record<string, string> = {
+  own: "Solo sus gestiones",
+  own_and_unassigned: "Las suyas y las sin asignar de su equipo",
+  team: "Todas las de su equipo",
+};
+
+const ASSIGNMENT_LABELS: Record<string, string> = {
+  round_robin: "Por turnos",
+  least_load: "Al de menor carga",
+  manual: "Manual",
+};
+
+const TEAM_ROLE_LABELS: Record<string, string> = { supervisor: "Supervisor", agent: "Asesor" };
+
+function labelOf(table: Record<string, string>, value: unknown): string | null {
+  const t = text(value);
+  return t ? (table[t] ?? null) : null;
+}
+
+function yesNo(value: unknown): string | null {
+  return typeof value === "boolean" ? (value ? "Sí" : "No") : null;
+}
+
+/** «Etiqueta: antes → después» si el cambio trae los dos valores (`<campo>_from` y `<campo>_to`). */
+function pairLine(
+  m: Record<string, unknown>,
+  field: string,
+  label: string,
+  show: (value: unknown) => string | null,
+): string | null {
+  if (!has(m, `${field}_from`) || !has(m, `${field}_to`)) return null;
+  const a = show(m[`${field}_from`]);
+  const b = show(m[`${field}_to`]);
+  return a !== null && b !== null ? `${label}: ${a} → ${b}` : null;
+}
+
+function compact(lines: (string | null)[]): string[] {
+  return lines.filter((l): l is string => l !== null);
+}
+
+function minutesText(value: unknown): string | null {
+  const n = count(value);
+  return n === null ? "Desactivada" : plural(n, "minuto", "minutos");
+}
+
+/** Dónde aplica un feriado o una respuesta: la empresa o un equipo. */
+function appliesTo(m: Record<string, unknown>): string {
+  const team = text(m.team_name);
+  return team ? `al equipo ${quote(team)}` : "a toda la empresa";
+}
+
 // ── Frases ─────────────────────────────────────────────────────────────────
 
 const ITEM_NOUN: Record<string, { one: string; article: "la" | "el"; list: string }> = {
@@ -373,10 +492,13 @@ function describeConfig(
       return { title: `Volvió a agregar a ${who} al equipo${role ? ` como ${role}` : ""}`, details };
     }
     case "member_removed": {
+      // El nombre se guardó al quitarla (las filas antiguas no lo tienen: se usa la frase general).
+      const who = text(m.name) ?? person ?? "una persona";
       const role = roleText(row.from_value) ?? roleText(m.role);
+      if (text(m.email)) details.push(`Correo: ${text(m.email)}`);
       if (role) details.push(`Rol que tenía: ${role}`);
       if (sessions) details.push("Se cerraron sus sesiones abiertas");
-      return { title: `Quitó a ${person ?? "una persona"} del equipo`, details };
+      return { title: `Quitó a ${who} del equipo`, details };
     }
     case "member_renamed": {
       if (sessions) details.push("Se cerraron sus sesiones abiertas");
@@ -409,6 +531,175 @@ function describeConfig(
       if (role) details.push(`Rol de la persona: ${role}`);
       if (typeof m.email_sent === "boolean") details.push(m.email_sent ? "El correo se envió" : "El correo no se pudo enviar");
       return { title: `Envió el acceso por correo a ${person ?? "una persona"}`, details };
+    }
+
+    // ── Horario, feriados y atención ──
+    case "hours_changed": {
+      const team = text(m.team_name);
+      for (const [key, label] of DAY_ORDER) {
+        if (has(m, `day_${key}_from`) && has(m, `day_${key}_to`)) {
+          details.push(`${label}: ${hoursText(m[`day_${key}_from`])} → ${hoursText(m[`day_${key}_to`])}`);
+        }
+      }
+      if (m.uses_company_hours === true) details.push("Ahora usa el horario de la empresa");
+      if (m.uses_company_hours === false) details.push("Ahora tiene un horario propio");
+      return {
+        title: text(m.scope) === "team" ? `Cambió el horario de atención del equipo${team ? ` ${quote(team)}` : ""}` : "Cambió el horario de atención de la empresa",
+        details,
+      };
+    }
+    case "holiday_added":
+    case "holiday_removed": {
+      const date = dateText(m.date);
+      details.push(`Aplica ${appliesTo(m)}`);
+      return {
+        title: `${action === "holiday_added" ? "Añadió" : "Quitó"} el feriado${name ? ` ${quote(name)}` : ""}${date ? ` (${date})` : ""}`,
+        details,
+      };
+    }
+    case "holidays_loaded": {
+      const year = count(m.year);
+      const added = count(m.added);
+      if (added !== null) details.push(`${plural(added, "feriado agregado", "feriados agregados")}`);
+      details.push(`Aplica ${appliesTo(m)}`);
+      return { title: `Cargó los feriados de Perú${year !== null ? ` de ${year}` : ""}`, details };
+    }
+    case "attention_settings_changed": {
+      details.push(
+        ...compact([
+          pairLine(m, "visibility", "Qué gestiones ve el asesor", (v) => labelOf(VISIBILITY_LABELS, v)),
+          pairLine(m, "assignment", "Reparto cuando no hay equipos", (v) => labelOf(ASSIGNMENT_LABELS, v)),
+          pairLine(m, "return_queue", "El asesor puede devolver gestiones a la cola", yesNo),
+          pairLine(m, "stale_days", "Días en la misma etapa para marcar una gestión como atrasada", (v) => {
+            const n = count(v);
+            return n === null ? null : formatNumber(n);
+          }),
+        ]),
+      );
+      return { title: "Cambió los ajustes de atención", details };
+    }
+    case "attention_automation_changed": {
+      details.push(
+        ...compact([
+          pairLine(m, "off_hours_enabled", "Respuesta fuera de horario", (v) => (typeof v === "boolean" ? (v ? "Activada" : "Desactivada") : null)),
+          m.off_hours_text_changed === true ? "Se cambió el texto de la respuesta fuera de horario (no se guarda en el registro)" : null,
+          pairLine(m, "min_hours", "Horas entre respuestas fuera de horario", (v) => {
+            const n = count(v);
+            return n === null ? "una sola vez por gestión" : plural(n, "hora", "horas");
+          }),
+          pairLine(m, "reassign_minutes", "Reasignación por espera", minutesText),
+        ]),
+      );
+      return { title: "Cambió la atención automática", details };
+    }
+    case "global_keywords_changed": {
+      const added = text(m.added);
+      const removed = text(m.removed);
+      const changed = text(m.changed);
+      if (added) details.push(`Agregó: ${added}`);
+      if (removed) details.push(`Quitó: ${removed}`);
+      if (changed) details.push(`Cambió de acción: ${changed}`);
+      const total = count(m.total);
+      if (total !== null) details.push(`Quedan ${plural(total, "palabra", "palabras")}`);
+      return { title: "Cambió las palabras clave globales del espacio", details };
+    }
+
+    // ── Equipos de trabajo ──
+    case "team_created":
+      return { title: quote(text(m.team_name) ?? to) ? `Creó el equipo ${quote(text(m.team_name) ?? to)}` : "Creó un equipo", details };
+    case "team_renamed":
+      return { title: from && to ? `Cambió el nombre del equipo ${quote(from)} a ${quote(to)}` : `Cambió el nombre de un equipo`, details };
+    case "team_archived":
+    case "team_restored": {
+      const team = quote(text(m.team_name));
+      return { title: `${action === "team_archived" ? "Archivó" : "Restauró"} el equipo${team ? ` ${team}` : ""}`, details };
+    }
+    case "team_default_changed": {
+      const team = quote(text(m.team_name) ?? to);
+      if (from) details.push(`Antes era ${quote(from)}`);
+      return { title: team ? `Marcó el equipo ${team} como equipo por defecto` : "Cambió el equipo por defecto", details };
+    }
+    case "team_assignment_mode_changed": {
+      const team = quote(text(m.team_name));
+      const a = labelOf(ASSIGNMENT_LABELS, row.from_value);
+      const b = labelOf(ASSIGNMENT_LABELS, row.to_value);
+      if (a && b) details.push(`Modo de reparto: ${a} → ${b}`);
+      return { title: `Cambió el modo de reparto del equipo${team ? ` ${team}` : ""}`, details };
+    }
+    case "team_supervisor_skips_changed": {
+      const team = quote(text(m.team_name));
+      if (to === "on" || to === "off") details.push(`El supervisor no recibe chats: ${to === "on" ? "No → Sí" : "Sí → No"}`);
+      return { title: `Cambió si el supervisor recibe chats en el equipo${team ? ` ${team}` : ""}`, details };
+    }
+    case "team_member_added":
+    case "team_member_removed": {
+      const team = quote(text(m.team_name));
+      const role = labelOf(TEAM_ROLE_LABELS, action === "team_member_added" ? row.to_value : row.from_value);
+      if (role) details.push(action === "team_member_added" ? `Rol en el equipo: ${role}` : `Rol que tenía en el equipo: ${role}`);
+      const who = person ?? "una persona";
+      return {
+        title: action === "team_member_added" ? `Añadió a ${who} al equipo${team ? ` ${team}` : ""}` : `Quitó a ${who} del equipo${team ? ` ${team}` : ""}`,
+        details,
+      };
+    }
+    case "team_member_role_changed": {
+      const team = quote(text(m.team_name));
+      const a = labelOf(TEAM_ROLE_LABELS, row.from_value);
+      const b = labelOf(TEAM_ROLE_LABELS, row.to_value);
+      return {
+        title: `Cambió el rol de ${person ?? "una persona"} en el equipo${team ? ` ${team}` : ""}${a && b ? ` de ${a} a ${b}` : b ? ` a ${b}` : ""}`,
+        details,
+      };
+    }
+
+    // ── Respuestas guardadas compartidas (nunca se guarda el texto) ──
+    case "saved_reply_created":
+    case "saved_reply_updated":
+    case "saved_reply_deleted": {
+      const team = text(m.team_name);
+      const where = text(m.scope) === "team" ? (team ? ` del equipo ${quote(team)}` : " de un equipo") : " de la empresa";
+      if (action === "saved_reply_updated") {
+        if (from && to) details.push(`Título: ${from} → ${to}`);
+        if (text(m.fields)) details.push(`Se cambió: ${text(m.fields)} (el texto no se guarda en el registro)`);
+      }
+      const verb = action === "saved_reply_created" ? "Creó" : action === "saved_reply_updated" ? "Cambió" : "Eliminó";
+      return { title: `${verb} la respuesta guardada${name ? ` ${quote(name)}` : ""}${where}`, details };
+    }
+
+    // ── Diccionario de la tienda ──
+    case "spell_word_added":
+    case "spell_word_approved":
+    case "spell_word_rejected":
+    case "spell_word_removed": {
+      const word = quote(text(m.word) ?? to) ?? "una palabra";
+      switch (action) {
+        case "spell_word_added":
+          return { title: `Agregó ${word} al diccionario de la tienda`, details };
+        case "spell_word_approved":
+          return { title: `Aprobó ${word} para el diccionario de la tienda`, details };
+        case "spell_word_rejected":
+          return { title: `Rechazó el pedido de agregar ${word} al diccionario de la tienda`, details };
+        default:
+          return { title: `Quitó ${word} del diccionario de la tienda`, details };
+      }
+    }
+
+    // ── Secuencias (solo el nombre y cuántos pasos; nunca el texto de un paso) ──
+    case "sequence_created":
+    case "sequence_activated":
+    case "sequence_paused":
+    case "sequence_deleted": {
+      const ref = name ? ` ${quote(name)}` : "";
+      const verb = { sequence_created: "Creó", sequence_activated: "Activó", sequence_paused: "Pausó", sequence_deleted: "Eliminó" }[action];
+      return { title: `${verb} la secuencia${ref}`, details };
+    }
+    case "sequence_edited": {
+      if (from && to) details.push(`Nombre: ${from} → ${to}`);
+      const a = count(m.steps_from);
+      const b = count(m.steps_to);
+      if (a !== null && b !== null) details.push(`Pasos: ${a} → ${b}`);
+      if (text(m.fields)) details.push(`Se cambió: ${text(m.fields)}`);
+      return { title: `Cambió la secuencia${name ? ` ${quote(name)}` : ""}`, details };
     }
 
     // ── Claves, espacio y correo ──
@@ -549,8 +840,12 @@ function describeConfig(
       details.push(`${plural(updated, "canal actualizado", "canales actualizados")}`);
       return { title: "Sincronizó los canales con Zernio", details };
     }
-    case "channel_deleted":
-      return { title: "Eliminó un canal", details };
+    case "channel_deleted": {
+      const channelName = text(m.channel_name);
+      const platform = text(m.platform);
+      if (platform) details.push(`Red: ${platformLabel(platform)}`);
+      return { title: channelName ? `Eliminó el canal ${quote(channelName)}` : "Eliminó un canal", details };
+    }
     case "channel_toggled": {
       const id = text(m.channel_id);
       const channel = (id && ctx.channels?.[id]) || null;
@@ -657,6 +952,18 @@ function fallbackTitle(entity: string | null): string {
       return "Hizo un cambio en una difusión";
     case "flow":
       return "Hizo un cambio en un flujo";
+    case "teams":
+      return "Hizo un cambio en los equipos de trabajo";
+    case "hours":
+      return "Hizo un cambio en el horario o los feriados";
+    case "attention":
+      return "Hizo un cambio en los ajustes de atención";
+    case "saved_reply":
+      return "Hizo un cambio en las respuestas guardadas";
+    case "dictionary":
+      return "Hizo un cambio en el diccionario de la tienda";
+    case "sequence":
+      return "Hizo un cambio en una secuencia";
     case "export":
     case "source_code":
       return "Descargó datos";

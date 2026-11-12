@@ -36,10 +36,13 @@ export function ExportButton({
   filename,
   build,
   disabled,
+  rows,
 }: {
   filename: string;
   build: () => string;
   disabled?: boolean;
+  /** Filas de datos del archivo (sin el encabezado), para el registro de cambios. */
+  rows?: number;
 }) {
   return (
     <button
@@ -48,7 +51,7 @@ export function ExportButton({
       onClick={() => {
         downloadCsv(filename, build());
         // SEG-05: la descarga queda registrada (quién y qué archivo); no frena nada.
-        void recordDataExport(filename).catch(() => undefined);
+        void recordDataExport(filename, rows).catch(() => undefined);
       }}
       className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
     >

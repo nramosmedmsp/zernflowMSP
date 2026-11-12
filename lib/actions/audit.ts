@@ -13,9 +13,15 @@ import { logAudit } from "@/lib/audit";
 /** Solo nombres de archivo sencillos: lo que llega del navegador no es de fiar. */
 const FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,79}$/i;
 
-export async function recordDataExport(fileName: string): Promise<void> {
+/** Cantidad de filas del archivo, solo si llega como entero razonable (lo del navegador no es de fiar). */
+function cleanRows(rows: unknown): number | null {
+  return typeof rows === "number" && Number.isInteger(rows) && rows >= 0 && rows <= 10_000_000 ? rows : null;
+}
+
+export async function recordDataExport(fileName: string, rows?: number): Promise<void> {
   try {
     if (typeof fileName !== "string" || !FILE_NAME.test(fileName)) return;
+    const count = cleanRows(rows);
     const { workspace, user } = await getWorkspace();
     await logAudit(await createServiceClient(), {
       workspaceId: workspace.id,
@@ -23,7 +29,7 @@ export async function recordDataExport(fileName: string): Promise<void> {
       action: "data_exported",
       entity: "export",
       toValue: fileName,
-      meta: { file: fileName, format: "csv", source: "metrics" },
+      meta: { file: fileName, format: "csv", source: "metrics", ...(count !== null ? { rows: count } : {}) },
     });
   } catch (err) {
     // El registro nunca debe impedir la descarga.
