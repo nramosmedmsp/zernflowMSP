@@ -10,6 +10,8 @@ import { dismissComplaintFlag, openComplaintCase, type ContactCasesView } from "
 import { complaintStillPending } from "@/lib/cases/protection";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 
 /** ¿Hay que mostrar el aviso? Marcado y sin una Postventa (protegida) abierta o posterior. */
 export function showComplaintBanner(
@@ -29,12 +31,15 @@ export function ComplaintBanner({
   excerpt,
   typeName = "Postventa",
   busy,
+  disabled = false,
   onOpen,
   onDismiss,
 }: {
   excerpt: string | null;
   typeName?: string;
   busy: "open" | "dismiss" | null;
+  /** «Ver como»: los botones quedan apagados y se muestra una sola nota. */
+  disabled?: boolean;
   onOpen: () => void;
   onDismiss: () => void;
 }) {
@@ -49,9 +54,11 @@ export function ComplaintBanner({
         {excerpt ? <>: «{excerpt}»</> : null}
       </p>
       <div className="flex shrink-0 items-center gap-1.5">
+        {disabled && <span className="text-[11px] opacity-80">{VIEW_AS_UNAVAILABLE_NOTE}</span>}
         <button
           onClick={onOpen}
-          disabled={busy !== null}
+          disabled={busy !== null || disabled}
+          title={disabled ? VIEW_AS_UNAVAILABLE_NOTE : undefined}
           className={cn(
             "inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 font-medium text-white hover:bg-amber-700 disabled:opacity-60",
           )}
@@ -61,7 +68,8 @@ export function ComplaintBanner({
         </button>
         <button
           onClick={onDismiss}
-          disabled={busy !== null}
+          disabled={busy !== null || disabled}
+          title={disabled ? VIEW_AS_UNAVAILABLE_NOTE : undefined}
           className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-background px-2.5 py-1 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-800 dark:hover:bg-amber-950"
         >
           {busy === "dismiss" && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -86,6 +94,7 @@ export function ComplaintBannerConnected({
 }) {
   const [busy, setBusy] = useState<"open" | "dismiss" | null>(null);
   const toast = useToast();
+  const viewing = useViewAs().active;
 
   async function run(kind: "open" | "dismiss") {
     setBusy(kind);
@@ -113,6 +122,7 @@ export function ComplaintBannerConnected({
       excerpt={excerpt}
       typeName={typeName}
       busy={busy}
+      disabled={viewing}
       onOpen={() => void run("open")}
       onDismiss={() => void run("dismiss")}
     />

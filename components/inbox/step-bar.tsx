@@ -17,7 +17,7 @@ const GAP = 6;
 
 const MODE_WIDTH = "h-7 w-7 px-0";
 
-function chipClass(step: BarStep, mode: StepMode, picked: boolean): string {
+function chipClass(step: BarStep, mode: StepMode, picked: boolean, readOnly: boolean): string {
   return cn(
     "relative inline-flex h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border text-xs transition-colors",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card",
@@ -27,6 +27,7 @@ function chipClass(step: BarStep, mode: StepMode, picked: boolean): string {
     step.state === "next" &&
       "border-dashed border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
     step.locked && "cursor-not-allowed opacity-75",
+    readOnly && "cursor-not-allowed opacity-60",
     picked && "border-solid border-primary bg-primary/10 text-foreground ring-2 ring-primary",
   );
 }
@@ -41,6 +42,7 @@ function StepChip({
   mode,
   picked = false,
   disabled = false,
+  readOnlyTitle,
   onPick,
   measure = false,
 }: {
@@ -48,6 +50,8 @@ function StepChip({
   mode: StepMode;
   picked?: boolean;
   disabled?: boolean;
+  /** «Ver como»: el paso se ve en gris y no actúa. */
+  readOnlyTitle?: string;
   onPick?: (step: BarStep) => void;
   measure?: boolean;
 }) {
@@ -94,7 +98,8 @@ function StepChip({
         aria-current={step.state === "current" ? "step" : undefined}
         aria-disabled={step.locked || undefined}
         tabIndex={measure ? -1 : undefined}
-        className={chipClass(step, mode, picked)}
+        title={measure ? undefined : readOnlyTitle}
+        className={chipClass(step, mode, picked, !!readOnlyTitle && !measure)}
         data-step-id={step.id}
       >
         {content}
@@ -118,6 +123,7 @@ export function StepBar({
   hintTone = "muted",
   pickedId,
   disabled,
+  readOnlyTitle,
   onPick,
   trailing,
 }: {
@@ -129,6 +135,8 @@ export function StepBar({
   /** Paso que se está confirmando (resaltado). */
   pickedId: string | null;
   disabled: boolean;
+  /** «Ver como»: nota que se muestra en cada paso apagado (los pasos quedan en gris). */
+  readOnlyTitle?: string;
   onPick: (step: BarStep) => void;
   /** Al final de la barra (el botón «Cerrar»). */
   trailing?: ReactNode;
@@ -253,7 +261,7 @@ export function StepBar({
             {steps.map((s, i) =>
               layout.folded && s.state === "past" ? null : (
                 <li key={s.id} className="shrink-0">
-                  <StepChip step={s} mode={layout.modes[i]} picked={pickedId === s.id} disabled={disabled} onPick={onPick} />
+                  <StepChip step={s} mode={layout.modes[i]} picked={pickedId === s.id} disabled={disabled} readOnlyTitle={readOnlyTitle} onPick={onPick} />
                 </li>
               ),
             )}

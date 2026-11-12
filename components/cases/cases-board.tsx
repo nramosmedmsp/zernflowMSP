@@ -32,6 +32,7 @@ import { Modal } from "@/components/inbox/ui";
 import { CloseCasePanel } from "@/components/inbox/close-case-panel";
 import { useNow } from "@/components/inbox/use-now";
 import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 import { startRouteProgress } from "@/components/ui/route-progress";
 import { closeOptions, relativeDayTime } from "@/components/inbox/case-card-model";
 import { caseRowHref, formatWaiting, type CaseTab } from "@/components/cases/case-filters";
@@ -381,7 +382,7 @@ export function CasesBoard({ board, tab, nowIso, memberName, solutionSchedules, 
         </div>
         <p className="ml-auto text-xs text-muted-foreground">
           {readOnly
-            ? "Solo lectura: estás viendo la cuenta de otra persona."
+            ? VIEW_AS_UNAVAILABLE_NOTE
             : "Arrastra una tarjeta a otra columna o a «Cerrar», o usa «Mover a…»."}
         </p>
       </div>
@@ -452,6 +453,7 @@ export function CasesBoard({ board, tab, nowIso, memberName, solutionSchedules, 
                       canDrag={boardPermissions(actor, card).canEdit && !readOnly && busyId === null}
                       dragging={dragId === card.id}
                       busy={busyId === card.id}
+                      readOnly={readOnly}
                       menuOpen={menu?.cardId === card.id}
                       onDragStart={(e) => onDragStart(e, card)}
                       onDragEnd={endDrag}
@@ -586,6 +588,7 @@ function BoardCardView({
   canDrag,
   dragging,
   busy,
+  readOnly,
   menuOpen,
   onDragStart,
   onDragEnd,
@@ -599,6 +602,8 @@ function BoardCardView({
   canDrag: boolean;
   dragging: boolean;
   busy: boolean;
+  /** «Ver como»: «Mover a…» queda apagado. */
+  readOnly: boolean;
   menuOpen: boolean;
   onDragStart: (e: DragEvent) => void;
   onDragEnd: () => void;
@@ -672,7 +677,9 @@ function BoardCardView({
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 onClick={(e) => onOpenMenu(e.currentTarget)}
-                className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                disabled={readOnly}
+                title={readOnly ? VIEW_AS_UNAVAILABLE_NOTE : undefined}
+                className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
               >
                 <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden />
               </button>

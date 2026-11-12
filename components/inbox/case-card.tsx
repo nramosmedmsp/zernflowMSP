@@ -43,6 +43,8 @@ import { limaDateOf } from "@/lib/cases/dates";
 import { formatDate, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 import { CaseHistoryDialog } from "./case-history";
 import { CaseGuidePanel } from "./case-guide";
 import { NewCaseDialog } from "./new-case-dialog";
@@ -96,6 +98,9 @@ export function CaseCard({
   const [busy, setBusy] = useState<string | null>(null);
   const toast = useToast();
   const now = useNow();
+  // «Ver como»: solo lectura. Los controles que escriben quedan apagados y con una sola nota.
+  const viewing = useViewAs().active;
+  const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
   const [creating, setCreating] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
@@ -146,7 +151,7 @@ export function CaseCard({
   const closeReject = useCallback(() => setRejectOpen(false), []);
 
   const newCaseButton = data.canOpenCase && (
-    <button onClick={() => setCreating(true)} className={chipButton}>
+    <button onClick={() => setCreating(true)} disabled={viewing} title={viewTitle} className={chipButton}>
       <Plus className="h-3.5 w-3.5" />
       Nueva gestión
     </button>
@@ -179,6 +184,11 @@ export function CaseCard({
         <BriefcaseBusiness className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-muted-foreground">Sin gestión abierta</span>
         {newCaseButton}
+        {viewing && data.canOpenCase && (
+          <span data-testid="view-as-unavailable-note-cases" className="text-[11px] text-muted-foreground">
+            {VIEW_AS_UNAVAILABLE_NOTE}
+          </span>
+        )}
         {dialogs}
       </div>
     );
@@ -187,7 +197,7 @@ export function CaseCard({
   const perms = active.permissions;
   const isClosed = active.status !== "open" && active.status !== "scheduled";
   const types = data.caseTypes.filter((t) => !t.archived || t.id === active.caseTypeId);
-  const canClassify = perms.canEdit && busy === null;
+  const canClassify = perms.canEdit && busy === null && !viewing;
   // Control de reclamos: un tipo protegido solo lo cambia el supervisor.
   const typeLock = typeChangeLock(caseType, active.canSupervise);
   const request = active.closeRequest;
@@ -324,7 +334,9 @@ export function CaseCard({
             {data.canOpenCase && (
               <button
                 onClick={() => setCreating(true)}
-                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                disabled={viewing}
+                title={viewTitle}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-muted-foreground"
               >
                 <Plus className="h-3 w-3" />
                 Nueva gestión
@@ -393,8 +405,8 @@ export function CaseCard({
                       <button
                         key={t.id}
                         onClick={() => classify(t)}
-                        disabled={busy !== null}
-                        title={`Clasificar como ${t.name}`}
+                        disabled={busy !== null || viewing}
+                        title={viewTitle ?? `Clasificar como ${t.name}`}
                         className={chipButton}
                       >
                         <TypeDot color={t.color} />
@@ -415,7 +427,7 @@ export function CaseCard({
                   <button
                     onClick={() => setTypeOpen((v) => !v)}
                     disabled={!canClassify || !!typeLock}
-                    title={typeLock ?? "Cambiar el tipo de gestión"}
+                    title={viewTitle ?? typeLock ?? "Cambiar el tipo de gestión"}
                     aria-label={typeLock ? `Tipo de gestión: ${caseType.name}. ${typeLock}` : `Tipo de gestión: ${caseType.name}. Cambiar`}
                     className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-70"
                     style={
@@ -460,8 +472,8 @@ export function CaseCard({
             {needsTake ? (
               <button
                 onClick={() => void run("assign", () => takeCase(active.id), "Tomaste la gestión.")}
-                disabled={busy !== null}
-                title="Quedarte con esta gestión"
+                disabled={busy !== null || viewing}
+                title={viewTitle ?? "Quedarte con esta gestión"}
                 aria-label="Tomar la gestión"
                 className={cn(primaryButtonClass, "px-2.5 py-1 text-xs")}
               >
@@ -475,9 +487,9 @@ export function CaseCard({
                 trigger={
                   <button
                     onClick={() => setAssignOpen((v) => !v)}
-                    disabled={!hasAssignMenu || busy !== null}
+                    disabled={!hasAssignMenu || busy !== null || viewing}
                     className={chipButton}
-                    title={teamName ? `Responsable. Equipo: ${teamName}` : "Responsable"}
+                    title={viewTitle ?? (teamName ? `Responsable. Equipo: ${teamName}` : "Responsable")}
                     aria-label={`Responsable: ${assigneeText}`}
                   >
                     <UserRound className="h-3.5 w-3.5" />
@@ -576,14 +588,14 @@ export function CaseCard({
                     setNextCustom(false);
                     setNextOpen((v) => !v);
                   }}
-                  disabled={!perms.canEdit || busy !== null}
+                  disabled={!perms.canEdit || busy !== null || viewing}
                   className={cn(
                     chipButton,
                     nextTone === "overdue" &&
                       "border-red-300 bg-red-50 font-medium text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
                     nextTone === "none" && "text-muted-foreground",
                   )}
-                  title={active.nextActionNote ?? "Cuándo volver a escribirle al cliente"}
+                  title={viewTitle ?? active.nextActionNote ?? "Cuándo volver a escribirle al cliente"}
                   aria-label={`Próximo contacto: ${nextLabel}`}
                 >
                   <CalendarClock className="h-3.5 w-3.5" />
@@ -645,6 +657,12 @@ export function CaseCard({
             <div className="ml-auto flex items-center gap-1.5">
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Guardando" />}
 
+              {hasMore && viewing && (
+                <button onClick={() => setHistoryOpen(true)} className={chipButton} title="Qué se hizo en esta gestión">
+                  <History className="h-3.5 w-3.5" />
+                  Historial
+                </button>
+              )}
               {hasMore && (
                 <Popover
                   open={moreOpen}
@@ -654,8 +672,9 @@ export function CaseCard({
                   trigger={
                     <button
                       onClick={() => setMoreOpen((v) => !v)}
+                      disabled={viewing}
                       className={cn(chipButton, "px-1.5")}
-                      title="Más acciones"
+                      title={viewTitle ?? "Más acciones"}
                       aria-label="Más acciones"
                     >
                       <MoreHorizontal className="h-4 w-4" />
@@ -705,6 +724,12 @@ export function CaseCard({
         )}
       </div>
 
+      {viewing && (
+        <p data-testid="view-as-unavailable-note-cases" className="text-[11px] text-muted-foreground">
+          {VIEW_AS_UNAVAILABLE_NOTE}
+        </p>
+      )}
+
       {/* Guía de la gestión: en qué va, qué hacer ahora y el siguiente paso */}
       {!isClosed && caseType && (
         <CaseGuidePanel
@@ -742,7 +767,8 @@ export function CaseCard({
             <div className="flex shrink-0 items-center gap-1.5">
               <button
                 onClick={() => void run("approve", () => approveCloseRequest(active.id), "Cierre aprobado: la gestión quedó cerrada.")}
-                disabled={busy !== null}
+                disabled={busy !== null || viewing}
+                title={viewTitle}
                 className={cn(primaryButtonClass, "px-2.5 py-1 text-xs")}
               >
                 {busy === "approve" && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -754,7 +780,7 @@ export function CaseCard({
                 align="right"
                 className="w-72"
                 trigger={
-                  <button onClick={() => setRejectOpen((v) => !v)} disabled={busy !== null} className={cn(chipButton, "text-foreground")}>
+                  <button onClick={() => setRejectOpen((v) => !v)} disabled={busy !== null || viewing} title={viewTitle} className={cn(chipButton, "text-foreground")}>
                     Rechazar
                   </button>
                 }
