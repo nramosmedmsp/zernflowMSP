@@ -88,6 +88,8 @@ async function deliverAccessLink(
     status: MemberStatus;
     inviterName: string;
     workspaceName: string;
+    /** Persona que vuelve al espacio: el mensaje lo dice explícitamente. */
+    readded?: boolean;
   },
 ): Promise<AccessDelivery> {
   const activation = params.status === "pending";
@@ -102,6 +104,14 @@ async function deliverAccessLink(
 
   const result = await sendAppMail(service, params.to, content);
   if (result.ok) {
+    if (params.readded) {
+      return {
+        sent: true,
+        message: activation
+          ? `Se volvió a agregar a ${params.name} y se le envió un correo a ${params.to} para que active su cuenta y cree su contraseña.`
+          : `Se volvió a agregar a ${params.name} y se le envió un enlace para restablecer su contraseña.`,
+      };
+    }
     return {
       sent: true,
       message: activation
@@ -115,7 +125,7 @@ async function deliverAccessLink(
   return {
     sent: false,
     notConfigured: false,
-    message: `No se pudo enviar el correo: ${result.error} Corrígelo en Configuración → Correo y vuelve a intentarlo${params.status === "pending" ? ", o copia el enlace" : ", o pide a un Dueño que genere el enlace"}.`,
+    message: `${params.readded ? `Se volvió a agregar a ${params.name}, pero no se pudo enviarle el correo: ` : "No se pudo enviar el correo: "}${result.error} Corrígelo en Configuración → Correo y vuelve a intentarlo${params.status === "pending" ? ", o copia el enlace" : ", o pide a un Dueño que genere el enlace"}.`,
   };
 }
 
@@ -222,37 +232,54 @@ export async function createTeamUser(
       return { error: "No se pudo agregar a la persona. Inténtalo de nuevo." };
     }
 
+    const member = memberViewFromUser(existingUser, { userId: existingUser.id, role, joinedAt });
+    // Quien vuelve siempre recibe un enlace para crear una contraseña nueva
+    // (recuperación). Solo si su correo nunca se confirmó, Supabase no permite
+    // recuperación y se le manda la activación.
+    const confirmed = !!existingUser.email_confirmed_at;
+    const status: MemberStatus = confirmed ? "active" : "pending";
+    const readdedName = displayName(existingUser);
+    let delivery: AccessDelivery;
+    if (!(await isMailConfigured(service))) {
+      delivery = {
+        sent: false,
+        notConfigured: true,
+        message: `Se volvió a agregar a ${readdedName}, pero el correo aún no está configurado, así que no se le envió el enlace para restablecer su contraseña. Configúralo en Configuración → Correo y envíaselo desde su fila.`,
+      };
+    } else {
+      const link = await generateAccessLink(service, {
+        email,
+        type: accessLinkTypeFor(confirmed),
+        baseUrl,
+        fullName: readdedName,
+      });
+      delivery = link.ok
+        ? await deliverAccessLink(service, {
+            to: email,
+            name: readdedName,
+            url: link.url,
+            status,
+            inviterName: inviterNameOf(ctx.user),
+            workspaceName: ctx.workspace.name,
+            readded: true,
+          })
+        : { sent: false, notConfigured: false, message: link.error };
+    }
+
     await logActivity(service as unknown as Db, {
       workspace_id: workspaceId,
       type: "config_changed",
       actor_id: ctx.user.id,
       to_value: role,
-      meta: { action: "member_readded", entity: "team", user_id: existingUser.id, email, role },
-    });
-
-    const member = memberViewFromUser(existingUser, { userId: existingUser.id, role, joinedAt });
-    const status = memberStatus(existingUser.last_sign_in_at);
-    let delivery: AccessDelivery;
-    if (!(await isMailConfigured(service))) {
-      delivery = { sent: false, notConfigured: true, message: notConfiguredMessage(status) };
-    } else {
-      const link = await generateAccessLink(service, {
+      meta: {
+        action: "member_readded",
+        entity: "team",
+        user_id: existingUser.id,
         email,
-        type: accessLinkTypeFor(!!existingUser.email_confirmed_at),
-        baseUrl,
-        fullName: displayName(existingUser),
-      });
-      delivery = link.ok
-        ? await deliverAccessLink(service, {
-            to: email,
-            name: displayName(existingUser),
-            url: link.url,
-            status,
-            inviterName: inviterNameOf(ctx.user),
-            workspaceName: ctx.workspace.name,
-          })
-        : { sent: false, notConfigured: false, message: link.error };
-    }
+        role,
+        reset_link_sent: delivery.sent,
+      },
+    });
     return { ok: true, outcome: "readded", member, delivery };
   }
 
