@@ -349,7 +349,7 @@ export function CasesBoard({ board, tab, nowIso, memberName, solutionSchedules, 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", pending && "opacity-70")} data-testid="board">
       {/* Tipo */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-8 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 sm:px-8">
         <span className="text-sm text-muted-foreground" id="board-type-label">
           Tipo:
         </span>
@@ -385,7 +385,7 @@ export function CasesBoard({ board, tab, nowIso, memberName, solutionSchedules, 
       <h2 className="sr-only">{boardHeadline(totalOpen, type.name, tab)}</h2>
 
       {/* Columnas */}
-      <div className="min-h-0 flex-1 overflow-x-auto px-8 py-4">
+      <div className="min-h-0 flex-1 overflow-x-auto px-4 py-4 sm:px-8">
         <div className="flex h-full min-w-max items-stretch gap-3">
           {columns.map((col, index) => {
             const list = grouped.get(col.id) ?? [];

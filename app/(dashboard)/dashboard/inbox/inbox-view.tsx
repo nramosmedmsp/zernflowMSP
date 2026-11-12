@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MessageSquare, RefreshCw, User } from "lucide-react";
+import { ArrowLeft, MessageSquare, RefreshCw, User } from "lucide-react";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactPanel } from "@/components/inbox/contact-panel";
@@ -81,7 +81,8 @@ export function InboxView({
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
-  const [showContactPanel, setShowContactPanel] = useState(true);
+  // En pantallas de menos de 1280 px la ficha del contacto empieza cerrada: se abre con el botón y tapa el chat.
+  const [showContactPanel, setShowContactPanel] = useState(() => typeof window === "undefined" || window.innerWidth >= 1280);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; contactId?: string } | null>(null);
@@ -163,6 +164,15 @@ export function InboxView({
     },
     [syncUrl],
   );
+
+  // Solo en pantallas angostas: vuelve de un chat a la lista (una columna a la vez).
+  const handleBackToList = useCallback(() => {
+    setNotice(null);
+    setSelectedId(null);
+    setActiveCaseId(null);
+    lastParams.current = "|";
+    syncUrl(null, null);
+  }, [syncUrl]);
 
   // Clic en una notificación de Windows: abre ese chat.
   const openFromAlert = useCallback(
@@ -302,7 +312,7 @@ export function InboxView({
   return (
     <div className="flex h-full">
       {/* Left panel: Conversation list */}
-      <div className="w-80 flex-shrink-0">
+      <div className={cn("w-full flex-shrink-0 lg:block lg:w-80", selected ? "hidden" : "block")}>
         <ConversationList
           workspaceId={workspaceId}
           conversations={conversations}
@@ -323,7 +333,19 @@ export function InboxView({
       </div>
 
       {/* Center panel: Message thread */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className={cn("min-h-0 min-w-0 flex-1 flex-col lg:flex", selected ? "flex" : "hidden")}>
+        {selected && (
+          <div className="flex shrink-0 items-center border-b border-border px-2 py-1 lg:hidden">
+            <button
+              type="button"
+              onClick={handleBackToList}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Volver a la lista
+            </button>
+          </div>
+        )}
         {/* Toggle contact panel button */}
         {selected && !showContactPanel && (
           <div className="flex shrink-0 justify-end border-b border-border px-2 py-1">
@@ -448,6 +470,7 @@ export function InboxView({
 
       {/* Right panel: Contact info */}
       {showContactPanel && selected?.contact_id && (
+        <div className="max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-40 max-xl:max-w-full max-xl:shadow-xl">
         <ContactPanel
           key={selected.contact_id}
           contactId={selected.contact_id}
@@ -457,6 +480,7 @@ export function InboxView({
           members={selectableMembers}
           onContactChanged={() => void handleCaseChanged()}
         />
+        </div>
       )}
     </div>
   );

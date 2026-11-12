@@ -59,14 +59,14 @@ export default async function FlowsPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-8 py-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           <div>
             <h1 className="text-2xl font-bold">Flujos</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Crea flujos automáticos de chatbot para tus canales
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 [&_a]:whitespace-nowrap [&_button]:whitespace-nowrap">
             <ImportFlowButton />
             <Link
               href="/dashboard/flows/lab"

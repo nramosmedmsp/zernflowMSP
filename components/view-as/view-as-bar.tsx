@@ -393,13 +393,13 @@ export function ViewAsBar({ isRealOwner }: { isRealOwner: boolean }) {
       data-view-as-bar={viewing ? "active" : "idle"}
       className={cn(
         "relative z-40 flex shrink-0 items-center gap-3 border-b px-4",
-        viewing ? "h-10 border-amber-600/40 bg-amber-400 text-amber-950" : "h-9 border-border bg-muted/40",
+        viewing ? "min-h-10 flex-wrap gap-y-1 py-1 border-amber-600/40 bg-amber-400 text-amber-950" : "h-9 border-border bg-muted/40",
       )}
     >
       {viewing && view.info ? (
         <>
           <Eye className="h-4 w-4 shrink-0" />
-          <p className="min-w-0 flex-1 truncate text-sm">
+          <p className="min-w-0 flex-1 basis-[calc(100%-1.75rem)] text-xs leading-tight sm:basis-0 sm:truncate sm:text-sm">
             Estás viendo como <strong className="font-semibold">{view.info.name}</strong>
             {view.info.kind === "role" ? (
               <span> (vista de ejemplo)</span>
@@ -416,7 +416,7 @@ export function ViewAsBar({ isRealOwner }: { isRealOwner: boolean }) {
       ) : (
         <div className="flex-1" />
       )}
-      <div className="relative">
+      <div className="relative ml-auto">
         <button
           type="button"
           className={trigger}

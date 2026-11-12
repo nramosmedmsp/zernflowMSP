@@ -139,6 +139,12 @@ describe("layoutStepBar", () => {
     expect(l.modes.slice(2)).toEqual(["name", "name", "number", "number"]);
   });
 
+  it("en un celular angosto (ni plegado cabe el nombre del siguiente) el siguiente pasa a número y el actual conserva su nombre", () => {
+    const l = layoutStepBar({ ...base, available: 240 });
+    expect(l.folded).toBe(true);
+    expect(l.modes.slice(2)).toEqual(["name", "number", "number", "number"]);
+  });
+
   it("no pliega si plegar no ahorra espacio", () => {
     const one = [w("past", 90), w("current", 120), w("next", 110)];
     const l = layoutStepBar({ steps: one, gap, foldWidth: 70, available: 100 });
