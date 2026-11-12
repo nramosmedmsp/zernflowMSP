@@ -126,8 +126,8 @@ export function currentCommit(rootDir) {
 }
 
 const DOC_NOTES = {
-  "GUIA-FUNCIONAL.md": "Para personas no técnicas: cómo funciona el CRM (pantallas, gestiones, equipos, roles, reparto, configuración actual de la tienda, preguntas frecuentes).",
-  "GUIA-FLUJOS.md": "Para personas no técnicas: cómo crear y probar flujos (bots) del chat, los nodos, las plantillas, y cómo pedirle a Claude que diseñe un flujo.",
+  "GUIA-FUNCIONAL.md": "Para personas no técnicas: cómo funciona el CRM (pantallas, gestiones y su tablero, tarjeta de pasos, equipos, roles, «Ver como», reparto, configuración actual de la tienda, preguntas frecuentes).",
+  "GUIA-FLUJOS.md": "Para personas no técnicas: cómo crear y probar flujos (bots) del chat, los nodos, las plantillas, qué completar antes de usarlos con clientes reales, y cómo pedirle a Claude que diseñe un flujo.",
   "PLAN-CRM.md": "Plan general del CRM (versión 2): qué es, qué se construye, qué no y en qué orden. Empieza aquí.",
   "FASE-1-TECNICO.md": "Fase 1: bandeja con gestiones, equipos, permisos y reparto (cómo está hecho).",
   "FASE-2-TECNICO.md": "Fase 2: automatización, horarios, importación de contactos y preparación del gimnasio.",
@@ -156,10 +156,13 @@ Generado el ${date} · commit \`${commit}\` · ${fileCount} archivos.
 
 Lee primero estas dos guías, escritas en lenguaje simple y fieles al código actual:
 
-1. **\`docs/GUIA-FUNCIONAL.md\`**: cómo funciona el CRM (menús, Bandeja, gestiones, tipos de contacto, equipos y
-   roles, reparto automático, horarios, la configuración actual de la tienda, preguntas frecuentes y glosario).
+1. **\`docs/GUIA-FUNCIONAL.md\`**: cómo funciona el CRM (menús, Bandeja, la pantalla Gestiones con sus tres vistas,
+   la tarjeta de pasos con «Deshacer», varias gestiones por cliente, tipos de contacto, equipos y roles, editar
+   usuarios, «Ver como», reparto automático, horarios, la configuración actual de la tienda, preguntas frecuentes
+   y glosario).
 2. **\`docs/GUIA-FLUJOS.md\`**: cómo crear flujos del chat (bots): disparadores, todos los nodos, variables,
-   ventana de 24 h y plantillas, publicar, probar, los 10 flujos publicados, las 21 plantillas y un
+   ventana de 24 h y plantillas, el aviso de «nodos rotos», publicar, probar, los 10 flujos publicados, **qué
+   completar antes de usarlos con clientes reales**, las 21 plantillas y un
    **prompt listo para pedirle a Claude que diseñe un flujo**.
 
 Preguntas de ejemplo para hacerle a Claude con este ZIP cargado:
@@ -168,6 +171,7 @@ Preguntas de ejemplo para hacerle a Claude con este ZIP cargado:
 - «¿Qué pasa cuando un asesor cierra una venta como ganada?»
 - «¿Qué ve un asesor y qué ve un supervisor en la Bandeja?»
 - «¿Por qué un cliente no recibió el mensaje del bot pasadas 24 horas?»
+- «¿Qué tengo que cambiar en los flujos antes de usarlos con clientes reales?»
 - «Diséñame un flujo para responder cuando el cliente pregunte por envíos a provincia.»
 - «Diséñame un flujo que recuerde a los clientes que dejaron un pedido sin pagar.»
 - «Revisa los flujos de la tienda y dime qué palabras clave podrían chocar.»

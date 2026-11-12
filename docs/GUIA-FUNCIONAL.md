@@ -56,7 +56,7 @@ Lo que aparece depende del rol: **Dueño** y **Administrador** ven todo; los dem
 |---|---|---|
 | **Flujos** | Dueño, Administrador | Crear y editar los bots del chat (ver `GUIA-FLUJOS.md`). Incluye Plantillas, Laboratorio, Escenarios, Explorador y Mapa. |
 | **Bandeja** | Todos | Chatear con los clientes y trabajar cada gestión. Es la pantalla principal. |
-| **Gestiones** | Todos | Lista de todas las gestiones (no solo la del chat abierto) con filtros por tipo, etapa, estado y responsable. |
+| **Gestiones** | Todos | Todas las gestiones (no solo la del chat abierto) en tres vistas: **Por cliente**, **Por gestión** y **Tablero** (ver 2.2). |
 | **Contactos** | Todos | Directorio de clientes: buscar, filtrar, ver ficha e historial, importar un archivo CSV. |
 | **Difusiones** | Dueño, Administrador | Enviar un mensaje masivo a un grupo (segmento) de contactos. |
 | **Secuencias** | Dueño, Administrador | Mensajes automáticos escalonados en el tiempo («día 1, día 3, día 7»). |
@@ -71,7 +71,7 @@ Lo que aparece depende del rol: **Dueño** y **Administrador** ven todo; los dem
 | Sección | Quién | Qué se configura |
 |---|---|---|
 | **General** | Dueño, Admin | Nombre del espacio, claves (Zernio, IA) y **palabras clave globales** (por ejemplo «baja» para desuscribir). |
-| **Equipo** | Dueño, Admin | Crear usuarios, reenviar accesos, cambiar roles, desactivar miembros. |
+| **Equipo** | Dueño, Admin | Crear usuarios, enviar o copiar el acceso, quitar miembros. Solo el Dueño puede **Editar** a una persona (nombre, correo y rol; ver 5.5). |
 | **Correo** | Solo Dueño | Servidor de correo (SMTP) para invitaciones y recuperar contraseñas. |
 | **Gestiones** | Dueño, Admin | Tipos de gestión y, dentro de cada uno, siete pestañas: **General, Etapas, Categorías y motivos, Destino, Tiempos, Control de reclamos, Reglas**. |
 | **Tipos de contacto** | Dueño, Admin | Prospecto, Cliente, etc., y los **días sin comprar** para pasar a «Inactivo». |
@@ -79,10 +79,44 @@ Lo que aparece depende del rol: **Dueño** y **Administrador** ven todo; los dem
 | **Horarios** | Dueño, Admin | Horario de atención de la empresa y de cada equipo, y feriados. |
 | **Atención** | Dueño, Admin | Qué ve cada asesor, reparto sin equipos, devolver a la cola, gestiones atrasadas, respuesta fuera de horario y reasignación por espera. |
 | **Código de la app** | Dueño, Admin | Descarga este ZIP. |
+| **Registro de «Ver como»** | Solo Dueño | Quién miró la app como otra persona, a quién y por cuánto tiempo (ver 5.6). |
 | **Respuestas guardadas** | Todos | Textos listos que se insertan escribiendo `/`. |
 | **Plantillas de WhatsApp** | Todos (lectura) | Plantillas aprobadas por WhatsApp para escribir pasadas 24 horas. |
 | **Diccionario de la tienda** | Todos | Marcas y palabras que el corrector no debe marcar. Los asesores piden; los administradores aprueban. |
 | **Cambiar contraseña** | Todos | Tu contraseña. |
+
+### 2.2 La pantalla Gestiones: tres vistas
+
+Arriba de la lista hay cuatro pestañas: **Abiertas**, **Para hoy**, **Programadas** y **Cerradas**. A la derecha
+de las pestañas se elige la vista (la inicial es **Por cliente**). Los filtros (buscar por nombre del contacto,
+tipo, etapa, responsable, equipo y, en Cerradas, el periodo) se mantienen al cambiar de vista. El botón
+**Nueva gestión** crea una a mano.
+
+| Vista | Qué muestra | Para qué sirve |
+|---|---|---|
+| **Por cliente** (la inicial) | Una fila por cliente con todas sus gestiones activas dentro, como etiquetas «Postventa · Nueva · Luis», la más urgente primero. Si tiene más de una, aparece «2 gestiones». Con la flecha de la izquierda se abre el detalle de cada una (tipo, etapa, responsable, próximo contacto) y el botón **Abrir chat** (o **Ver contacto** si no hay chat). Las gestiones que no cumplen el filtro actual se ven atenuadas, solo como contexto. | Ver «todo lo de este cliente» de un vistazo. |
+| **Por gestión** | Una fila por gestión, con las columnas Contacto, Tipo, Etapa, Estado, Responsable, Equipo, Abierta, la fecha (Próximo contacto, Se activa o Cerrada, según la pestaña) y Espera. Al pulsar una fila se abre el chat. | Revisar y filtrar gestión por gestión. |
+| **Tablero** | Las gestiones **abiertas de un solo tipo**, una columna por etapa (numeradas) y, al final, la columna **Cerrar**. El tipo se elige con las etiquetas de arriba (cada una muestra cuántas gestiones tiene). Cada tarjeta muestra el cliente, su nota de próximo contacto o último mensaje, el responsable, el próximo contacto y el plazo si lo hay. Las más urgentes van arriba; cada columna muestra 20 y **Ver más (N)** trae el resto. | Ver el recorrido de las ventas o reclamos como un tablero y moverlos. |
+
+**El Tablero solo funciona en «Abiertas» y «Para hoy».** Las gestiones programadas y las cerradas no están en
+el tablero: si estás en el Tablero y pulsas «Programadas» o «Cerradas», la pantalla vuelve a **Por cliente**; y si
+eliges Tablero estando en una de esas pestañas, pasa a «Abiertas». En el Tablero no hay filtros de tipo ni de
+etapa (el tipo son las etiquetas y la etapa son las columnas).
+
+**Cómo mover una gestión en el Tablero**
+
+- **Arrastrar:** toma la tarjeta y suéltala en otra columna. Pasa de etapa al instante y sale el aviso
+  «Pasó a …» con el botón **Deshacer** (ver 3.3). También puedes soltarla en una zona de la columna **Cerrar**
+  (por ejemplo «Pagado» o «No compró»): se abre la ventana de cierre de siempre con ese resultado ya elegido,
+  y la gestión no se cierra hasta que confirmes. En los tipos protegidos (Postventa) la zona dice «pide
+  aprobación de un supervisor».
+- **Sin arrastrar:** cada tarjeta tiene el botón **Mover a…** (las dos flechas). Abre una lista con las mismas
+  columnas y los mismos cierres («Cerrar como …»), con los candados explicados.
+- **Quién puede mover:** quien tiene la gestión asignada, el supervisor de su equipo y los administradores. Si
+  no eres tú, sale «Solo quien tiene la gestión puede moverla». Con «Ver como» el tablero es solo lectura.
+- **Candados:** con el orden estricto (3.3) las columnas bloqueadas no aceptan la tarjeta y el aviso dice
+  «Orden estricto: pídele a un supervisor». Si la etapa actual pide algo antes de avanzar (categoría, nota o
+  solución), el aviso dice «Antes de ir a …: elige la categoría» y ofrece **Abrir en el chat** para hacerlo.
 
 ---
 
@@ -116,43 +150,96 @@ Además hay filtros de tipo de gestión, etapa, estado (abierta / programada / s
 «Todos»), responsable, canal y una búsqueda. Los chats que no tienen gestión abierta aparecen como «Sin
 gestión abierta».
 
+**Una línea por gestión.** Cada chat de la lista muestra, debajo del nombre, **una línea por cada gestión
+activa** del cliente, la más urgente primero: `● Postventa · Nueva · Luis` y, si hay plazo, un reloj con
+«vence en 3 h» (en rojo si ya es urgente). Así, un cliente con una venta y un reclamo a la vez se ve completo
+sin abrir el chat (ver 3.10).
+
 ### 3.2 La tarjeta de la gestión
 
 Arriba del chat verás la tarjeta con: el **tipo** de gestión («¿De qué trata?» si está sin clasificar), la
-**etapa** actual, el **responsable**, la **categoría**, el **próximo contacto** y un historial («Qué se hizo
-en esta gestión»). Desde ahí puedes:
+**barra de pasos** (3.3), el **responsable**, la **categoría**, el **próximo contacto** y un historial («Qué se
+hizo en esta gestión»). Si el cliente tiene dos o más gestiones activas, la tarjeta tiene una pestaña por
+gestión (ver 3.10). Desde ahí puedes:
 
 - **Cambiar el tipo** («Cambiar tipo a…»). Pasa a la primera etapa del tipo nuevo y puede enviarse a otro
   equipo si ese tipo tiene destino distinto. En tipos protegidos (Postventa) solo lo cambia un supervisor.
 - **Tomar la gestión** («Quedarte con esta gestión») si estaba sin asignar y tu rol lo permite.
-- **Asignar a…**, transferir, o **devolver a la cola** (si la empresa lo permite a los asesores).
+- **Asignar a…**, **Transferir a equipo**, o **Devolver a la cola** (si la empresa lo permite a los asesores).
 - **Programar el próximo contacto** («Cuándo volver a escribirle al cliente»): fecha y nota. Ese día la
   gestión aparece en «Seguimiento hoy».
-- **Cerrar** la gestión (ver 3.4).
+- **Mover de paso** y **cerrar** la gestión (ver 3.3 y 3.4).
 
-### 3.3 La Guía de la gestión («Pasos de la gestión»)
+### 3.3 La tarjeta de la gestión: pasos, botón principal y «Para avanzar»
 
-Cada etapa puede tener un **texto guía** (qué hacer en esa etapa) y **botones de siguiente paso**. Así, un
-asesor nuevo no tiene que memorizar el proceso: lee la guía y pulsa «Siguiente paso» o «Cerrar como…».
+La tarjeta guía al asesor para que no tenga que memorizar el proceso. De arriba hacia abajo:
 
-- Si no se configuró nada, los botones son: la siguiente etapa abierta y las etapas finales (ganada, resuelta,
-  perdida).
-- Un paso puede ser una **ayuda** que no cambia de etapa: «Recordarle mañana» (fija el próximo contacto).
-- Una etapa puede **exigir algo antes de avanzar**: «Que elija la categoría», «Que registre la solución» o
-  «Que deje una nota».
-- **Orden estricto (opcional, por tipo de gestión).** Si está activado, un asesor solo puede ir a los pasos
-  configurados de su etapa actual (o volver un paso). Un supervisor o administrador puede «Saltar a otra
-  etapa». El orden estricto solo afecta a lo que se hace con la interfaz: los bots, las reglas y las tareas
-  automáticas pueden mover la etapa igual.
+**1. La barra de pasos (una sola línea).** Muestra todas las etapas abiertas del tipo en orden, con el título
+«Paso 2 de 4». Los pasos ya hechos van con una marca ✓, el paso actual con su número y nombre resaltado, y el
+siguiente siempre con su nombre; si no cabe todo en el ancho, los demás pasos se acortan a su número y los
+hechos se juntan en «✓ 3 hechos». **Cada paso es un botón: se toca para moverse.** Al tocarlo la tarjeta
+pregunta en el mismo sitio «¿Mover a Asesorando?» con el detalle («Avanzas 1 paso» o «Vuelves 2 pasos») y los
+botones **Mover** y **Cancelar**; recién al pulsar Mover cambia la etapa. Al final de la barra está el botón
+**Cerrar** (ver 3.4). El texto a la derecha de la barra dice qué se puede hacer: «Toca un paso para moverte»,
+«Orden estricto», «Supervisor: puedes saltar a cualquier paso» o «Solo quien tiene la gestión puede moverla».
 
-Todo esto se edita en Configuración → Gestiones → [tipo] → **Etapas**.
+**2. «Ahora».** La guía de la etapa actual en una frase (por ejemplo «Saluda y pregunta qué producto busca»).
+
+**3. «Para avanzar».** Si la etapa pide algo antes de salir de ella, aparece un recuadro con una casilla:
+
+| Lo que pide la etapa | Casilla | Cómo se cumple |
+|---|---|---|
+| Categoría | «Elige la categoría» | Se pulsa una de las categorías del tipo (queda «Categoría: …»). |
+| Nota | «Deja una nota» | Se escribe en «Qué hiciste o acordaste en esta etapa» y se pulsa **Guardar nota**. |
+| Solución (Postventa) | «Registra la solución» | Botón **Registrar solución** (fecha de compromiso con el cliente; luego se puede **Actualizar la solución**). |
+
+Mientras falte eso, **no se puede avanzar** a un paso siguiente: el botón principal queda apagado con la letra
+pequeña «primero elige la categoría» y, si se toca un paso de la barra, la tarjeta avisa «Antes de ir a
+Esperando pago: elige la categoría». Volver atrás sí se puede. Los supervisores y administradores quedan
+exentos. Si la etapa pide la solución, el botón principal es **Registrar solución** («luego podrás pasar de
+paso») y los demás destinos aparecen con candado bajo «Después podrás pasar a:».
+
+**4. El botón principal, con su destino.** Debajo van los botones de la guía. Cada uno dice la acción y, en
+letra pequeña, **a dónde lleva**: **Pasar a Asesorando** («va al paso 2 de 4»), **Cerrar como Pagado** («cierra
+la gestión») o **Volver a …**. Si la empresa les puso un texto propio, se ve ese texto y debajo «pasa a …» o
+«cierra como …». El botón destacado es el siguiente paso natural. Los cierres «negativos» (por ejemplo «No
+compró») van aparte, en rojo, a la derecha. Una **ayuda** como **Recordarle mañana** no cambia el paso: solo
+fija el próximo contacto («no cambia el paso»).
+
+**5. Orden estricto con candados (opcional, por tipo de gestión).** Si está activado, un asesor solo puede ir
+a los pasos siguientes configurados de su etapa actual o **volver un paso** (tocando el paso anterior en la
+barra). Los demás pasos se ven con un **candado** y al tocarlos sale «Orden estricto: pídele a un supervisor».
+Un supervisor o administrador **puede saltar a cualquier paso**: el salto queda anotado en el historial. El
+orden estricto solo afecta a lo que se hace con la pantalla (tarjeta y Tablero): los bots, las reglas y las
+tareas automáticas pueden mover la etapa igual. Sin orden estricto, cualquiera que tenga la gestión puede
+tocar cualquier paso.
+
+**6. «Deshacer» (10 segundos).** Después de mover de paso aparece una franja verde «Pasó a Asesorando» con el
+botón **Deshacer** y una barrita que se va acortando: **tienes 10 segundos**. Deshacer devuelve la gestión a la
+etapa anterior, y solo funciona si:
+- lo pide **la misma persona que movió** la gestión (si no: «Solo quien movió la gestión puede deshacer el
+  cambio»);
+- no pasó el tiempo («Ya pasó el tiempo para deshacer este cambio»);
+- nadie más cambió la gestión después, y tú tampoco hiciste otra cosa (cualquier otra acción cierra la franja).
+
+**Lo que Deshacer NO revierte:** solo devuelve la etapa. Si al entrar al paso se activó un flujo automático
+(que pudo enviarle mensajes al cliente), una regla que cambió el tipo del contacto o una regla que programó
+otra gestión, eso **ya pasó y no se deshace**: la misma franja lo avisa en letra pequeña («Deshacer solo devuelve
+la etapa: eso no se revierte») y, al deshacer, tampoco se vuelven a enviar mensajes. **Cerrar la gestión no
+tiene Deshacer** (para eso se puede reabrir si el cliente vuelve a escribir, ver 3.4). El mismo aviso con
+**Deshacer** aparece al mover en el Tablero.
+
+Todo el contenido (guía, pasos, qué exige cada etapa, orden estricto) se edita en Configuración → Gestiones →
+[tipo] → **Etapas**.
 
 ### 3.4 Cerrar una gestión
 
-Al cerrar eliges el resultado: **ganada** (p. ej. «Pagado»), **perdida** («No compró») o **resuelta**. Según el
-tipo te pide una **categoría** y/o un **motivo** (por qué se perdió o cómo se resolvió). El panel muestra «Lo
-que va a pasar»: por ejemplo, que el contacto pasará a Cliente y que se programará una Recompra en 25 días,
-con la opción de **cambiar la fecha** para ese cliente.
+El botón **Cerrar** de la barra de pasos (o un botón «Cerrar como …») abre el cierre dentro de la misma
+tarjeta. Eliges el **resultado**: **ganada** (p. ej. «Pagado»), **perdida** («No compró») o **resuelta**. Según
+el tipo te pide un **motivo** (por qué se perdió o cómo se resolvió), una **categoría** y/o una nota («Qué se
+hizo»). El panel muestra «Lo que va a pasar»: por ejemplo, que el contacto pasará a Cliente y que se programará
+una Recompra en 25 días, con la opción de **cambiar la fecha** para ese cliente. Se confirma con **Confirmar**
+(o **Pedir aprobación** en los cierres que necesitan a un supervisor, ver 3.9).
 
 Si el cliente vuelve a escribir poco después de cerrar, la **misma gestión se reabre** (por defecto dentro de
 24 horas; en Postventa son 7 días).
@@ -209,6 +296,31 @@ quede sin atender:
   presentar un reclamo; la categoría «Reclamo» es de prioridad alta.
 - Se configura en Configuración → Gestiones → Postventa → **Control de reclamos** (plazo y días de reapertura).
 
+### 3.10 Varias gestiones de un mismo cliente
+
+Un cliente puede tener **más de una gestión activa a la vez** (por ejemplo, una Venta y un reclamo de
+Postventa). Se nota en tres sitios:
+
+- **Bandeja, lista de chats:** una línea por gestión debajo del nombre, la más urgente primero (ver 3.1).
+- **Chat, tarjeta de la gestión:** con 2 o más gestiones activas aparecen **pestañas, una por gestión**
+  («Gestiones de este cliente»), cada una con su tipo, su etapa y su plazo. Cada pestaña tiene su propia barra de
+  pasos, su guía y sus acciones: lo que haces en una no toca la otra. Junto a las pestañas hay un menú **Ver
+  cerradas (N)** para abrir una gestión ya cerrada (se ve como pestaña «Cerrada: …», sin acciones) y el botón
+  **Nueva gestión**.
+- **Gestiones, vista Por cliente:** una fila por cliente con todas sus gestiones («2 gestiones»).
+
+**Cuándo se puede abrir otra a mano («Nueva gestión»):**
+
+| Situación | Qué pasa |
+|---|---|
+| Otro tipo distinto | Pide confirmar: «Este contacto ya tiene otra gestión abierta. Confirma que quieres abrir una en paralelo.» |
+| El mismo tipo, y el tipo es **comercial** (tiene etapas finales «ganada» o «perdida», como Venta o Recompra, y no es protegido) | Pregunta «Este cliente ya tiene una venta abierta. ¿Abrir otra?» y se abre si confirmas. |
+| El mismo tipo, y es protegido (Postventa) o solo se «resuelve» (Consulta) | No se puede: «Este contacto ya tiene una gestión abierta de ese tipo. Ve a esa gestión en vez de abrir otra igual.» |
+| **Sin clasificar** y ya hay una gestión abierta o programada | No se puede ni confirmando: «Ya tiene una gestión abierta: clasifícala en vez de crear otra.» |
+
+Además, la base de datos solo admite **una gestión «Sin clasificar» activa por cliente**: si dos mensajes
+llegan casi a la vez, el segundo reutiliza la que ya se abrió en vez de crear otra.
+
 ---
 
 ## 4. Conceptos clave
@@ -218,7 +330,7 @@ quede sin atender:
 | | Chat (conversación) | Gestión |
 |---|---|---|
 | Qué es | El hilo de mensajes con un contacto en un canal. | Un asunto concreto con inicio y fin. |
-| Cuántos | Uno por canal y contacto. Dura para siempre. | Muchas a lo largo del tiempo; por defecto **una abierta a la vez** por contacto. |
+| Cuántos | Uno por canal y contacto. Dura para siempre. | Muchas a lo largo del tiempo. Un cliente puede tener **varias abiertas a la vez** si son de distinto tipo (o del mismo, en tipos comerciales como Venta); ver 3.10. |
 | Tiene | Mensajes, bot activo/pausado. | Tipo, etapa, categoría, responsable, equipo, próximo contacto, resultado. |
 | Se cierra | No. | Sí: ganada, perdida o resuelta. |
 
@@ -286,8 +398,8 @@ Hay dos niveles fijos (no se pueden crear roles a medida):
 
 | Rol | Puede |
 |---|---|
-| **Dueño** | Todo, incluidas las claves (Zernio, IA), el correo, los canales y los datos de la empresa. |
-| **Administrador** | Todo lo operativo: ver todos los chats, configurar gestiones, equipos, reparto, plantillas, flujos, difusiones, secuencias. No toca claves ni el correo. |
+| **Dueño** | Todo, incluidas las claves (Zernio, IA), el correo, los canales y los datos de la empresa. Además es el único que puede **editar usuarios** (nombre, correo y rol), nombrar a otros Dueños, quitar a un Administrador o a otro Dueño, y usar **«Ver como»**. **Puede haber varios Dueños, pero siempre debe quedar al menos uno**: el último Dueño no puede dejar de serlo ni ser quitado (primero hay que nombrar a otro). |
+| **Administrador** | Todo lo operativo: ver todos los chats, configurar gestiones, equipos, reparto, plantillas, flujos, difusiones, secuencias; crear usuarios nuevos (como Miembro o Administrador) y enviarles su acceso. No toca claves ni el correo, no edita usuarios existentes y no nombra Dueños. |
 | **Miembro** | Lo que le den sus roles de equipo. Sin equipos, actúa como asesor de toda la empresa. |
 
 **Dentro de un equipo** (sede, área o turno)
@@ -317,7 +429,8 @@ se puede ver, no se puede ver ni por error.
 | Responder | Sí | Su equipo | Sus gestiones |
 | Tomar una gestión sin asignar | Sí | Su equipo | Solo con la opción 2 de 5.2 |
 | Asignar o transferir | A cualquiera | Dentro de su equipo | Devolver a la cola (si está permitido) |
-| Cambiar etapa, etiquetas, notas, próximo contacto | Sí | Su equipo | Sus gestiones |
+| Mover de paso (barra de pasos o Tablero), etiquetas, notas, próximo contacto | Sí | Su equipo | Sus gestiones (con el orden estricto, solo los pasos permitidos) |
+| Editar usuarios del equipo, nombrar Dueños, «Ver como» | Solo Dueño | No | No |
 | Eliminar contactos | Sí | No | No |
 | Exportar datos | Sí | Su equipo | No |
 | Difusiones, Secuencias, Flujos, Canales | Sí | No | No |
@@ -331,6 +444,58 @@ de gestión atiende cada miembro** (por defecto todos), un **modo de reparto**, 
 (opcional) y la casilla «el supervisor no recibe chats». Uno puede ser el **equipo por defecto**, adonde
 caen los contactos sin sede. Una persona puede estar en varios equipos. Todo es opcional: sin equipos la
 empresa entera actúa como un solo equipo.
+
+### 5.5 Editar un usuario del equipo
+
+Configuración → **Equipo** lista a las personas con su rol. **Solo un Dueño** ve el botón **Editar** en cada
+fila; abre la ventana **«Editar usuario»** con tres datos:
+
+| Dato | Detalle |
+|---|---|
+| **Nombre** | El nombre con el que se ve a la persona en toda la app. |
+| **Correo** | Es el correo con el que inicia sesión. Si lo cambias, entrará con el nuevo y se le envía a esa dirección un enlace de acceso (si el correo de la app está configurado; si no, se avisa). No puede ser un correo que ya tenga otra cuenta. |
+| **Rol** | **Miembro**, **Administrador** o **Dueño**. Al elegir Dueño pide confirmar con «Hacer Dueño», porque ese rol ve y cambia todo, incluidas las claves. |
+
+Reglas que conviene saber:
+
+- **Siempre queda al menos un Dueño.** Si eres el único, el rol Dueño aparece bloqueado con el aviso «Eres el
+  único Dueño: no puedes dejar de serlo ni ser eliminado. Primero nombra a otro Dueño.»
+- Quien también pertenece a otro espacio de trabajo no puede subir a Administrador ni a Dueño aquí.
+- Debajo del formulario se ven los **equipos** de la persona y el enlace «Cambiar en Equipos»: el rol de
+  supervisor o asesor se cambia en Configuración → Equipos, no aquí.
+- Cada cambio de nombre, correo o rol queda anotado en el historial de configuración.
+
+**Volver a agregar a alguien que se quitó.** «Crear usuario» con el correo de una cuenta que ya existía (por
+ejemplo, una persona a la que se quitó del equipo) no crea una cuenta nueva: la **vuelve a agregar** con el rol
+elegido y **le envía un enlace para restablecer su contraseña**, porque la anterior ya no se considera segura
+(si nunca había activado su cuenta, recibe el correo de activación). Si el correo de la app no está configurado,
+la fila avisa y el enlace se envía después desde ella con «Enviar enlace para restablecer contraseña». No se
+puede agregar así a quien es Dueño o Administrador de otro espacio.
+
+### 5.6 «Ver como»: mirar la app con los ojos de otro
+
+**Solo los Dueños.** Sirve para comprobar qué ve y qué puede hacer un administrador, un supervisor, un asesor o
+una persona concreta, sin pedirle su pantalla. En la franja de arriba, a la derecha, el Dueño ve
+**«Vista: Dueño (tú)»**; al pulsarlo se abre el selector **«Ver como…»**:
+
+- **Por rol:** Administrador, o Supervisor / Asesor de un equipo. Está siempre disponible, aunque todavía nadie
+  tenga ese rol.
+- **Por persona:** una lista con buscador (por nombre, rol o equipo).
+
+Mientras dura la vista:
+
+- Una franja ámbar dice a quién estás mirando y **«Solo lectura»**. Los botones de la franja son **Cambiar
+  vista** y **Salir**.
+- **Es solo lectura:** no se puede cambiar nada (mover pasos, enviar mensajes, configurar...). Cualquier intento
+  avisa «Solo lectura…» y no se guarda.
+- **No deja huella en la otra persona:** no marca chats como leídos ni cambia su estado Disponible/Ausente.
+  Sí queda un registro de **quién miró**, para que se pueda saber después.
+- **Dura 30 minutos.** Al terminar aparece la capa «La vista terminó» («Pasaron 30 minutos y «Ver como» se
+  cerró. No se guardó ningún cambio») para volver a tu vista.
+- Quien ve la vista no puede abrir Configuración → Registro de «Ver como», ni descargar el código.
+
+El **registro** está en Configuración → **Registro de «Ver como»** (solo Dueño): Fecha y hora, Quién miró, A
+quién miró, Qué abrió y Duración, con filtros por persona y por periodo.
 
 ## 6. Cómo se reparte un chat nuevo
 
@@ -406,8 +571,9 @@ programadas.
 2. Abre un chat: lee la tarjeta y la **guía** de la etapa («Saluda y pregunta qué producto busca»).
 3. Responde (con `/` para respuestas guardadas; revisa lo que marca el corrector). Si pasaron 24 h usa
    **Usar plantilla**.
-4. Avanza la etapa con los botones de la guía mientras la venta progresa («Asesorando» -> «Pedido o enlace de
-   pago enviado»). Si el bot tiene un flujo en esa etapa, enviará solo los datos de pago.
+4. Avanza la etapa con el botón principal de la tarjeta («Pasar a …») o tocando un paso de la barra mientras la
+   venta progresa («Asesorando» -> «Pedido o enlace de pago enviado»). Si te equivocas, tienes 10 segundos
+   para pulsar **Deshacer**. Si el bot tiene un flujo en esa etapa, enviará solo los datos de pago.
 5. Si el cliente no puede seguir hoy: **próximo contacto** con fecha y nota.
 6. Cierra la venta como **Pagado** (elige motivo si lo pide). Revisa la fecha de recompra.
 7. Al final del día: **Seguimiento hoy** muestra a quién escribirle de nuevo.
@@ -424,7 +590,7 @@ programadas.
 
 ### 8.3 Administrador
 
-Mantiene la configuración (tipos, etapas, guías, reglas, equipos, horarios), crea usuarios, ajusta los
+Mantiene la configuración (tipos, etapas, guías, reglas, equipos, horarios), crea usuarios (editarlos y nombrar Dueños es solo del Dueño), ajusta los
 flujos del bot con ayuda de las Métricas y la Analítica del bot, y aprueba palabras del diccionario.
 
 ---
@@ -447,7 +613,7 @@ Foto tomada de la base de datos de Muscle Shop (sin datos personales). Parte de 
 | **Consulta** | Al responsable del contacto | No | No | — |
 | **Recompra** | Al responsable del contacto | **Sí** | Sí | — |
 
-Ningún tipo tiene hoy orden estricto activado ni objetivos de tiempo (primera respuesta/resolución).
+Cuando se tomó la foto, ningún tipo tenía orden estricto activado ni objetivos de tiempo (primera respuesta/resolución); se activan por tipo en Configuración → Gestiones.
 
 ### 9.3 Etapas y textos de la guía
 
@@ -511,8 +677,10 @@ sección 10 de [`GUIA-FLUJOS.md`](GUIA-FLUJOS.md).
 
 ## 10. Preguntas frecuentes
 
-**¿Cuántas gestiones puede tener un cliente?** Muchas a lo largo del tiempo, normalmente una abierta a la
-vez. Se puede abrir una segunda en paralelo y el chat avisa cuál está activa.
+**¿Cuántas gestiones puede tener un cliente?** Muchas a lo largo del tiempo, y varias abiertas a la vez si son
+de distinto tipo (por ejemplo una Venta y una Postventa). El chat muestra una pestaña por gestión y la Bandeja
+una línea por gestión (ver 3.10). Lo que no se puede es tener dos «Sin clasificar» abiertas: se clasifica la que
+ya existe.
 
 **Un cliente escribió y no aparece en «Míos».** Aún no se le asignó, o se asignó a otra persona. Pide a un
 supervisor mirar **Sin asignar**, o revisa que tu estado no sea «Ausente».
@@ -559,10 +727,13 @@ los bots se prueban en el Laboratorio sin enviar nada (ver guía de flujos).
 | **Fecha clave** | Fecha importante del contacto (p. ej. vencimiento). |
 | **Flujo** | Bot: diagrama de pasos automáticos. |
 | **Gestión** | Un asunto con inicio y fin (venta, reclamo...). |
-| **Guía de la gestión** | Texto y botones de siguiente paso por etapa. |
+| **Guía de la gestión** | Texto ("Ahora"), "Para avanzar" y botones de siguiente paso por etapa. |
 | **Motivo** | Razón de un cierre. |
 | **Nodo** | Un paso dentro de un flujo. |
-| **Orden estricto** | Obliga al asesor a seguir los pasos configurados. |
+| **Orden estricto** | Obliga al asesor a seguir los pasos configurados (candados en la barra de pasos); un supervisor puede saltar. |
+| **Ver como** | Vista de solo lectura que permite al Dueño ver la app como otro rol o persona, 30 minutos. |
+| **Barra de pasos** | Línea de la tarjeta de gestión con todas las etapas; se toca un paso para moverse. |
+| **Nodo roto** | Nodo de un flujo que usa una etapa, tipo, equipo o tipo de contacto archivado o borrado. |
 | **Plantilla de WhatsApp** | Mensaje pre-aprobado por WhatsApp para escribir fuera de las 24 h. |
 | **Plantilla de negocio** | Configuración inicial (E-commerce, Gimnasio, General, En blanco). |
 | **Postback** | Lo que envía un botón al pulsarlo. |
