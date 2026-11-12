@@ -22,7 +22,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export type PrivacyActionResult<T extends object = object> = ({ ok: true } & T) | { error: string };
 
-export const FILES_PENDING_MESSAGE =
+const FILES_PENDING_MESSAGE =
   "Los datos del cliente ya se eliminaron, pero algunos archivos no se pudieron borrar todavía. Usa «Reintentar borrar archivos» en la ficha del cliente.";
 
 async function adminContext(): Promise<

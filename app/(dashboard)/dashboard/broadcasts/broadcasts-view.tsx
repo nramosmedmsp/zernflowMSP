@@ -311,11 +311,11 @@ export function BroadcastsView({
                 <button
                   key={broadcast.id}
                   onClick={() => setSelectedId(broadcast.id)}
-                  className="flex w-full items-center gap-6 px-8 py-4 text-left transition-colors hover:bg-accent/50"
+                  className="flex w-full flex-col items-start gap-3 px-4 py-4 text-left transition-colors hover:bg-accent/50 sm:flex-row sm:items-center sm:gap-6 sm:px-8"
                 >
                   {/* Estado y nombre */}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-3">
+                  <div className="w-full min-w-0 sm:w-auto sm:flex-1">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                       <h3 className="truncate text-sm font-medium">
                         {broadcast.name}
                       </h3>
@@ -334,7 +334,7 @@ export function BroadcastsView({
                         {status.label}
                       </span>
                     </div>
-                    <div className="mt-1 flex items-center gap-4 text-xs text-muted-foreground">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <Calendar className="h-3 w-3" />
                         {broadcast.scheduled_for
@@ -361,14 +361,6 @@ export function BroadcastsView({
                       </p>
                       <p className="text-[10px] uppercase text-muted-foreground">
                         Enviados
-                      </p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-lg font-semibold text-blue-600">
-                        {formatNumber(broadcast.delivered)}
-                      </p>
-                      <p className="text-[10px] uppercase text-muted-foreground">
-                        Entregados
                       </p>
                     </div>
                     <div className="text-center">
@@ -1071,8 +1063,8 @@ function BroadcastDetail({
                 />
                 {isDraft && (
                   <p className="text-xs text-muted-foreground">
-                    La plantilla le llega a cualquier contacto con teléfono de WhatsApp, aunque nunca haya
-                    escrito.
+                    La plantilla le llega a cualquier contacto que aceptó recibir publicidad y tiene teléfono de
+                    WhatsApp, aunque nunca haya escrito.
                   </p>
                 )}
               </>
@@ -1080,7 +1072,7 @@ function BroadcastDetail({
             {isDraft && (
               <p className="text-xs text-muted-foreground">
                 Se enviará a los contactos que cumplan tu filtro de segmento
-                {broadcast.segment_filter ? "" : " (todos los contactos suscritos)"}.
+                {broadcast.segment_filter ? "" : " (todos los que aceptaron recibir publicidad)"}.
               </p>
             )}
           </div>

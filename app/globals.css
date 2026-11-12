@@ -156,7 +156,7 @@
   to { opacity: 1; transform: none; }
 }
 .stagger-list > * {
-  animation: list-in 220ms ease-out both;
+  animation: list-in 220ms ease-out backwards;
 }
 .stagger-list > *:nth-child(2) { animation-delay: 30ms; }
 .stagger-list > *:nth-child(3) { animation-delay: 60ms; }

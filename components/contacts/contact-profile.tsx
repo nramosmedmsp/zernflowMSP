@@ -90,6 +90,15 @@ export function ContactProfile(props: ContactProfileProps) {
   const [tags, setTags] = useState<TagItem[]>(props.tags);
   const [states, setStates] = useState<Partial<Record<FieldKey, FieldState>>>({});
 
+  // Si el teléfono cambia desde fuera de este campo (corregir datos, eliminar los datos del
+  // cliente), el campo muestra el valor nuevo y no el que se quedó en pantalla.
+  const [seenPhone, setSeenPhone] = useState(props.phone ?? "");
+  if ((props.phone ?? "") !== seenPhone) {
+    setSeenPhone(props.phone ?? "");
+    setPhone(props.phone ?? "");
+    setSavedPhone(props.phone ?? "");
+  }
+
   function mark(field: FieldKey, state: FieldState | undefined) {
     setStates((s) => ({ ...s, [field]: state }));
   }

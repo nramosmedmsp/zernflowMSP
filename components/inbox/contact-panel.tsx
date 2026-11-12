@@ -373,7 +373,12 @@ export function ContactPanel({
   const availableTags = workspaceTags.filter((t) => !details?.tags.some((x) => x.id === t.id));
 
   return (
-    <div className="animate-slide-in-right flex h-full w-80 flex-col border-l border-border bg-background">
+    // Sin relleno "forwards": si la animación se queda aplicada, el panel actúa
+    // como contenedor de los diálogos (Modal usa "fixed") y salen metidos en el panel.
+    <div
+      className="animate-slide-in-right flex h-full w-80 flex-col border-l border-border bg-background"
+      style={{ animationFillMode: "backwards" }}
+    >
       {/* Header */}
       <div className="flex h-14 items-center justify-between border-b border-border px-4">
         <h3 className="text-sm font-semibold">Información del contacto</h3>
