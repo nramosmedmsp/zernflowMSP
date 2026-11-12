@@ -626,7 +626,9 @@ export function MessageThread({
           {isDemo && canSimulate && !erased && (
             <button
               onClick={() => setSimulateOpen(true)}
-              className="inline-flex items-center gap-1 rounded-md border border-violet-200 px-2 py-1 text-[11px] font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-900/60 dark:text-violet-300 dark:hover:bg-violet-950/40"
+              disabled={viewing}
+              title={viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined}
+              className="inline-flex items-center gap-1 rounded-md border border-violet-200 px-2 py-1 text-[11px] font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-900/60 dark:text-violet-300 dark:hover:bg-violet-950/40"
             >
               <FlaskConical className="h-3 w-3" />
               Simular mensaje del cliente
@@ -635,14 +637,16 @@ export function MessageThread({
           {canToggleBot ? (
             <button
               onClick={() => void toggleBotPaused()}
-              disabled={botBusy}
+              disabled={botBusy || viewing}
               title={
-                botPaused
-                  ? "El bot no responde en este chat. Reanúdalo para que vuelva a atender los mensajes del cliente."
-                  : "Pausa el bot en este chat para que no responda mientras atiendes."
+                viewing
+                  ? VIEW_AS_UNAVAILABLE_NOTE
+                  : botPaused
+                    ? "El bot no responde en este chat. Reanúdalo para que vuelva a atender los mensajes del cliente."
+                    : "Pausa el bot en este chat para que no responda mientras atiendes."
               }
               className={cn(
-                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50",
+                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                 botPaused
                   ? "border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-900/60 dark:bg-orange-950/30 dark:text-orange-300"
                   : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -660,6 +664,14 @@ export function MessageThread({
           )}
         </div>
       </div>
+      {viewing && !erased && ((isDemo && canSimulate) || canToggleBot) && (
+        <p
+          data-testid="view-as-unavailable-note-header"
+          className="shrink-0 border-b border-border px-4 py-1 text-right text-[11px] text-muted-foreground"
+        >
+          {VIEW_AS_UNAVAILABLE_NOTE}
+        </p>
+      )}
 
       {contactType?.ask && !erased && (
         <ContactTypeQuestion

@@ -25,6 +25,8 @@ import { boardHeadline, boardSupportsTab } from "@/components/cases/board-model"
 import { CasesByClient } from "@/components/cases/cases-by-client";
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
 import { startRouteProgress } from "@/components/ui/route-progress";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 import type { BoardResult, CaseListRow, ClientGroup } from "@/app/(dashboard)/dashboard/cases/load-cases";
 import { claimBadge, solutionScheduleFor, type SolutionSchedules } from "@/lib/cases/protection";
 import type { CaseStatus } from "@/lib/types/database";
@@ -107,6 +109,7 @@ export function CasesView(props: CasesViewProps) {
     [me.userId, me.isAdmin, me.supervisedTeamIds],
   );
   const router = useRouter();
+  const viewing = useViewAs().active;
   const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState(params.q);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -179,13 +182,22 @@ export function CasesView(props: CasesViewProps) {
               </p>
             )}
           </div>
-          <button
-            onClick={() => setDialogOpen(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
-          >
-            <Plus className="h-4 w-4" />
-            Nueva gestión
-          </button>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <button
+              onClick={() => setDialogOpen(true)}
+              disabled={viewing}
+              title={viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" />
+              Nueva gestión
+            </button>
+            {viewing && (
+              <p data-testid="view-as-unavailable-note-cases" className="text-xs text-muted-foreground">
+                {VIEW_AS_UNAVAILABLE_NOTE}
+              </p>
+            )}
+          </div>
         </div>
 
         {notice && (

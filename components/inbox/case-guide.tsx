@@ -37,6 +37,7 @@ import {
 } from "@/lib/actions/cases";
 import { UNDO_WINDOW_MS, undoneMessage } from "@/lib/cases/undo";
 import { cn } from "@/lib/utils";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 import { useViewAs } from "@/components/view-as/view-as-context";
 import { caseGuide, closeMenuItems, closeOptions, nextContactOptions, solutionBanner, type SolutionTone } from "./case-card-model";
 import { CloseCasePanel } from "./close-case-panel";
@@ -102,6 +103,7 @@ function ExitButton({
   disabled,
   locked,
   hint,
+  title,
   onClick,
 }: {
   view: ExitView;
@@ -110,6 +112,7 @@ function ExitButton({
   locked?: boolean;
   /** Reemplaza la letra pequeña (p. ej. «primero elige la categoría»). */
   hint?: string | null;
+  title?: string;
   onClick: () => void;
 }) {
   const sub = hint ?? view.sub;
@@ -119,6 +122,7 @@ function ExitButton({
         type="button"
         onClick={onClick}
         disabled={disabled}
+        title={title}
         className="inline-flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:text-red-300 dark:hover:bg-red-950/30"
       >
         <X className="h-3.5 w-3.5" aria-hidden />
@@ -132,6 +136,7 @@ function ExitButton({
         type="button"
         onClick={onClick}
         disabled={disabled}
+        title={title}
         className="inline-flex flex-col items-start rounded-lg border border-dashed border-border bg-transparent px-2.5 py-1.5 text-left hover:bg-accent disabled:opacity-60"
       >
         <span className="inline-flex items-center gap-1.5 text-sm font-medium">
@@ -148,6 +153,7 @@ function ExitButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cn(
         "inline-flex flex-col items-start rounded-lg px-3 py-1.5 text-left transition-opacity disabled:cursor-not-allowed",
         primary
@@ -186,6 +192,8 @@ export function CaseGuidePanel({
   notify: (message: string, problem?: boolean) => void;
 }) {
   const viewAs = useViewAs();
+  const viewing = viewAs.active;
+  const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
   const [panel, setPanel] = useState<Panel>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [undo, setUndo] = useState<UndoNotice | null>(null);
@@ -197,7 +205,7 @@ export function CaseGuidePanel({
   const perms = active.permissions;
   const guide = caseGuide(caseType, active.stageId);
   const canSupervise = active.canSupervise;
-  const canEdit = perms.canEdit && busy === null;
+  const canEdit = perms.canEdit && busy === null && !viewing;
   const categories = caseType.categories.filter((c) => !c.archived || c.id === active.categoryId);
   const contactTypeName = (id: string | null) => data.contactTypes.find((t) => t.id === id)?.name ?? null;
   const request = active.closeRequest;
@@ -354,14 +362,16 @@ export function CaseGuidePanel({
         hint={stepHint({ canEdit: perms.canEdit, strictLocked, canSupervise, strictOrder: caseType.strictOrder })}
         hintTone={strictLocked && perms.canEdit ? "lock" : "muted"}
         pickedId={confirmStep?.id ?? null}
-        disabled={busy !== null}
+        disabled={busy !== null || viewing}
+        readOnlyTitle={viewTitle}
         onPick={pickStep}
         trailing={
           perms.canClose ? (
             <button
               type="button"
               onClick={() => (panel?.kind === "close" ? setPanel(null) : openClose(defaultCloseStage))}
-              disabled={busy !== null}
+              disabled={busy !== null || viewing}
+              title={viewTitle}
               aria-expanded={panel?.kind === "close"}
               className={cn(
                 "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-background px-3 text-xs font-medium hover:bg-accent disabled:opacity-60",
@@ -392,7 +402,8 @@ export function CaseGuidePanel({
                 type="button"
                 autoFocus
                 onClick={() => void moveTo(confirmStep.id, { jump: confirmStep.isJump })}
-                disabled={busy !== null}
+                disabled={busy !== null || viewing}
+                title={viewTitle}
                 className={cn(primaryButtonClass, "py-1 text-xs")}
               >
                 {busy === "stage" && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -451,7 +462,8 @@ export function CaseGuidePanel({
             {showSolutionButton && !panel && (
               <button
                 onClick={() => !blockedInView() && setPanel({ kind: "solution" })}
-                disabled={busy !== null}
+                disabled={busy !== null || viewing}
+                title={viewTitle}
                 className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-60"
               >
                 {banner.actionLabel}
@@ -497,6 +509,7 @@ export function CaseGuidePanel({
                             role="radio"
                             aria-checked={selected}
                             disabled={!canEdit}
+                            title={viewTitle}
                             onClick={() => {
                               if (selected || blockedInView()) return;
                               void runOther("category", () => setCaseCategory(active.id, c.id), undefined);
@@ -538,10 +551,13 @@ export function CaseGuidePanel({
                         placeholder="Qué hiciste o acordaste en esta etapa"
                         className={cn(inputClass, "resize-none py-1 text-xs")}
                         aria-label="Nota"
+                        disabled={viewing}
+                        title={viewTitle}
                       />
                       <button
                         type="button"
                         disabled={!noteText.trim() || !canEdit}
+                        title={viewTitle}
                         onClick={async () => {
                           if (blockedInView()) return;
                           const ok = await runOther("note", () => addCaseNote(active.id, noteText.trim()), undefined);
@@ -592,7 +608,8 @@ export function CaseGuidePanel({
               <button
                 type="button"
                 onClick={() => !blockedInView() && setPanel({ kind: "solution" })}
-                disabled={busy !== null}
+                disabled={busy !== null || viewing}
+                title={viewTitle}
                 className="inline-flex flex-col items-start rounded-lg bg-primary px-3 py-1.5 text-left text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
@@ -614,6 +631,7 @@ export function CaseGuidePanel({
                         type="button"
                         onClick={() => pickExit(v.exit)}
                         disabled={canSupervise ? exitDisabled(v) : true}
+                        title={viewTitle}
                         className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-border px-3 py-1 text-xs text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-80"
                       >
                         {!canSupervise && <Lock className="h-3 w-3" aria-hidden />}
@@ -628,18 +646,19 @@ export function CaseGuidePanel({
                     key={`${v.exit.stageId ?? v.exit.type}-${i}`}
                     view={v}
                     disabled={exitDisabled(v)}
+                    title={viewTitle}
                     hint={gate && v.exit.type === "stage" && v.kind === "primary" && req ? req.hint : null}
                     onClick={() => pickExit(v.exit)}
                   />
                 ))
               )}
               {helpExits.map((v, i) => (
-                <ExitButton key={`help-${i}`} view={v} disabled={!canEdit} onClick={() => pickExit(v.exit)} />
+                <ExitButton key={`help-${i}`} view={v} disabled={!canEdit} title={viewTitle} onClick={() => pickExit(v.exit)} />
               ))}
               {dangerExits.length > 0 && (
                 <div className="ml-auto flex items-center">
                   {dangerExits.map((v, i) => (
-                    <ExitButton key={`danger-${i}`} view={v} disabled={exitDisabled(v)} onClick={() => pickExit(v.exit)} />
+                    <ExitButton key={`danger-${i}`} view={v} disabled={exitDisabled(v)} title={viewTitle} onClick={() => pickExit(v.exit)} />
                   ))}
                 </div>
               )}
@@ -696,6 +715,7 @@ export function CaseGuidePanel({
             <select
               value={active.categoryId ?? ""}
               disabled={!canEdit}
+              title={viewTitle}
               onChange={(e) => {
                 if (blockedInView()) return;
                 void runOther("category", () => setCaseCategory(active.id, e.target.value || null), "Categoría actualizada.");
@@ -724,7 +744,8 @@ export function CaseGuidePanel({
             <button
               type="button"
               onClick={() => void undoMove(undo)}
-              disabled={busy !== null}
+              disabled={busy !== null || viewing}
+              title={viewTitle}
               className="inline-flex items-center gap-1 rounded-lg border border-green-300 bg-background px-3 py-1 text-xs font-semibold text-green-900 hover:bg-green-100 disabled:opacity-60 dark:border-green-800 dark:text-green-200 dark:hover:bg-green-950"
             >
               <Undo2 className="h-3.5 w-3.5" aria-hidden />
