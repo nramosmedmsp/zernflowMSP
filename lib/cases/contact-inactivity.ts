@@ -9,6 +9,12 @@
 //   Una pasada repetida el mismo día no cambia nada.
 // - Una persona que corrigió el tipo a mano dentro del plazo no se revierte
 //   (ver canMakeInactive).
+// - Un cliente con una gestión activa (abierta o programada, ACTIVE_CASE_STATUSES)
+//   no pasa a inactivo: se le está atendiendo, o tiene una recompra por venir.
+//   No se guarda ninguna marca: la exclusión se evalúa en cada pasada diaria, así
+//   que al cerrarse la gestión (ganada, perdida, cancelada) el contacto vuelve a
+//   ser candidato en la siguiente pasada. Los N días se cuentan siempre desde la
+//   última venta ganada (la última actividad real), no desde que se cerró la gestión.
 // - Cada cambio queda en el historial con source 'inactividad' y se ve en el
 //   chat como línea de sistema.
 // - "Una vez al día": settings.contact_type_inactivity_run = { day, cursor }.
@@ -22,6 +28,7 @@
 // importar su tipo anterior, salvo que una regla pida un tipo de contacto
 // concreto en su condición.
 
+import { ACTIVE_CASE_STATUSES } from "@/lib/permissions";
 import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { limaDateOf } from "./dates";
 import type { Db } from "./io";
@@ -64,6 +71,17 @@ async function saveRunState(db: Db, workspaceId: string, current: unknown, state
   const base = current && typeof current === "object" && !Array.isArray(current) ? (current as Record<string, unknown>) : {};
   const error = await mergeWorkspaceSettings(db, workspaceId, base, { ...base, [INACTIVITY_RUN_KEY]: state });
   if (error) console.error("[contact-inactivity] run state", error);
+}
+
+/** Contactos (de la lista) con al menos una gestión abierta o programada. */
+async function contactsWithActiveCase(db: Db, workspaceId: string, contactIds: string[]): Promise<Set<string>> {
+  const { data } = await db
+    .from("cases")
+    .select("contact_id")
+    .eq("workspace_id", workspaceId)
+    .in("status", [...ACTIVE_CASE_STATUSES])
+    .in("contact_id", contactIds);
+  return new Set((data ?? []).map((c) => c.contact_id));
 }
 
 /**
@@ -144,8 +162,14 @@ export async function applyInactivityForWorkspace(
         .select("id, contact_type_id, contact_type_confirmed_at, contact_type_confirmed_by")
         .eq("workspace_id", workspaceId)
         .in("id", candidates);
+      // Gestión abierta o programada: no se les pasa a inactivos (una consulta por lote).
+      const withActive = await contactsWithActiveCase(db, workspaceId, candidates);
       for (const contact of contacts ?? []) {
         if (!canMakeInactive(contact, typeId, cutoff)) continue;
+        if (withActive.has(contact.id)) continue;
+        // Reconfirmación justo antes de mover (solo a quien va a cambiar, son pocos):
+        // si una gestión se abrió durante esta pasada, no se le pasa a inactivo.
+        if ((await contactsWithActiveCase(db, workspaceId, [contact.id])).size > 0) continue;
         const res = await setContactTypeRow(db, {
           workspaceId,
           contactId: contact.id,
