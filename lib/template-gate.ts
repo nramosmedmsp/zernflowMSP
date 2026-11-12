@@ -4,7 +4,7 @@
 // Servidor, con el cliente de servicio.
 
 import type { Db } from "@/lib/cases/io";
-import { normalizeMarketingStatus, templateSendDecision } from "@/lib/consent";
+import { effectiveMarketingStatus, templateSendDecision } from "@/lib/consent";
 import type { TemplateKind } from "@/lib/template-category";
 
 export type TemplateGateBlock = {
@@ -35,7 +35,7 @@ export async function templateConsentBlock(
       },
     };
   }
-  const status = contact?.erased_at || contact?.is_subscribed === false ? "opted_out" : normalizeMarketingStatus(contact?.marketing_status);
+  const status = effectiveMarketingStatus(contact);
   const decision = templateSendDecision({ marketing_status: status }, params.kind);
   if (decision.allowed) return null;
   return {

@@ -28,6 +28,7 @@ import {
   KeyRound,
   SpellCheck,
   FileCode2,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -52,6 +53,7 @@ const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
   "whatsapp-templates": MessageCircle,
   dictionary: SpellCheck,
   source: FileCode2,
+  "audit-log": ScrollText,
   "view-as": Eye,
   password: KeyRound,
 };

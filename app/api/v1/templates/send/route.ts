@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { erasedContactError } from "@/lib/contact-erased-guard";
 import { createServiceClient } from "@/lib/supabase/server";
 import { requireApiMember } from "@/lib/api-auth";
 import { handleHumanOutboundForConversation } from "@/lib/cases";
@@ -93,6 +94,10 @@ export async function POST(request: NextRequest) {
   if (!conversation) {
     return NextResponse.json({ error: "No se encontró la conversación" }, { status: 404 });
   }
+
+  // Cliente eliminado: la ficha y el chat son solo de lectura (lib/contact-erased.ts).
+  const erased = await erasedContactError(supabase, conversation.workspace_id, conversation.contact_id);
+  if (erased) return NextResponse.json(erased, { status: 403 });
 
   const channel = conversation.channels as { late_account_id: string; platform: string } | null;
   if (!channel?.late_account_id) {

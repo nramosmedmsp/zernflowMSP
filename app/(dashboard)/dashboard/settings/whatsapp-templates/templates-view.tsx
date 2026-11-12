@@ -248,8 +248,8 @@ function TemplatesPanel({ channels, canCreate }: { channels: ChannelOption[]; ca
                     onChange={(e) => setForm({ ...form, category: e.target.value as CreateForm["category"] })}
                     className={inputClass}
                   >
-                    <option value="UTILITY">Utilidad (avisos, recordatorios)</option>
-                    <option value="MARKETING">Marketing (ofertas)</option>
+                    <option value="UTILITY">Servicio (avisos, recordatorios)</option>
+                    <option value="MARKETING">Publicidad (ofertas)</option>
                   </select>
                 </label>
               </div>

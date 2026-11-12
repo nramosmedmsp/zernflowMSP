@@ -27,6 +27,8 @@ export interface ContactProfileProps {
   contactId: string;
   /** Solo Dueño o Administrador cambian responsable y equipo. */
   isAdmin: boolean;
+  /** Datos del cliente eliminados: la ficha es solo de lectura. */
+  erased?: boolean;
   contactTypeId: string | null;
   ownerId: string | null;
   teamId: string | null;
@@ -172,6 +174,38 @@ export function ContactProfile(props: ContactProfileProps) {
     if (!(await save("tags", () => removeContactTag(props.contactId, tag.id)))) {
       setTags((t) => (t.some((x) => x.id === tag.id) ? t : [...t, tag]));
     }
+  }
+
+  if (props.erased) {
+    // Solo lectura: se muestra lo que queda, sin controles (el servidor también rechaza cualquier cambio).
+    const none = (text: string) => <span className="text-muted-foreground">{text}</span>;
+    return (
+      <div className="space-y-3 rounded-lg border border-border p-4">
+        <Row label="Tipo de contacto">
+          <p className="pt-1.5 text-sm">{currentType ? currentType.name : none("Sin tipo")}</p>
+        </Row>
+        <Row label="Responsable">
+          <p className="pt-1.5 text-sm">{ownerId ? memberName(ownerId) : none("Sin responsable")}</p>
+        </Row>
+        <Row label="Equipo">
+          <p className="pt-1.5 text-sm">
+            {teamId ? (props.teams.find((t) => t.id === teamId)?.name ?? "—") : none("Sin equipo")}
+          </p>
+        </Row>
+        <Row label={props.keyDateLabel}>
+          <p className="pt-1.5 text-sm">{props.keyDate || none("Sin fecha")}</p>
+        </Row>
+        <Row label="Teléfono">
+          <p className="pt-1.5 text-sm">{props.phone || none("Sin teléfono")}</p>
+        </Row>
+        <Row label="Origen">
+          <p className="pt-1.5 text-sm">{props.sourceText || none("Sin información")}</p>
+        </Row>
+        <Row label="Etiquetas">
+          <p className="pt-1.5 text-sm">{tags.length ? tags.map((t) => t.name).join(", ") : none("Sin etiquetas")}</p>
+        </Row>
+      </div>
+    );
   }
 
   return (

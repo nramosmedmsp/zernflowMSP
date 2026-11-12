@@ -48,6 +48,7 @@ import {
 } from "@/lib/business-templates";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import { displayName } from "@/lib/team-rules";
+import { ERASED_READONLY_MESSAGE, isContactErased } from "@/lib/contact-erased";
 import type {
   CaseOrigin,
   CasePriority,
@@ -176,6 +177,10 @@ export interface ContactCasesView {
     ownerId: string | null;
     teamId: string | null;
     keyDate: string | null;
+    /** Cuándo se eliminaron sus datos (null si no se eliminaron). La ficha entonces es solo de lectura. */
+    erasedAt: string | null;
+    /** Quién eliminó los datos: solo se informa a Dueño y Administrador. */
+    erasedBy: string | null;
     /** Tipo de contacto: confirmación, "Preguntar después", si ya compró y últimos cambios. */
     typeInfo: ContactTypeInfo;
   };
@@ -276,7 +281,7 @@ async function session(): Promise<Session | { error: string }> {
 
 interface CaseAccess {
   row: CaseRow;
-  contact: { id: string; owner_id: string | null; team_id: string | null };
+  contact: { id: string; owner_id: string | null; team_id: string | null; erased_at: string | null };
   perms: CasePermissions;
 }
 
@@ -293,7 +298,7 @@ async function caseAccess(s: Session, caseId: unknown): Promise<CaseAccess | { e
   const [{ data: contact }, summaries] = await Promise.all([
     s.db
       .from("contacts")
-      .select("id, owner_id, team_id")
+      .select("id, owner_id, team_id, erased_at")
       .eq("id", row.contact_id)
       .eq("workspace_id", s.workspaceId)
       .maybeSingle(),
@@ -595,6 +600,8 @@ export async function getContactCases(
         teamId: contact.team_id,
         keyDate: contact.key_date,
         typeInfo,
+        erasedAt: contact.erased_at ?? null,
+        erasedBy: isAdminRole(s.actor.role) ? (contact.erased_by ?? null) : null,
       },
       activeCaseId,
       cases: views,
@@ -610,7 +617,8 @@ export async function getContactCases(
         isAdmin: isAdminRole(s.actor.role),
         supervisedTeamIds: [...supervisedTeamIds(s.actor)],
       },
-      canOpenCase: true,
+      // Un cliente eliminado no recibe gestiones nuevas (las que se conservaron sí se siguen gestionando).
+      canOpenCase: !isContactErased(contact),
     },
   };
 }
@@ -886,6 +894,8 @@ export async function setNextAction(
   }
   const ctx = await withCase(caseId, (p) => p.canEdit);
   if ("error" in ctx) return ctx;
+  // Cliente eliminado: se puede fijar la fecha, pero no escribir una nota nueva.
+  if (note?.trim() && isContactErased(ctx.access.contact)) return { error: ERASED_READONLY_MESSAGE };
   return engine.setNextAction(ctx.s.db, { caseId: ctx.access.row.id, at, note, actorId: ctx.s.userId });
 }
 
@@ -938,6 +948,8 @@ export async function addCaseNote(
   if (!noteLength.ok) return { error: `La nota es demasiado larga: máximo ${noteLength.max.toLocaleString("es-PE")} caracteres y tiene ${noteLength.used.toLocaleString("es-PE")}.` };
   const ctx = await withCase(caseId, (p) => p.canNote);
   if ("error" in ctx) return ctx;
+  // Cliente eliminado: no se escribe texto nuevo sobre él.
+  if (isContactErased(ctx.access.contact)) return { error: ERASED_READONLY_MESSAGE };
   return engine.addNote(ctx.s.db, {
     caseId: ctx.access.row.id,
     body,
@@ -994,6 +1006,8 @@ export async function closeCase(
   if (!parsed) return { error: INVALID };
   const ctx = await withCase(parsed.caseId, (p) => p.canClose);
   if ("error" in ctx) return ctx;
+  // Cliente eliminado: la gestión se puede cerrar. La nota de cierre se permite a propósito: en un reclamo la
+  // solución escrita es obligatoria y la ley manda conservarla (ver erase_contact_data).
   return engine.closeOrRequestClose(
     ctx.s.db,
     { ...parsed, caseId: ctx.access.row.id, actorId: ctx.s.userId },
@@ -1017,6 +1031,7 @@ export async function rejectCloseRequest(caseId: string, comment?: string | null
   const ctx = await withCase(caseId, () => true);
   if ("error" in ctx) return ctx;
   if (!isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id)) return { error: SUPERVISOR_ONLY };
+  if (comment?.trim() && isContactErased(ctx.access.contact)) return { error: ERASED_READONLY_MESSAGE };
   return engine.rejectCloseRequest(ctx.s.db, {
     caseId: ctx.access.row.id,
     actorId: ctx.s.userId,
@@ -1147,12 +1162,13 @@ export async function openManualCase(
 
   const { data: contact } = await s.db
     .from("contacts")
-    .select("id, owner_id, team_id")
+    .select("id, owner_id, team_id, erased_at")
     .eq("id", input.contactId)
     .eq("workspace_id", s.workspaceId)
     .maybeSingle();
   const summaries = contact ? await loadContactCaseSummaries(s.db, contact.id) : [];
   if (!contact || !actorSeesContact(s.actor, contact, summaries)) return { error: "No se encontró el contacto." };
+  if (isContactErased(contact)) return { error: ERASED_READONLY_MESSAGE };
 
   let assignee: string | "auto" = assigneeRaw === "me" ? s.userId : assigneeRaw;
   if (assignee !== "auto" && assignee !== s.userId && !isAdminRole(s.actor.role)) {

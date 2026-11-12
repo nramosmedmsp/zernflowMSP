@@ -2,7 +2,7 @@
 
 import { isSessionExpired, loginHref } from "@/lib/session-expired";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
-import { Bot, BotOff, Check, CheckCheck, Paperclip, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
+import { Bot, BotOff, Check, CheckCheck, Lock, Paperclip, User, MessageSquare, Loader2, StickyNote, FlaskConical, AlertCircle, ArrowDown, Reply } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/toast";
 import { formatDate, formatPhoneDisplay, formatRelative, formatTime } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
 import { linkify } from "@/lib/linkify";
+import { ERASED_CHAT_MESSAGE, displayNameFor, isContactErased } from "@/lib/contact-erased";
 import type { InboxMessage } from "@/lib/inbox-messages";
 import type { OutboxAttachment } from "@/lib/inbox-outbox";
 import { setConversationBotPaused, type CaseView } from "@/lib/actions/cases";
@@ -560,6 +561,8 @@ export function MessageThread({
     );
   }
 
+  const erased = isContactErased(conversation.contacts);
+
   return (
     <div className="flex h-full flex-col bg-background">
       {/* Header */}
@@ -575,7 +578,7 @@ export function MessageThread({
               />
             ) : (
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-medium">
-                {conversation.contacts?.display_name?.[0]?.toUpperCase() ?? "?"}
+                {displayNameFor(conversation.contacts, "?")[0]?.toUpperCase() ?? "?"}
               </div>
             )}
             <div className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-background bg-background">
@@ -589,10 +592,10 @@ export function MessageThread({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <p className="truncate text-sm font-medium">
-                {conversation.contacts?.display_name ?? "Desconocido"}
+                {displayNameFor(conversation.contacts, "Desconocido")}
               </p>
               {isDemo && <DemoBadge />}
-              {contactType && (
+              {contactType && !erased && (
                 <ContactTypePicker
                   current={contactType.current}
                   options={contactType.options}
@@ -615,7 +618,7 @@ export function MessageThread({
         </div>
 
         <div className="flex items-center gap-2">
-          {isDemo && canSimulate && (
+          {isDemo && canSimulate && !erased && (
             <button
               onClick={() => setSimulateOpen(true)}
               className="inline-flex items-center gap-1 rounded-md border border-violet-200 px-2 py-1 text-[11px] font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-900/60 dark:text-violet-300 dark:hover:bg-violet-950/40"
@@ -653,7 +656,7 @@ export function MessageThread({
         </div>
       </div>
 
-      {contactType?.ask && (
+      {contactType?.ask && !erased && (
         <ContactTypeQuestion
           contactName={conversation.contacts?.display_name ?? null}
           options={contactType.options}
@@ -772,7 +775,16 @@ export function MessageThread({
         />
       )}
 
-      {/* Composer */}
+      {/* Composer: un cliente eliminado no recibe mensajes, plantillas ni notas (el servidor también lo rechaza). */}
+      {erased ? (
+        <div
+          role="note"
+          className="flex shrink-0 items-start gap-2 border-t border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+        >
+          <Lock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p>{ERASED_CHAT_MESSAGE}</p>
+        </div>
+      ) : (
       <Composer
         conversation={conversation}
         noteCase={noteCase}
@@ -790,6 +802,7 @@ export function MessageThread({
           onCaseActivity?.();
         }}
       />
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ export type SettingsLinkKey =
   | "whatsapp-templates"
   | "dictionary"
   | "source"
+  | "audit-log"
   | "view-as"
   | "password";
 
@@ -97,6 +98,13 @@ export const SETTINGS_LINKS: readonly SettingsLink[] = [
     title: "Código de la app",
     description: "Descarga el código fuente para revisarlo o dárselo a un colaborador.",
     href: "/dashboard/settings/codigo",
+    adminOnly: true,
+  },
+  {
+    key: "audit-log",
+    title: "Registro de cambios",
+    description: "Quién cambió qué: equipo, configuración, canales, difusiones, datos de clientes y descargas.",
+    href: "/dashboard/settings/registro",
     adminOnly: true,
   },
   {

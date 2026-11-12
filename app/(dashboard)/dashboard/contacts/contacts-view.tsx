@@ -1,5 +1,6 @@
 "use client";
 
+import { displayNameFor } from "@/lib/contact-erased";
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -431,11 +432,11 @@ export function ContactsView({
                               className="h-8 w-8 rounded-full object-cover"
                             />
                           ) : (
-                            contact.display_name?.[0]?.toUpperCase() ?? "?"
+                            displayNameFor(contact, "?")[0]?.toUpperCase() ?? "?"
                           )}
                         </div>
                         <span className="text-sm font-medium hover:underline">
-                          {contact.display_name ?? "Desconocido"}
+                          {displayNameFor(contact, "Desconocido")}
                         </span>
                       </Link>
                     </td>

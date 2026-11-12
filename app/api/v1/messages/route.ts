@@ -28,6 +28,7 @@ import { prepareOutgoingMedia, type OutgoingMedia } from "@/lib/media-store";
 import { markUploadsUsed } from "@/lib/upload-tracking";
 import { recordOutboundSend } from "@/lib/outbound-log";
 import { checkMessage, tooLongError } from "@/lib/message-limits";
+import { erasedContactError } from "@/lib/contact-erased-guard";
 import { getEffectiveAuthUser } from "@/lib/view-as/state";
 import { enforceRateLimit } from "@/lib/rate-limit-http";
 import { RATE_RULES } from "@/lib/rate-limit";
@@ -207,6 +208,10 @@ export async function POST(request: NextRequest) {
   if (!conversation) {
     return NextResponse.json({ error: "No se encontró la conversación" }, { status: 404 });
   }
+
+  // Cliente eliminado: la ficha y el chat son solo de lectura (lib/contact-erased.ts).
+  const erased = await erasedContactError(supabase, conversation.workspace_id, conversation.contact_id);
+  if (erased) return NextResponse.json(erased, { status: 403 });
 
   // PAN-06: mismo largo máximo que valida la caja de mensaje (lib/message-limits.ts).
   const lengthCheck = checkMessage(text, conversation.platform);

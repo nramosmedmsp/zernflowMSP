@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { erasedContactError } from "@/lib/contact-erased-guard";
 import { conversationMediaPath, validateOutgoingAttachment } from "@/lib/chat-media";
 import { createUploadUrl } from "@/lib/media-store";
 import { getEffectiveAuthUser } from "@/lib/view-as/state";
@@ -32,10 +33,13 @@ export async function POST(request: NextRequest) {
   // Con el cliente del usuario: la RLS decide si ve este chat.
   const { data: conversation } = await supabase
     .from("conversations")
-    .select("id, workspace_id, platform")
+    .select("id, workspace_id, platform, contact_id")
     .eq("id", conversationId)
     .maybeSingle();
   if (!conversation) return NextResponse.json({ error: "No se encontró la conversación" }, { status: 404 });
+  // Cliente eliminado: no se suben archivos nuevos a su chat (lib/contact-erased.ts).
+  const erased = await erasedContactError(supabase, conversation.workspace_id, conversation.contact_id);
+  if (erased) return NextResponse.json(erased, { status: 403 });
 
   // El navegador achica las fotos antes de pedir el enlace: aquí ya deben caber.
   const check = validateOutgoingAttachment(conversation.platform, { mime, size });

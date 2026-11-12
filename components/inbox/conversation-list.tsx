@@ -1,5 +1,6 @@
 "use client";
 
+import { displayNameFor } from "@/lib/contact-erased";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Search, MessageSquare, RefreshCw, SlidersHorizontal, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -497,7 +498,7 @@ export function ConversationList({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
-                      <span className="truncate">{conversation.contacts?.display_name ?? "Desconocido"}</span>
+                      <span className="truncate">{displayNameFor(conversation.contacts, "Desconocido")}</span>
                       {demoChannelIds.has(conversation.channel_id) && <DemoBadge />}
                     </p>
                     <span

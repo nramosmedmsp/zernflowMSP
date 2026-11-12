@@ -34,6 +34,7 @@ import {
 } from "@/lib/consent";
 import { normalizeImportPhone, senderIdFromPhone } from "@/lib/import/phone";
 import { ilikePattern } from "@/components/cases/case-filters";
+import { ERASED_READONLY_MESSAGE, isContactErased } from "@/lib/contact-erased";
 
 /**
  * Teléfono en el formato de la importación y el webhook ("+51987654321"): un
@@ -100,8 +101,6 @@ interface ContactAccess {
   };
 }
 
-const ERASED_MESSAGE = "Los datos de este cliente ya fueron eliminados.";
-
 /** "Ver como" es solo lectura: se avisa con claridad antes de intentar escribir. */
 async function blockedByViewAs(): Promise<{ error: string } | null> {
   if (!(await isViewAsLocked())) return null;
@@ -125,6 +124,8 @@ async function withContact(contactId: unknown): Promise<ContactAccess | { error:
   const summaries = await loadContactCaseSummaries(s.db, contact.id);
   // Sin visibilidad respondemos "no encontrado" para no revelar que existe.
   if (!actorSeesContact(s.actor, contact, summaries)) return { error: NOT_FOUND };
+  // Cliente eliminado: la ficha es solo de lectura (todas las acciones de este archivo pasan por aquí).
+  if (isContactErased(contact)) return { error: ERASED_READONLY_MESSAGE };
   return { s, contact };
 }
 
@@ -170,6 +171,8 @@ export async function searchContacts(
     .from("contacts")
     .select("id, display_name, phone, email")
     .eq("workspace_id", workspace.id)
+    // Un cliente eliminado no se elige para una gestión nueva (su ficha es solo de lectura).
+    .is("erased_at", null)
     .order("last_interaction_at", { ascending: false, nullsFirst: false })
     .limit(10);
   if (clean) {
@@ -415,7 +418,6 @@ export async function updateContactPhone(
   };
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
-  if (ctx.contact.erased_at) return { error: ERASED_MESSAGE };
   if (ctx.contact.phone !== normalized.value) {
     const failure = await updateContact(ctx, { phone: normalized.value });
     if (failure) return failure;
@@ -572,7 +574,6 @@ export async function setMarketingConsent(
   const ctx = await withContact(contactId);
   if ("error" in ctx) return ctx;
   const { s, contact } = ctx;
-  if (contact.erased_at) return { error: ERASED_MESSAGE };
 
   const current = normalizeMarketingStatus(contact.marketing_status);
   if (!availableConsentActions(current).includes(action)) {
@@ -648,7 +649,6 @@ export async function updateContactDetails(
   if ("error" in ctx) return ctx;
   const { s, contact } = ctx;
   if (!isAdminRole(s.actor.role)) return { error: ADMIN_ONLY_MESSAGE };
-  if (contact.erased_at) return { error: ERASED_MESSAGE };
 
   if (patch.display_name !== undefined && patch.display_name !== (contact.display_name ?? null)) fields.push("nombre");
   if (patch.email !== undefined && patch.email !== (contact.email ?? null)) fields.push("correo");

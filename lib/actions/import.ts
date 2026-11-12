@@ -156,7 +156,7 @@ async function findExisting(db: Db, workspaceId: string, phones: string[], email
   let channelIds: string[] | null = null;
   for (const part of chunks(digitsList, CHUNK)) {
     const variants = part.flatMap((d) => [`+${d}`, d]);
-    const { data } = await db.from("contacts").select("id, phone").eq("workspace_id", workspaceId).in("phone", variants);
+    const { data } = await db.from("contacts").select("id, phone").eq("workspace_id", workspaceId).is("erased_at", null).in("phone", variants);
     for (const c of data ?? []) if (c.phone && !byPhone.has(phoneKey(c.phone))) byPhone.set(phoneKey(c.phone), c.id);
 
     if (channelIds === null) {
@@ -173,7 +173,7 @@ async function findExisting(db: Db, workspaceId: string, phones: string[], email
     }
   }
   for (const part of chunks(emailList, CHUNK)) {
-    const { data } = await db.from("contacts").select("id, email").eq("workspace_id", workspaceId).in("email", part);
+    const { data } = await db.from("contacts").select("id, email").eq("workspace_id", workspaceId).is("erased_at", null).in("email", part);
     for (const c of data ?? []) if (c.email && !byEmail.has(c.email.toLowerCase())) byEmail.set(c.email.toLowerCase(), c.id);
   }
   return { byPhone, byEmail };
@@ -490,14 +490,21 @@ export async function processImportBatch(input: {
       previousType = before?.contact_type_id ?? null;
     }
     if (Object.keys(patch).length > 0) {
-      const { error } = await db
+      // Un cliente eliminado no se reescribe: su ficha es solo de lectura (lib/contact-erased.ts).
+      const { data: updated, error } = await db
         .from("contacts")
         .update(patch)
         .eq("id", r.existingId as string)
-        .eq("workspace_id", workspaceId);
+        .eq("workspace_id", workspaceId)
+        .is("erased_at", null)
+        .select("id");
       if (error) {
         console.error("[import] update", error.message);
         result.errors.push({ line: r.line, message: "No se pudo actualizar el contacto." });
+        continue;
+      }
+      if (!updated || updated.length === 0) {
+        result.errors.push({ line: r.line, message: "Los datos de este cliente se eliminaron; la fila no se importó." });
         continue;
       }
     }

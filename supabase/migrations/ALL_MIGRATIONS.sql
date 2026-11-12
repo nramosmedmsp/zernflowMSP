@@ -7129,3 +7129,120 @@ analyze public.conversations;
 analyze public.cases;
 
 notify pgrst, 'reload schema';
+
+
+-- ============================================================
+-- MIGRATION 48: CLIENTE ELIMINADO: SOLO LECTURA
+-- ============================================================
+-- Cliente eliminado = ficha solo de lectura, también por la API de datos.
+-- Aditiva e idempotente.
+--
+-- QUÉ HACE
+--   Cuando se eliminan los datos de un cliente (erase_contact_data, migración 00044) el
+--   contacto queda como cascarón (contacts.erased_at con fecha). La app ya rechaza
+--   cualquier cambio sobre él, pero una persona con sesión podría escribir directo por la
+--   API de datos (PostgREST) etiquetas, canales, campos personalizados o notas internas
+--   y volver a dejar datos personales en un registro que se eliminó a pedido del cliente.
+--   Este trigger lo impide: si el contacto está eliminado (erased_at no es nulo), rechaza
+--   INSERT, UPDATE y DELETE hechos por una persona con sesión sobre
+--     contact_tags, contact_channels, contact_custom_fields y case_notes.
+--   (contacts ya no permite UPDATE a las personas, y messages no permite INSERT.)
+--
+-- QUÉ NO CAMBIA
+--   Las escrituras del servidor de la app (clave de servicio, auth.uid() es nulo) y de
+--   erase_contact_data pasan igual: el borrado sigue funcionando y los procesos
+--   automáticos (webhook, cron) no cambian. Si el código anterior corre contra esta
+--   migración, nada se rompe: solo se rechaza escribir sobre un cliente eliminado.
+--
+-- Es segura de ejecutar varias veces.
+
+set local lock_timeout = '10s';
+
+create or replace function public.block_write_on_erased_contact()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_contact uuid;
+begin
+  -- Servidor de la app (clave de servicio) y funciones internas: sin sesión de persona.
+  if auth.uid() is null then
+    return coalesce(new, old);
+  end if;
+
+  v_contact := case when tg_op = 'DELETE' then old.contact_id else new.contact_id end;
+  if v_contact is not null and exists (
+    select 1 from public.contacts c where c.id = v_contact and c.erased_at is not null
+  ) then
+    raise exception 'Los datos de este cliente se eliminaron. La ficha es solo de lectura.'
+      using errcode = 'P0001';
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+revoke all on function public.block_write_on_erased_contact() from public, anon, authenticated;
+
+drop trigger if exists block_write_on_erased_contact on public.contact_tags;
+create trigger block_write_on_erased_contact
+  before insert or update or delete on public.contact_tags
+  for each row execute function public.block_write_on_erased_contact();
+
+drop trigger if exists block_write_on_erased_contact on public.contact_channels;
+create trigger block_write_on_erased_contact
+  before insert or update or delete on public.contact_channels
+  for each row execute function public.block_write_on_erased_contact();
+
+drop trigger if exists block_write_on_erased_contact on public.contact_custom_fields;
+create trigger block_write_on_erased_contact
+  before insert or update or delete on public.contact_custom_fields
+  for each row execute function public.block_write_on_erased_contact();
+
+drop trigger if exists block_write_on_erased_contact on public.case_notes;
+create trigger block_write_on_erased_contact
+  before insert or update or delete on public.case_notes
+  for each row execute function public.block_write_on_erased_contact();
+
+notify pgrst, 'reload schema';
+
+
+-- ============================================================
+-- MIGRATION 49: REGISTRO DE CAMBIOS (INDICE)
+-- ============================================================
+-- Registro de cambios (pantalla de Configuración, solo Dueño y Administrador).
+-- Aditiva e idempotente: solo crea un índice.
+--
+-- POR QUÉ
+--   `activity` guarda el historial normal de los contactos (etapas, asignaciones,
+--   notas...), que crece sin parar, y además unas pocas filas "de auditoría"
+--   (config_changed, importaciones, correcciones/descargas/borrado de datos de
+--   clientes y cambios de permiso de publicidad hechos por una persona). La pantalla
+--   pide solo estas últimas, de la más reciente a la más antigua, 50 por página, con
+--   paginación por clave (created_at, id). Con idx_activity_workspace_created
+--   (espacio, fecha) Postgres tendría que recorrer TODO el historial del espacio
+--   filtrando por tipo hasta juntar 50 filas.
+--
+-- QUÉ HACE
+--   Un índice parcial (espacio, fecha desc, id desc) solo con esas filas. La consulta de
+--   la app repite exactamente este mismo filtro de tipos (lib/audit-labels.ts,
+--   AUDIT_ROW_FILTER); si cambias uno, cambia el otro.
+--
+-- SEGURIDAD DE APLICARLA
+--   Crear un índice sobre `activity` toma un bloqueo que frena las ESCRITURAS mientras
+--   se construye (las lecturas siguen). La tabla es pequeña y el índice parcial es
+--   diminuto; con lock_timeout de 10 s, si hubiera una transacción larga abierta falla
+--   limpio y se reintenta. No cambia datos ni políticas.
+
+set local lock_timeout = '10s';
+
+create index if not exists idx_activity_audit_log
+  on public.activity (workspace_id, created_at desc, id desc)
+  where type in (
+      'config_changed', 'contacts_imported', 'contact_data_corrected', 'contact_data_exported',
+      'contact_data_erased', 'contact_data_erase_files_retried'
+    )
+    or (type in ('contact_subscribed', 'contact_unsubscribed') and actor_id is not null);
+
+notify pgrst, 'reload schema';

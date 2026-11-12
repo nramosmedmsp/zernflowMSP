@@ -133,7 +133,7 @@ describe("registrar consentimiento, dar de baja y reactivar", () => {
   it("un contacto con los datos eliminados no admite cambios", async () => {
     as(ANA);
     contactRow().erased_at = "2026-11-01T00:00:00Z";
-    expect(await setMarketingConsent(contactId, "accept")).toEqual({ error: "Los datos de este cliente ya fueron eliminados." });
+    expect(await setMarketingConsent(contactId, "accept")).toEqual({ error: "Los datos de este cliente se eliminaron. La ficha es solo de lectura." });
   });
 });
 

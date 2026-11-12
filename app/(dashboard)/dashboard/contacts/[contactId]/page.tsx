@@ -24,6 +24,8 @@ import { buildTimeline, type TimelineLookups } from "@/components/contacts/timel
 import { formatDateTime } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
 import { loadContactTypeInfo } from "@/lib/cases/contact-type";
+import { ErasedNotice } from "@/components/contacts/erased-notice";
+import { displayNameFor } from "@/lib/contact-erased";
 
 const CONVERSATION_STATUS_LABELS: Record<string, string> = {
   open: "Abierta",
@@ -208,12 +210,12 @@ export default async function ContactDetailPage({
                 className="h-12 w-12 rounded-full object-cover"
               />
             ) : (
-              contactInitial(contact.display_name)
+              contactInitial(displayNameFor(contact, ""))
             )}
           </div>
           <div>
             <h1 className="text-xl font-bold">
-              {contact.display_name ?? "Desconocido"}
+              {displayNameFor(contact, "Desconocido")}
             </h1>
             <div className="mt-0.5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
               {contact.email && (
@@ -252,6 +254,13 @@ export default async function ContactDetailPage({
 
       {/* Content */}
       <div className="flex-1 overflow-auto px-8 py-6">
+        {erased && (
+          <ErasedNotice
+            className="mb-6"
+            erasedAt={contact.erased_at}
+            byName={isAdmin && contact.erased_by ? (lookups.users[contact.erased_by] ?? null) : null}
+          />
+        )}
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="space-y-6">
             {/* Profile */}
@@ -262,6 +271,7 @@ export default async function ContactDetailPage({
               <ContactProfile
                 contactId={contact.id}
                 isAdmin={isAdminRole(role)}
+                erased={erased}
                 contactTypeId={contact.contact_type_id}
                 ownerId={contact.owner_id}
                 teamId={contact.team_id}

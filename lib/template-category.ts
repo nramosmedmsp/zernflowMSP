@@ -15,20 +15,15 @@ import { demoTemplates, isDemoChannel } from "@/lib/demo";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import type { Db } from "@/lib/cases/io";
 
-export type TemplateKind = "service" | "marketing" | "unknown";
-
-/** "service" (UTILITY, AUTHENTICATION), "marketing" (MARKETING) o "unknown" (cualquier otra cosa). */
-export function templateKindFromCategory(category: unknown): TemplateKind {
-  const value = typeof category === "string" ? category.trim().toUpperCase() : "";
-  if (value === "UTILITY" || value === "AUTHENTICATION") return "service";
-  if (value === "MARKETING") return "marketing";
-  return "unknown";
-}
-
-/** Una plantilla cuenta como publicidad salvo que se sepa que es de servicio. */
-export function isPublicityKind(kind: TemplateKind): boolean {
-  return kind !== "service";
-}
+// La parte pura (sin servidor) vive en lib/template-kind.ts para poder usarla en pantalla.
+export {
+  TEMPLATE_KIND_LABELS,
+  isPublicityKind,
+  templateKindFromCategory,
+  templateKindLabel,
+  type TemplateKind,
+} from "@/lib/template-kind";
+import { templateKindFromCategory, type TemplateKind } from "@/lib/template-kind";
 
 /** Categoría de una plantilla de un canal de prueba (lib/demo.ts). */
 export function demoTemplateKind(templateName: string): TemplateKind {

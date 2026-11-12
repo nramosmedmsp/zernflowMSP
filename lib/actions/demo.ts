@@ -3,6 +3,7 @@
 // Acciones de servidor de los canales de prueba (lib/demo.ts). Solo para
 // administradores y solo en conversaciones de canales de prueba.
 
+import { erasedContactError } from "@/lib/contact-erased-guard";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getWorkspace } from "@/lib/workspace";
 import { isDemoChannel } from "@/lib/demo";
@@ -88,6 +89,10 @@ export async function simulateInboundMessage(
     if (!isDemoChannel(channel)) {
       return { error: "Solo se pueden simular mensajes en conversaciones de canales de prueba." };
     }
+
+    // Cliente eliminado: no se simula que escriba (la conversación es solo de lectura).
+    const erased = await erasedContactError(service, workspace.id, conversation.contact_id);
+    if (erased) return erased;
 
     const [{ data: contact }, { data: link }, { count: previousInbound }] = await Promise.all([
       service.from("contacts").select("display_name").eq("id", conversation.contact_id).maybeSingle(),

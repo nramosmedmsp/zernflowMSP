@@ -1,5 +1,6 @@
 // Ejecución de reglas de gestión y efectos sobre el contacto y el bot.
 
+import { isContactErased } from "@/lib/contact-erased";
 import { firstOpenStageId, logActivity, type CaseRow, type ContactRow, type Db } from "./io";
 import { recordContactTypeChange } from "./contact-type";
 import { ruleReasonText } from "./contact-type-model";
@@ -142,6 +143,9 @@ export async function applyRulePlan(
   const { plan, caseRow, contact, actorId } = params;
   const ws = caseRow.workspace_id;
   const effects: RuleEffects = { scheduled: [], skipped: [] };
+
+  // Cliente eliminado: ninguna regla escribe en su ficha (tipo, fecha clave) ni le programa gestiones.
+  if (isContactErased(contact)) return effects;
 
   if (plan.askKeyDate && params.keyDate && params.keyDate !== contact.key_date) {
     const { error } = await db.from("contacts").update({ key_date: params.keyDate }).eq("id", contact.id);

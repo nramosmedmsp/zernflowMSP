@@ -587,6 +587,7 @@ export function Composer({
             onTemplateSent();
           }}
           contactName={contactName}
+          contact={conversation.contacts}
         />
       </div>
     );

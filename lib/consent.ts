@@ -158,6 +158,18 @@ export const OPTED_OUT_MESSAGE =
 export const NO_CONSENT_MESSAGE =
   "Este cliente aún no aceptó recibir publicidad. Registra su consentimiento en el panel del contacto o usa una plantilla de servicio.";
 
+/**
+ * Estado de publicidad que cuenta para enviar: un contacto con datos borrados
+ * o dado de baja (is_subscribed = false) es "De baja" aunque marketing_status
+ * diga otra cosa. Lo usan el servidor y las pantallas.
+ */
+export function effectiveMarketingStatus(
+  contact: (ConsentFields & { is_subscribed?: boolean | null; erased_at?: string | null }) | null | undefined,
+): MarketingStatus {
+  if (contact?.erased_at || contact?.is_subscribed === false) return "opted_out";
+  return normalizeMarketingStatus(contact?.marketing_status);
+}
+
 /** Publicidad (difusiones, secuencias, plantillas de publicidad): solo a quien aceptó. */
 export function marketingDecision(contact: ConsentFields | null | undefined): MarketingDecision {
   const status = normalizeMarketingStatus(contact?.marketing_status);
