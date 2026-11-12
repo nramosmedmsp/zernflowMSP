@@ -15,6 +15,8 @@ import { erasureConfirmationMatches, erasureConfirmationWord } from "@/lib/erase
 import { formatDateTime } from "@/lib/format";
 import { Field, Modal, inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/inbox/ui";
 import { useToast } from "@/components/ui/toast";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 
 export interface ErasureRecord {
   id: string;
@@ -43,6 +45,8 @@ const btn = "px-2.5 py-1 text-xs";
 export function ContactPrivacyPanel(props: ContactPrivacyPanelProps) {
   const router = useRouter();
   const toast = useToast();
+  const viewing = useViewAs().active;
+  const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
   const [editing, setEditing] = useState(false);
   const [erasing, setErasing] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -87,7 +91,7 @@ export function ContactPrivacyPanel(props: ContactPrivacyPanelProps) {
               Faltan {e.filesPending} de {e.filesTotal} archivos por borrar del almacenamiento.
             </p>
             {e.lastFileError && <p className="mt-1 text-muted-foreground">Último error: {e.lastFileError}</p>}
-            <button type="button" className={`${secondaryButtonClass} ${btn} mt-2`} disabled={retrying} onClick={() => void retry()}>
+            <button type="button" className={`${secondaryButtonClass} ${btn} mt-2`} disabled={retrying || viewing} title={viewTitle} onClick={() => void retry()}>
               {retrying && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Reintentar borrar archivos
             </button>
@@ -107,7 +111,13 @@ export function ContactPrivacyPanel(props: ContactPrivacyPanelProps) {
         o eliminarlos.
       </p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className={`${secondaryButtonClass} ${btn}`} onClick={() => setEditing(true)}>
+        <button
+          type="button"
+          className={`${secondaryButtonClass} ${btn}`}
+          disabled={viewing}
+          title={viewTitle}
+          onClick={() => setEditing(true)}
+        >
           <Pencil className="h-3.5 w-3.5" />
           Corregir datos
         </button>
@@ -123,12 +133,19 @@ export function ContactPrivacyPanel(props: ContactPrivacyPanelProps) {
         <button
           type="button"
           className={`${secondaryButtonClass} ${btn} border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-900/10`}
+          disabled={viewing}
+          title={viewTitle}
           onClick={() => setErasing(true)}
         >
           <Trash2 className="h-3.5 w-3.5" />
           Eliminar sus datos
         </button>
       </div>
+      {viewing && (
+        <p data-testid="view-as-unavailable-note" className="text-xs text-muted-foreground">
+          {VIEW_AS_UNAVAILABLE_NOTE}
+        </p>
+      )}
       <p className="text-[11px] text-muted-foreground">
         La copia se abre en otra pestaña como una página: usa «Imprimir» y «Guardar como PDF» para entregarla al cliente.
       </p>

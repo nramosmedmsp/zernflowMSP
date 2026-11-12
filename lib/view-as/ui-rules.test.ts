@@ -14,6 +14,7 @@ import {
   viewAsRoleText,
   viewAsShortName,
   viewDurationMs,
+  VIEW_AS_UNAVAILABLE_NOTE,
   withoutSample,
 } from "./ui-rules";
 import type { ViewAsPersonOption } from "./rules";
@@ -136,5 +137,11 @@ describe("viewLogTargetDetail", () => {
   it("por persona usa el detalle o 'Persona'", () => {
     expect(viewLogTargetDetail({ target_kind: "person", target_label: "Ana", target_detail: "ana@x.com" })).toBe("ana@x.com");
     expect(viewLogTargetDetail({ target_kind: "person", target_label: "Ana", target_detail: null })).toBe("Persona");
+  });
+});
+
+describe("VIEW_AS_UNAVAILABLE_NOTE", () => {
+  it("es la nota corta fija", () => {
+    expect(VIEW_AS_UNAVAILABLE_NOTE).toBe("No disponible en «Ver como»");
   });
 });

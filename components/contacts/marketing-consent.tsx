@@ -22,6 +22,8 @@ import {
   type MarketingStatus,
 } from "@/lib/consent";
 import { Modal, inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/inbox/ui";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 import { useToast } from "@/components/ui/toast";
 
 const CHIP: Record<MarketingStatus, string> = {
@@ -69,6 +71,7 @@ export function MarketingConsentBlock({
   className,
 }: MarketingConsentProps) {
   const toast = useToast();
+  const viewing = useViewAs().active;
   const router = useRouter();
   const current = normalizeMarketingStatus(status);
   const [pending, setPending] = useState<ConsentAction | null>(null);
@@ -144,15 +147,26 @@ export function MarketingConsentBlock({
               key={action}
               type="button"
               onClick={() => open(action)}
+              disabled={viewing}
+              title={viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined}
               className={cn(
                 action === "opt_out" ? secondaryButtonClass : primaryButtonClass,
                 "px-2.5 py-1 text-xs",
+                viewing && "cursor-not-allowed",
               )}
             >
               {CONSENT_ACTION_LABELS[action]}
             </button>
           ))}
         </div>
+      )}
+      {viewing && actions.length > 0 && (
+        <p
+          data-testid="view-as-unavailable-note"
+          className={cn("text-xs text-muted-foreground", compact && "text-center")}
+        >
+          {VIEW_AS_UNAVAILABLE_NOTE}
+        </p>
       )}
 
       <Modal
