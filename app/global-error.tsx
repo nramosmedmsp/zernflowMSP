@@ -42,8 +42,8 @@ export default function GlobalError({ error, retry }: { error: unknown; retry: (
         <div className="box" role="alert">
           <div className="card">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={APP_LOGO_URL} alt={APP_NAME} width={48} height={48} style={{ objectFit: "contain" }} />
-            <h1 style={{ fontSize: 24, margin: "12px 0 4px" }}>Algo salió mal</h1>
+            <img src={APP_LOGO_URL} alt={APP_NAME} width={48} height={48} style={{ objectFit: "contain", display: "block", margin: "0 auto" }} />
+            <h1 style={{ fontSize: 24, fontWeight: 700, margin: "12px 0 4px" }}>Algo salió mal</h1>
             <div style={{ fontSize: 14, color: "#777" }}>{APP_NAME}</div>
             <p className="msg">Algo salió mal. No se perdió lo que ya estaba guardado.</p>
             <div className="row">

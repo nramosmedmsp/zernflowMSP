@@ -208,21 +208,21 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
     // pone la página contenedora; la lista de inscritos tiene el suyo aparte.
     <div className="shrink-0" data-testid="sequence-editor">
       {/* Encabezado */}
-      <div className="border-b border-border px-8 py-6">
-        <div className="flex items-center gap-4">
+      <div className="border-b border-border px-4 py-6 sm:px-8">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             onClick={goBack}
             className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <ArrowLeft className="h-5 w-5" />
           </button>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1 basis-48">
             <div className="flex items-center gap-3">
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 p-0"
+                className="min-w-0 flex-1 text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 p-0"
                 placeholder="Nombre de la secuencia"
               />
               <span
@@ -293,7 +293,7 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
       </div>
 
       {/* Contenido */}
-      <div className="px-8 py-6">
+      <div className="px-4 py-6 sm:px-8">
         <div className="mx-auto max-w-2xl space-y-6">
           {/* Descripción */}
           <div>

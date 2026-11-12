@@ -32,6 +32,8 @@ export async function GET(request: NextRequest) {
     .select("*, contact_tags(tag_id, tags(id, name, color)), contact_channels(platform_sender_id, channel_id, channels(platform))", { count: "exact" })
     .eq("workspace_id", membership.workspace_id)
     .order("last_interaction_at", { ascending: false })
+    // Desempate estable: varios contactos sin interacción (nulos) darían un orden distinto en cada consulta y repetirían u omitirían filas al paginar.
+    .order("id", { ascending: true })
     .range(offset, offset + limit - 1);
 
   // Mismo texto limpio que la pantalla de Contactos (comas y paréntesis rompen el filtro).
