@@ -38,6 +38,11 @@ const anon = createClient(URL_API, ANON, { auth: { persistSession: false } });
 
 // ── ayudantes HTTP ────────────────────────────────────────────────────────────
 async function post(p, cookieHeader, body, { origin = APP_URL, headers = {} } = {}) {
+  // Tope de frecuencia de la 00043 (5 inicios de "Ver como" por minuto): esta suite hace muchos
+  // inicios seguidos, así que se limpia el contador antes de cada uno. El código NO se toca.
+  if (p === "/api/v1/view-as/start") {
+    await q("delete from public.rate_limit_hits where bucket like 'view_as_start:%'").catch(() => {});
+  }
   const r = await fetch(APP_URL + p, {
     method: "POST",
     redirect: "manual",

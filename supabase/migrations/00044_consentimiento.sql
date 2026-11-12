@@ -22,6 +22,9 @@
 --        is_subscribed = true sobre una baja -> 'accepted' (origen 'flow', el cliente
 --        pidió el alta). Poner true sobre quien no estaba de baja no cambia nada.
 --    Así el código anterior sigue funcionando con la migración aplicada.
+--    Si el cambio de consentimiento llega con la sesión de una persona (API de datos y
+--    no el servidor de la app), el trigger fija autor (esa persona), origen 'manual' y
+--    fecha: no se puede fabricar un "aceptó" sin rastro ni a nombre de otro.
 --    La publicidad (difusiones, secuencias, plantillas de publicidad) pide
 --    marketing_status = 'accepted'; is_subscribed solo dice "no está de baja".
 --
@@ -31,8 +34,8 @@
 --        escribe solo el servidor.
 --      * erase_contact_data(espacio, contacto, quien): UNA transacción que anonimiza el
 --        contacto y borra mensajes, archivos (filas), notas, canales, campos, etiquetas,
---        sesiones de flujo, inscripciones, destinatarios de difusión y avisos del
---        cliente. Conserva la fila del contacto SIN datos personales ("Cliente
+--        sesiones de flujo, inscripciones, destinatarios de difusión, avisos del
+--        cliente y el contenido de sus mensajes de Zernio aún sin procesar. Conserva la fila del contacto SIN datos personales ("Cliente
 --        eliminado", de baja) y sus gestiones sin texto libre (los reclamos conservan
 --        además la solución escrita). Devuelve la lista de archivos del almacenamiento
 --        para que la app los borre y, si falla, quede pendiente y se pueda reintentar.
@@ -99,7 +102,22 @@ create or replace function public.sync_contact_consent()
 returns trigger
 language plpgsql
 as $$
+declare
+  v_user uuid := auth.uid();
 begin
+  -- Escritura con la sesión de una PERSONA (API de datos) que fija o cambia el
+  -- consentimiento: autor, origen y fecha los pone la base, no el cliente. Así nadie
+  -- puede dejar un "aceptó" sin rastro ni a nombre de otra persona. El servidor de la
+  -- app escribe con la clave de servicio (auth.uid() es null) y sigue poniendo sus
+  -- propios valores (importación, palabra clave, etc.).
+  if v_user is not null
+     and ((tg_op = 'INSERT' and new.marketing_status <> 'unknown')
+          or (tg_op = 'UPDATE' and new.marketing_status is distinct from old.marketing_status)) then
+    new.marketing_set_by := v_user;
+    new.marketing_source := 'manual';
+    new.marketing_status_at := now();
+  end if;
+
   if tg_op = 'INSERT' then
     -- Código anterior que crea un contacto ya dado de baja.
     if new.is_subscribed is false and new.marketing_status = 'unknown' then
@@ -299,6 +317,11 @@ begin
   delete from public.broadcast_recipients where contact_id = p_contact_id;
   delete from public.notifications where link like '%' || p_contact_id::text || '%';
   delete from public.scheduled_jobs where status = 'pending' and payload::text like '%' || p_contact_id::text || '%';
+  -- Mensajes de Zernio que no terminaron de procesarse guardan aún el texto y el remitente
+  -- (bandeja durable, 00041): se vacía el contenido y se dan por cerrados.
+  update public.webhook_events
+     set payload = null, status = 'processed', processed_at = coalesce(processed_at, now())
+   where contact_id = p_contact_id and payload is not null;
   update public.analytics_events set contact_id = null where contact_id = p_contact_id;
 
   -- El contacto queda anónimo y de baja de publicidad para siempre.
