@@ -97,6 +97,37 @@ export function matchesCaseEvent(
   return triggerMinutes(config) === stampedMinutes;
 }
 
+// ── Saludo de «Gestión nueva» ───────────────────────────────────────────────
+// El flujo de bienvenida también saluda cuando la gestión ya llega clasificada
+// (por ejemplo, un prospecto nuevo que entra como Venta). Para que no hable
+// donde no corresponde, antes de ejecutar un disparador `case_opened` se
+// descartan estos casos (case-triggers.ts reúne los datos).
+
+/** Cuánto cuenta una respuesta de un asesor o un saludo anterior del mismo flujo. */
+export const CASE_OPENED_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+export type CaseOpenedSkipReason = "bot_paused" | "reopened" | "agent_talking" | "already_greeted";
+
+export interface CaseOpenedFacts {
+  /** La conversación tiene el bot en pausa (un asesor atiende o se pausó a mano). */
+  botPaused: boolean;
+  /** La gestión es una reapertura, no una gestión nueva. */
+  reopened: boolean;
+  /** Una persona del equipo escribió en la conversación en las últimas 24 h. */
+  agentRepliedRecently: boolean;
+  /** Este mismo flujo ya corrió para el contacto en las últimas 24 h. */
+  flowRanRecently: boolean;
+}
+
+/** Por qué NO debe correr un flujo de «Gestión nueva» (null = puede correr). */
+export function caseOpenedSkipReason(facts: CaseOpenedFacts): CaseOpenedSkipReason | null {
+  if (facts.botPaused) return "bot_paused";
+  if (facts.reopened) return "reopened";
+  if (facts.agentRepliedRecently) return "agent_talking";
+  if (facts.flowRanRecently) return "already_greeted";
+  return null;
+}
+
 // ── Protección contra bucles ────────────────────────────────────────────────
 // Un flujo disparado por un evento puede cambiar la etapa o cerrar la gestión,
 // lo que emite otro evento. La "cadena" son los ids de los flujos que ya

@@ -165,6 +165,45 @@ describe("entrada de mensajes: retomar la conversación", () => {
     expect(session()).toMatchObject({ status: "expired" });
   });
 
+  it("el saludo de «Gestión nueva» que abrió este mismo mensaje no lo toma como su respuesta", async () => {
+    await startWaitingFlow();
+    // La sesión nació del evento «gestión nueva» de la gestión que abre este mensaje (carrera con el motor de gestiones).
+    session().variables = { __case_event: "case_opened", case_id: "case-new" };
+    handleInbound.mockResolvedValueOnce({ caseId: "case-new", opened: true, reopened: false, assignment: null, offHoursReply: null } as never);
+    matchTrigger.mockResolvedValue(null);
+
+    await run({ text: "Hola" });
+
+    expect(notes()).toEqual([]);
+    expect(session()).toMatchObject({ status: "active", waiting_for_input: true });
+    expect(matchTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it("una palabra clave en el mensaje que abrió la gestión inicia su flujo y no retoma el saludo", async () => {
+    await startWaitingFlow();
+    session().variables = { __case_event: "case_opened", case_id: "case-new" };
+    handleInbound.mockResolvedValueOnce({ caseId: "case-new", opened: true, reopened: false, assignment: null, offHoursReply: null } as never);
+    matchTrigger.mockResolvedValue({ id: "tr2", flow_id: "flow-trigger" });
+
+    await run({ text: "precio de la creatina" });
+
+    expect(notes()).toEqual(["DISPARADOR"]);
+    // El saludo no consumió el mensaje: solo lo cerró el traspaso a una persona del flujo que sí coincidió.
+    expect((fake.rows("flow_sessions").find((s) => s.flow_id === "flow-wait")?.variables as Record<string, string>).message).toBeUndefined();
+  });
+
+  it("el saludo de «Gestión nueva» sí recibe la siguiente respuesta del cliente", async () => {
+    await startWaitingFlow();
+    session().variables = { __case_event: "case_opened", case_id: "case-new" };
+    // Mensaje posterior: la gestión ya existía (opened = false).
+    handleInbound.mockResolvedValueOnce({ caseId: "case-new", opened: false, reopened: false, assignment: null, offHoursReply: null } as never);
+
+    await run({ text: "Quiero comprar" });
+
+    expect(notes()).toEqual(["Respuesta: Quiero comprar"]);
+    expect(session()).toMatchObject({ status: "completed" });
+  });
+
   it("la sesión de otro canal no se retoma", async () => {
     await startWaitingFlow();
     session().channel_id = "otro-canal";

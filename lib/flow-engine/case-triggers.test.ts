@@ -17,7 +17,7 @@ function fakeService(tables: Rows): SupabaseClient<Database> {
   function builder(table: string) {
     const rows = tables[table] ?? [];
     const b: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "not", "order", "limit"]) b[m] = () => b;
+    for (const m of ["select", "eq", "not", "gte", "order", "limit"]) b[m] = () => b;
     b.maybeSingle = async () => ({ data: rows[0] ?? null, error: null });
     b.then = (resolve: (v: unknown) => void) => resolve({ data: rows, error: null });
     return b;
@@ -85,7 +85,7 @@ describe("runCaseEventFlows", () => {
     expect(executeFlow.mock.calls[0][1]).toMatchObject({ flowId: "flowA", conversationId: "conv1", startFresh: true });
   });
 
-  it("también corren con el bot en pausa los de gestión cerrada, cliente sin responder y gestión nueva", async () => {
+  it("también corren con el bot en pausa los de gestión cerrada y cliente sin responder", async () => {
     const paused = { ...conversation, is_automation_paused: true };
     await runCaseEventFlows(
       fakeService({ triggers: [trigger("c1", "flowClosed", {}, "case_closed")], conversations: [paused] }),
@@ -99,11 +99,57 @@ describe("runCaseEventFlows", () => {
       }),
       { ...event, type: "client_no_reply" },
     );
-    await runCaseEventFlows(
-      fakeService({ triggers: [trigger("o1", "flowOpened", {}, "case_opened")], conversations: [paused] }),
-      { ...event, type: "case_opened", caseTypeId: null, stageId: null, contactTypeId: "ct1" },
-    );
-    expect(executeFlow.mock.calls.map((c) => c[1].flowId)).toEqual(["flowClosed", "flowNoReply", "flowOpened"]);
+    expect(executeFlow.mock.calls.map((c) => c[1].flowId)).toEqual(["flowClosed", "flowNoReply"]);
+  });
+
+  describe("gestión nueva (saludo)", () => {
+    const opened = { ...event, type: "case_opened" as const, caseTypeId: "t1", stageId: "s1", contactTypeId: "ct1" };
+    const welcome = trigger("o1", "flowWelcome", {}, "case_opened");
+
+    it("saluda también cuando la gestión ya llega clasificada (un prospecto nuevo entra como Venta)", async () => {
+      await runCaseEventFlows(fakeService({ triggers: [welcome], conversations: [conversation] }), opened);
+      expect(executeFlow.mock.calls.map((c) => c[1].flowId)).toEqual(["flowWelcome"]);
+      expect(executeFlow.mock.calls[0][1].variables).toMatchObject({ case_id: "case1", __case_event: "case_opened", case_type_id: "t1" });
+    });
+
+    it("«solo sin clasificar» sigue sin saludar una gestión ya clasificada", async () => {
+      const only = trigger("o2", "flowOnlyUnclassified", { only_unclassified: true }, "case_opened");
+      await runCaseEventFlows(fakeService({ triggers: [only], conversations: [conversation] }), opened);
+      expect(executeFlow).not.toHaveBeenCalled();
+    });
+
+    it("no saluda con el bot en pausa (un asesor atiende o se pausó a mano)", async () => {
+      const paused = { ...conversation, is_automation_paused: true };
+      await runCaseEventFlows(fakeService({ triggers: [welcome], conversations: [paused] }), opened);
+      expect(executeFlow).not.toHaveBeenCalled();
+    });
+
+    it("no saluda en una gestión reabierta", async () => {
+      await runCaseEventFlows(fakeService({ triggers: [welcome], conversations: [conversation], activity: [{ id: "a1" }] }), opened);
+      expect(executeFlow).not.toHaveBeenCalled();
+    });
+
+    it("no saluda a un cliente con el que un asesor conversó en las últimas 24 h", async () => {
+      await runCaseEventFlows(fakeService({ triggers: [welcome], conversations: [conversation], messages: [{ id: "m1" }] }), opened);
+      expect(executeFlow).not.toHaveBeenCalled();
+    });
+
+    it("no saluda dos veces: si el flujo ya corrió para el contacto en las últimas 24 h, no vuelve a correr", async () => {
+      await runCaseEventFlows(fakeService({ triggers: [welcome], conversations: [conversation], flow_sessions: [{ id: "s1" }] }), opened);
+      expect(executeFlow).not.toHaveBeenCalled();
+    });
+
+    it("las demás condiciones no afectan a los otros eventos de gestión", async () => {
+      const service = fakeService({
+        triggers: [trigger("tr1", "flowA")],
+        conversations: [{ ...conversation, is_automation_paused: true }],
+        activity: [{ id: "a1" }],
+        messages: [{ id: "m1" }],
+        flow_sessions: [{ id: "s1" }],
+      });
+      await runCaseEventFlows(service, event);
+      expect(executeFlow).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("gestión nueva: filtra por sin clasificar y por tipo de contacto, y pasa el evento a la sesión", async () => {

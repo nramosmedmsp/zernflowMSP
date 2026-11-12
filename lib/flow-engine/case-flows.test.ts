@@ -8,6 +8,7 @@ import {
   selectCaseTriggers,
   serializeFlowChain,
   triggerMinutes,
+  caseOpenedSkipReason,
   DEFAULT_NO_REPLY_MINUTES,
   type CaseEventLike,
 } from "./case-trigger-match";
@@ -342,5 +343,26 @@ describe("buildDesiredTriggers con disparadores de gestión", () => {
     const rows = buildDesiredTriggers([node({ triggerType: "case_closed" })], "flow-1");
     expect(rows).toHaveLength(1);
     expect(rows[0].config).toEqual({});
+  });
+});
+
+describe("caseOpenedSkipReason: cuándo NO saluda «Gestión nueva»", () => {
+  const free = { botPaused: false, reopened: false, agentRepliedRecently: false, flowRanRecently: false };
+
+  it("sin ningún impedimento puede saludar", () => {
+    expect(caseOpenedSkipReason(free)).toBeNull();
+  });
+
+  it.each([
+    ["botPaused", "bot_paused"],
+    ["reopened", "reopened"],
+    ["agentRepliedRecently", "agent_talking"],
+    ["flowRanRecently", "already_greeted"],
+  ] as const)("%s impide saludar (%s)", (field, reason) => {
+    expect(caseOpenedSkipReason({ ...free, [field]: true })).toBe(reason);
+  });
+
+  it("el bot en pausa manda sobre los demás motivos", () => {
+    expect(caseOpenedSkipReason({ botPaused: true, reopened: true, agentRepliedRecently: true, flowRanRecently: true })).toBe("bot_paused");
   });
 });

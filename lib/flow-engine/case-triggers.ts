@@ -27,11 +27,17 @@
 //   `no_reply_event_minutes` de la gestión y se ejecutan solo los
 //   disparadores con ese mismo `minutes`.
 //
-// Bot en pausa: la pausa evita que el bot hable encima de un asesor cuando el
+// Gestión nueva (case_opened): es la bienvenida, así que SÍ respeta el bot en
+// pausa y además no corre en una reapertura, con un asesor que escribió en las
+// últimas 24 h, ni si ese flujo ya corrió para el contacto en las últimas 24 h
+// (ver caseOpenedSkipReason). Corre con la gestión sin clasificar o ya
+// clasificada (un prospecto nuevo entra como Venta), según el disparador.
+//
+// Bot en pausa (el resto de eventos): la pausa evita que el bot hable encima de un asesor cuando el
 // cliente escribe. Los flujos de estos eventos son intencionales (los
 // configuró la empresa para ese cambio de gestión) y se ejecutan aunque la
 // conversación tenga el bot en pausa. Los mensajes del cliente con el bot en
-// pausa siguen sin activar palabras clave ni bienvenida (inbound-pipeline.ts).
+// pausa tampoco activan palabras clave ni bienvenida (inbound-pipeline.ts).
 //
 // Protección contra bucles: el evento puede traer `chain`, los ids de los
 // flujos que ya corrieron en la sucesión que lo provocó (lo rellenan los
@@ -44,8 +50,10 @@ import {
   CASE_EVENT_VARIABLE,
   CASE_ID_VARIABLE,
   DEFAULT_NO_REPLY_MINUTES,
+  CASE_OPENED_LOOKBACK_MS,
   FLOW_CHAIN_VARIABLE,
   MAX_CASE_FLOW_CHAIN,
+  caseOpenedSkipReason,
   extendFlowChain,
   selectCaseTriggers,
   serializeFlowChain,
@@ -75,9 +83,10 @@ interface EventConversation {
   id: string;
   channel_id: string;
   late_conversation_id: string | null;
+  is_automation_paused: boolean;
 }
 
-const CONVERSATION_COLUMNS = "id, channel_id, late_conversation_id";
+const CONVERSATION_COLUMNS = "id, channel_id, late_conversation_id, is_automation_paused";
 
 /**
  * Conversación donde corre el flujo: la más reciente con la gestión (la del
@@ -114,11 +123,49 @@ async function pickConversation(service: Service, event: CaseFlowEvent): Promise
   return latest ?? null;
 }
 
+type OpenedFacts = Omit<Parameters<typeof caseOpenedSkipReason>[0], "flowRanRecently">;
+
+/** Datos de la gestión nueva que no dependen del flujo. Un fallo al leer no bloquea el saludo. */
+async function loadCaseOpenedFacts(service: Service, event: CaseFlowEvent, conversation: EventConversation): Promise<OpenedFacts> {
+  const since = new Date(Date.now() - CASE_OPENED_LOOKBACK_MS).toISOString();
+  const [{ data: reopened }, { data: agent }] = await Promise.all([
+    service.from("activity").select("id").eq("case_id", event.caseId).eq("type", "case_reopened").limit(1).maybeSingle(),
+    service
+      .from("messages")
+      .select("id")
+      .eq("conversation_id", conversation.id)
+      .eq("direction", "outbound")
+      .not("sent_by_user_id", "is", null)
+      .gte("created_at", since)
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  return {
+    botPaused: conversation.is_automation_paused === true,
+    reopened: !!reopened,
+    agentRepliedRecently: !!agent,
+  };
+}
+
+/** ¿Este flujo ya corrió (cualquier estado) para el contacto en las últimas 24 h? */
+async function flowRanRecently(service: Service, contactId: string, flowId: string): Promise<boolean> {
+  const since = new Date(Date.now() - CASE_OPENED_LOOKBACK_MS).toISOString();
+  const { data } = await service
+    .from("flow_sessions")
+    .select("id")
+    .eq("contact_id", contactId)
+    .eq("flow_id", flowId)
+    .gte("created_at", since)
+    .limit(1)
+    .maybeSingle();
+  return !!data;
+}
+
 /**
  * Ejecuta los flujos cuyos disparadores coinciden con el evento, como lo hace
  * el webhook con los mensajes entrantes. No hace nada si no hay disparadores
  * que coincidan o si el contacto no tiene conversación. El bot en pausa no lo
- * impide (ver arriba).
+ * impide, salvo en «Gestión nueva» (ver arriba).
  */
 export async function runCaseEventFlows(service: Service, event: CaseFlowEvent): Promise<void> {
   if ((event.chain?.length ?? 0) >= MAX_CASE_FLOW_CHAIN) {
@@ -162,10 +209,24 @@ export async function runCaseEventFlows(service: Service, event: CaseFlowEvent):
     return;
   }
 
+  // «Gestión nueva» (saludo): no habla con el bot en pausa, en una reapertura,
+  // con un asesor ya conversando ni dos veces el mismo flujo.
+  const openedFacts = event.type === "case_opened" ? await loadCaseOpenedFacts(service, event, conversation) : null;
+
   const { executeFlow } = await import("./engine");
   for (const trigger of selected) {
     // El disparador puede estar limitado a un canal.
     if (trigger.channel_id && trigger.channel_id !== conversation.channel_id) continue;
+    if (openedFacts) {
+      const skip = caseOpenedSkipReason({
+        ...openedFacts,
+        flowRanRecently: await flowRanRecently(service, event.contactId, trigger.flow_id),
+      });
+      if (skip) {
+        console.info(`[flows] gestión nueva: no se ejecuta el flujo ${trigger.flow_id} (${skip})`);
+        continue;
+      }
+    }
     const chain = extendFlowChain(event.chain, trigger.flow_id);
     const variables: Record<string, string> = {
       [CASE_ID_VARIABLE]: event.caseId,
