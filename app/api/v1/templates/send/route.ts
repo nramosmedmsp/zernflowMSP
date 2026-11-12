@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { erasedContactError } from "@/lib/contact-erased-guard";
 import { createServiceClient } from "@/lib/supabase/server";
 import { requireApiMember } from "@/lib/api-auth";
 import { handleHumanOutboundForConversation } from "@/lib/cases";
@@ -15,6 +16,10 @@ import {
   summarizeTemplate,
 } from "@/components/composer/whatsapp-templates";
 import { zernioErrorMessage, zernioFailed, zernioThrown } from "../zernio-error";
+import { demoTemplateKind, readTemplateKind, type TemplateReader } from "@/lib/template-category";
+import { templateConsentBlock } from "@/lib/template-gate";
+import { enforceRateLimit } from "@/lib/rate-limit-http";
+import { RATE_RULES } from "@/lib/rate-limit";
 
 const MAX_PARAMS = 20;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,6 +44,9 @@ export async function POST(request: NextRequest) {
   const guard = await requireApiMember();
   if (!guard.ok) return guard.response;
   const { supabase, user } = guard.ctx;
+  // SEG-01: tope de plantillas por usuario.
+  const limited = await enforceRateLimit(RATE_RULES.templateSend, user.id);
+  if (limited) return limited;
 
   let payload: Record<string, unknown>;
   try {
@@ -87,6 +95,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No se encontró la conversación" }, { status: 404 });
   }
 
+  // Cliente eliminado: la ficha y el chat son solo de lectura (lib/contact-erased.ts).
+  const erased = await erasedContactError(supabase, conversation.workspace_id, conversation.contact_id);
+  if (erased) return NextResponse.json(erased, { status: 403 });
+
   const channel = conversation.channels as { late_account_id: string; platform: string } | null;
   if (!channel?.late_account_id) {
     return NextResponse.json({ error: "No se encontró el canal o le falta el ID de cuenta de Zernio" }, { status: 404 });
@@ -99,6 +111,13 @@ export async function POST(request: NextRequest) {
   // variables en lugar de enviarlo.
   if (isDemoChannel(channel)) {
     const service = await createServiceClient();
+    // Decisión 2: las plantillas de publicidad solo salen a quien aceptó publicidad.
+    const blocked = await templateConsentBlock(service, {
+      workspaceId: conversation.workspace_id,
+      contactId: conversation.contact_id,
+      kind: demoTemplateKind(templateName),
+    });
+    if (blocked) return NextResponse.json(blocked.body, { status: blocked.status });
     const sentAt = new Date().toISOString();
     const text = demoTemplateText(templateName, params);
     const stored = await storeDemoMessage(service, {
@@ -147,6 +166,21 @@ export async function POST(request: NextRequest) {
 
   // Teléfono del contacto en este canal (la lectura ya está autorizada arriba).
   const service = await createServiceClient();
+
+  // Decisión 2: una plantilla de servicio sale a cualquiera (también a quien se dio de
+  // baja); una de publicidad, o de categoría desconocida, solo a quien aceptó publicidad.
+  const kind = await readTemplateKind(
+    createZernioClient(lateApiKey) as unknown as TemplateReader,
+    channel.late_account_id,
+    templateName,
+  );
+  const blocked = await templateConsentBlock(service, {
+    workspaceId: conversation.workspace_id,
+    contactId: conversation.contact_id,
+    kind,
+  });
+  if (blocked) return NextResponse.json(blocked.body, { status: blocked.status });
+
   const [{ data: contactChannel }, { data: contact }] = await Promise.all([
     service
       .from("contact_channels")

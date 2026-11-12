@@ -4,6 +4,7 @@
 // bandeja: si el asesor cambia de chat mientras un mensaje sale y el envío
 // falla, el aviso dice a quién era y el mensaje sigue en su chat con Reintentar.
 
+import { errorFromResponse } from "@/lib/session-expired";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { useToast } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase/client";
@@ -96,7 +97,7 @@ export function useOutbox({ onDelivered }: { onDelivered?: (conversationId: stri
         });
         status = res.status;
         const json = (await res.json().catch(() => ({}))) as Partial<InboxMessage> & { error?: string };
-        if (!res.ok) throw new Error(json.error || `No se pudo enviar (${res.status})`);
+        if (!res.ok) throw new Error(errorFromResponse(res.status, json.error, `No se pudo enviar (${res.status})`));
         dispatch({ type: "sent", clientId: item.clientId, confirmedId: json.id ?? null });
         delivered.current?.(item.conversationId);
         return true;

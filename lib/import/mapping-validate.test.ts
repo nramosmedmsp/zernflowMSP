@@ -76,7 +76,7 @@ const lookups: ImportLookups = {
   existingByPhone: new Map([["51987654321", "k1"]]),
   existingByEmail: new Map([["luis@x.pe", "k2"]]),
 };
-const options: ImportOptions = { existing: "skip", createTags: true, channelId: null, scheduleCases: false };
+const options: ImportOptions = { existing: "skip", createTags: true, channelId: null, scheduleCases: false, consentDeclared: false };
 const row = (
   values: Record<string, string>,
   extra: Partial<{ line: number; custom: Record<string, string>; fileDuplicateOf: number | null }> = {},
@@ -216,6 +216,14 @@ describe("sanitize", () => {
       createTags: true,
       channelId: null,
       scheduleCases: true,
+      consentDeclared: false,
     });
+  });
+
+  it("la declaración de consentimiento solo cuenta si es exactamente true", () => {
+    expect(sanitizeImportOptions({ consentDeclared: true })).toMatchObject({ consentDeclared: true });
+    for (const v of ["true", 1, "si", null, undefined]) {
+      expect(sanitizeImportOptions({ consentDeclared: v })).toMatchObject({ consentDeclared: false });
+    }
   });
 });

@@ -11,15 +11,21 @@ import {
   Calendar,
   CheckCircle,
   XCircle,
+  Megaphone,
 } from "lucide-react";
 import { PlatformIcon } from "@/components/platform-icon";
 import { ContactProfile } from "@/components/contacts/contact-profile";
 import { ContactTimeline } from "@/components/contacts/contact-timeline";
+import { MarketingConsentBlock } from "@/components/contacts/marketing-consent";
+import { ContactPrivacyPanel, type ErasureRecord } from "@/components/contacts/contact-privacy-panel";
+import { marketingStatusLabel, normalizeMarketingStatus, type MarketingStatus } from "@/lib/consent";
 import { contactInitial, describeSource, keyDateLabel } from "@/components/contacts/contact-labels";
 import { buildTimeline, type TimelineLookups } from "@/components/contacts/timeline";
 import { formatDateTime } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
 import { loadContactTypeInfo } from "@/lib/cases/contact-type";
+import { ErasedNotice } from "@/components/contacts/erased-notice";
+import { displayNameFor } from "@/lib/contact-erased";
 
 const CONVERSATION_STATUS_LABELS: Record<string, string> = {
   open: "Abierta",
@@ -89,7 +95,7 @@ export default async function ContactDetailPage({
       .eq("workspace_id", workspace.id)
       .is("archived_at", null)
       .order("name", { ascending: true }),
-    supabase.from("case_types").select("id, name").eq("workspace_id", workspace.id),
+    supabase.from("case_types").select("id, name, protected").eq("workspace_id", workspace.id),
     supabase
       .from("activity")
       .select("id, type, actor_id, case_id, from_value, to_value, meta, created_at")
@@ -154,6 +160,33 @@ export default async function ContactDetailPage({
   });
 
   const formatDate = (dateStr: string | null): string => (dateStr ? formatDateTime(dateStr) : "Nunca");
+
+  // Publicidad (PRIV-01/04) y datos personales (PRIV-06).
+  const marketing: MarketingStatus = normalizeMarketingStatus(contact.marketing_status);
+  const erased = !!contact.erased_at;
+  const isAdmin = isAdminRole(role);
+  const protectedTypeIds = new Set(caseTypes.filter((t) => t.protected).map((t) => t.id));
+  const claimCount = (casesRes.data ?? []).filter((g) => g.case_type_id && protectedTypeIds.has(g.case_type_id)).length;
+  let erasure: ErasureRecord | null = null;
+  if (erased && isAdmin) {
+    const { data: row } = await supabase
+      .from("contact_erasures")
+      .select("id, requested_at, requested_by, files_pending, files_total, last_file_error")
+      .eq("contact_id", contact.id)
+      .order("requested_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (row) {
+      erasure = {
+        id: row.id,
+        requestedAt: row.requested_at,
+        requestedByName: row.requested_by ? (lookups.users[row.requested_by] ?? null) : null,
+        filesPending: row.files_pending?.length ?? 0,
+        filesTotal: row.files_total,
+        lastFileError: row.last_file_error,
+      };
+    }
+  }
   const typeInfo = await loadContactTypeInfo(supabase, contact.id, contact);
 
   return (
@@ -177,12 +210,12 @@ export default async function ContactDetailPage({
                 className="h-12 w-12 rounded-full object-cover"
               />
             ) : (
-              contactInitial(contact.display_name)
+              contactInitial(displayNameFor(contact, ""))
             )}
           </div>
           <div>
             <h1 className="text-xl font-bold">
-              {contact.display_name ?? "Desconocido"}
+              {displayNameFor(contact, "Desconocido")}
             </h1>
             <div className="mt-0.5 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
               {contact.email && (
@@ -201,15 +234,17 @@ export default async function ContactDetailPage({
                 <Calendar className="h-3 w-3" />
                 Última actividad: {formatDate(contact.last_interaction_at)}
               </span>
-              {contact.is_subscribed ? (
-                <span className="flex items-center gap-1 text-green-600">
-                  <CheckCircle className="h-3 w-3" />
-                  Suscrito
-                </span>
-              ) : (
+              {erased ? (
                 <span className="flex items-center gap-1">
                   <XCircle className="h-3 w-3" />
-                  No suscrito
+                  Datos eliminados
+                </span>
+              ) : (
+                <span
+                  className={`flex items-center gap-1 ${marketing === "accepted" ? "text-green-600" : marketing === "opted_out" ? "text-red-600" : ""}`}
+                >
+                  {marketing === "accepted" ? <CheckCircle className="h-3 w-3" /> : marketing === "opted_out" ? <XCircle className="h-3 w-3" /> : <Megaphone className="h-3 w-3" />}
+                  Publicidad: {marketingStatusLabel(marketing)}
                 </span>
               )}
             </div>
@@ -219,6 +254,13 @@ export default async function ContactDetailPage({
 
       {/* Content */}
       <div className="flex-1 overflow-auto px-8 py-6">
+        {erased && (
+          <ErasedNotice
+            className="mb-6"
+            erasedAt={contact.erased_at}
+            byName={isAdmin && contact.erased_by ? (lookups.users[contact.erased_by] ?? null) : null}
+          />
+        )}
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="space-y-6">
             {/* Profile */}
@@ -229,6 +271,7 @@ export default async function ContactDetailPage({
               <ContactProfile
                 contactId={contact.id}
                 isAdmin={isAdminRole(role)}
+                erased={erased}
                 contactTypeId={contact.contact_type_id}
                 ownerId={contact.owner_id}
                 teamId={contact.team_id}
@@ -251,6 +294,43 @@ export default async function ContactDetailPage({
                 allTags={allTagsRes.data ?? []}
               />
             </div>
+
+            {/* Publicidad */}
+            <div>
+              <h2 className="mb-3 text-sm font-semibold uppercase text-muted-foreground">
+                Publicidad
+              </h2>
+              <div className="rounded-lg border border-border p-4">
+                <MarketingConsentBlock
+                  contactId={contact.id}
+                  status={contact.marketing_status}
+                  at={contact.marketing_status_at}
+                  source={contact.marketing_source}
+                  note={contact.marketing_note}
+                  setByName={contact.marketing_set_by ? (lookups.users[contact.marketing_set_by] ?? null) : null}
+                  erased={erased}
+                />
+              </div>
+            </div>
+
+            {/* Datos personales: corregir, descargar y eliminar (Dueño y Administrador) */}
+            {isAdmin && (
+              <div>
+                <h2 className="mb-3 text-sm font-semibold uppercase text-muted-foreground">
+                  Datos personales del cliente
+                </h2>
+                <ContactPrivacyPanel
+                  contactId={contact.id}
+                  name={contact.display_name}
+                  email={contact.email}
+                  phone={contact.phone}
+                  caseCount={(casesRes.data ?? []).length}
+                  claimCount={claimCount}
+                  erasure={erasure}
+                  erased={erased}
+                />
+              </div>
+            )}
 
             {/* Connected channels */}
             <div>

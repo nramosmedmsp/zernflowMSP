@@ -23,8 +23,11 @@ export type BroadcastStatus =
   | "draft"
   | "scheduled"
   | "sending"
+  | "paused"
   | "completed"
   | "cancelled";
+/** Por qué está en pausa una difusión: la pausó una persona o se pausó sola por fallos seguidos. */
+export type BroadcastPauseReason = "manual" | "auto_failures";
 export type JobStatus = "pending" | "processing" | "completed" | "failed";
 export type TriggerType =
   | "keyword"
@@ -244,6 +247,9 @@ export type CaseRuleParams = SetContactTypeParams | ScheduleCaseParams | AskKeyD
 /** saved_replies.scope */
 export type SavedReplyScope = "workspace" | "team" | "personal";
 
+/** 00041: estado de un evento de webhook en la bandeja durable. */
+export type WebhookEventStatus = "received" | "stored" | "processed" | "failed";
+
 /** activity.type */
 /** 00037: lo que una etapa pide antes de avanzar. */
 export type StageRequirement = "category" | "solution" | "note";
@@ -268,6 +274,7 @@ export type ActivityType =
   | "automation_paused"
   | "automation_resumed"
   | "contact_unsubscribed"
+  | "contact_subscribed"
   | "config_changed"
   // Fase 2 (00021)
   | "off_hours_reply_sent"
@@ -285,7 +292,12 @@ export type ActivityType =
   | "close_requested"
   | "close_request_approved"
   | "close_request_rejected"
-  | "complaint_dismissed";
+  | "complaint_dismissed"
+  // Consentimiento y datos del cliente (00044)
+  | "contact_data_corrected"
+  | "contact_data_exported"
+  | "contact_data_erased"
+  | "contact_data_erase_files_retried";
 
 export interface Database {
   public: {
@@ -476,6 +488,15 @@ export interface Database {
           contact_type_confirmed_by: string | null;
           /** 00036: "Preguntar después" (la pregunta del chat no sale hasta esta fecha). */
           contact_type_prompt_snoozed_until: string | null;
+          /** 00044: 'unknown' (sin registrar) | 'accepted' (aceptó publicidad) | 'opted_out' (baja). Ver lib/consent.ts. */
+          marketing_status: "unknown" | "accepted" | "opted_out";
+          marketing_status_at: string | null;
+          marketing_source: string | null;
+          marketing_set_by: string | null;
+          marketing_note: string | null;
+          /** 00044: cuándo se borraron los datos personales (la fila queda anónima). */
+          erased_at: string | null;
+          erased_by: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -497,6 +518,13 @@ export interface Database {
           contact_type_confirmed_at?: string | null;
           contact_type_confirmed_by?: string | null;
           contact_type_prompt_snoozed_until?: string | null;
+          marketing_status?: "unknown" | "accepted" | "opted_out";
+          marketing_status_at?: string | null;
+          marketing_source?: string | null;
+          marketing_set_by?: string | null;
+          marketing_note?: string | null;
+          erased_at?: string | null;
+          erased_by?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -516,6 +544,13 @@ export interface Database {
           contact_type_confirmed_at?: string | null;
           contact_type_confirmed_by?: string | null;
           contact_type_prompt_snoozed_until?: string | null;
+          marketing_status?: "unknown" | "accepted" | "opted_out";
+          marketing_status_at?: string | null;
+          marketing_source?: string | null;
+          marketing_set_by?: string | null;
+          marketing_note?: string | null;
+          erased_at?: string | null;
+          erased_by?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -1141,6 +1176,11 @@ export interface Database {
           sent: number;
           delivered: number;
           failed: number;
+          paused_at: string | null;
+          paused_reason: BroadcastPauseReason | null;
+          pause_note: string | null;
+          consecutive_failures: number;
+          cancelled_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -1156,6 +1196,11 @@ export interface Database {
           sent?: number;
           delivered?: number;
           failed?: number;
+          paused_at?: string | null;
+          paused_reason?: BroadcastPauseReason | null;
+          pause_note?: string | null;
+          consecutive_failures?: number;
+          cancelled_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1169,6 +1214,11 @@ export interface Database {
           sent?: number;
           delivered?: number;
           failed?: number;
+          paused_at?: string | null;
+          paused_reason?: BroadcastPauseReason | null;
+          pause_note?: string | null;
+          consecutive_failures?: number;
+          cancelled_at?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -1190,6 +1240,7 @@ export interface Database {
           status: string;
           sent_at: string | null;
           error_message: string | null;
+          claimed_at: string | null;
         };
         Insert: {
           id?: string;
@@ -1199,11 +1250,13 @@ export interface Database {
           status?: string;
           sent_at?: string | null;
           error_message?: string | null;
+          claimed_at?: string | null;
         };
         Update: {
           status?: string;
           sent_at?: string | null;
           error_message?: string | null;
+          claimed_at?: string | null;
         };
         Relationships: [
           {
@@ -1400,13 +1453,130 @@ export interface Database {
         Row: {
           event_id: string;
           received_at: string;
+          /** 00041: received | stored | processed | failed. */
+          status: WebhookEventStatus;
+          event_type: string | null;
+          channel_id: string | null;
+          /** Cuerpo verificado y reducido; NULL cuando el evento queda processed. */
+          payload: Json | null;
+          attempts: number;
+          last_error: string | null;
+          locked_until: string | null;
+          contact_id: string | null;
+          conversation_id: string | null;
+          is_first_message: boolean | null;
+          cases_ok_at: string | null;
+          flows_started_at: string | null;
+          updated_at: string;
+          processed_at: string | null;
         };
         Insert: {
           event_id: string;
           received_at?: string;
+          status?: WebhookEventStatus;
+          event_type?: string | null;
+          channel_id?: string | null;
+          payload?: Json | null;
+          attempts?: number;
+          last_error?: string | null;
+          locked_until?: string | null;
+          contact_id?: string | null;
+          conversation_id?: string | null;
+          is_first_message?: boolean | null;
+          cases_ok_at?: string | null;
+          flows_started_at?: string | null;
+          updated_at?: string;
+          processed_at?: string | null;
         };
         Update: {
           received_at?: string;
+          status?: WebhookEventStatus;
+          event_type?: string | null;
+          channel_id?: string | null;
+          payload?: Json | null;
+          attempts?: number;
+          last_error?: string | null;
+          locked_until?: string | null;
+          contact_id?: string | null;
+          conversation_id?: string | null;
+          is_first_message?: boolean | null;
+          cases_ok_at?: string | null;
+          flows_started_at?: string | null;
+          updated_at?: string;
+          processed_at?: string | null;
+        };
+        Relationships: [];
+      };
+      cron_runs: {
+        Row: {
+          name: string;
+          last_started_at: string | null;
+          last_ok_at: string | null;
+          last_error_at: string | null;
+          last_error: string | null;
+          last_duration_ms: number | null;
+          last_stats: Json | null;
+          updated_at: string;
+        };
+        Insert: {
+          name: string;
+          last_started_at?: string | null;
+          last_ok_at?: string | null;
+          last_error_at?: string | null;
+          last_error?: string | null;
+          last_duration_ms?: number | null;
+          last_stats?: Json | null;
+          updated_at?: string;
+        };
+        Update: {
+          last_started_at?: string | null;
+          last_ok_at?: string | null;
+          last_error_at?: string | null;
+          last_error?: string | null;
+          last_duration_ms?: number | null;
+          last_stats?: Json | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      // ── Tanda 2 (00043): topes de frecuencia y subidas pendientes ───────
+      rate_limit_hits: {
+        Row: {
+          bucket: string;
+          window_start: string;
+          hits: number;
+        };
+        Insert: {
+          bucket: string;
+          window_start: string;
+          hits?: number;
+        };
+        Update: {
+          bucket?: string;
+          window_start?: string;
+          hits?: number;
+        };
+        Relationships: [];
+      };
+      media_uploads: {
+        Row: {
+          path: string;
+          workspace_id: string;
+          user_id: string;
+          source: "chat" | "reply";
+          created_at: string;
+          used_at: string | null;
+        };
+        Insert: {
+          path: string;
+          workspace_id: string;
+          user_id: string;
+          source: "chat" | "reply";
+          created_at?: string;
+          used_at?: string | null;
+        };
+        Update: {
+          used_at?: string | null;
         };
         Relationships: [];
       };
@@ -2215,6 +2385,49 @@ export interface Database {
           },
         ];
       };
+      contact_erasures: {
+        Row: {
+          id: string;
+          workspace_id: string;
+          contact_id: string;
+          requested_by: string | null;
+          requested_at: string;
+          summary: Json;
+          files_pending: string[];
+          files_total: number;
+          files_done_at: string | null;
+          last_file_error: string | null;
+          file_attempts: number;
+        };
+        Insert: {
+          id?: string;
+          workspace_id: string;
+          contact_id: string;
+          requested_by?: string | null;
+          requested_at?: string;
+          summary?: Json;
+          files_pending?: string[];
+          files_total?: number;
+          files_done_at?: string | null;
+          last_file_error?: string | null;
+          file_attempts?: number;
+        };
+        Update: {
+          files_pending?: string[];
+          files_done_at?: string | null;
+          last_file_error?: string | null;
+          file_attempts?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "contact_erasures_workspace_id_fkey";
+            columns: ["workspace_id"];
+            isOneToOne: false;
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       activity: {
         Row: {
           id: number;
@@ -2454,6 +2667,51 @@ export interface Database {
       [_ in never]: never;
     };
     Functions: {
+      // ── Tanda 3 (00044): borrado de los datos de un cliente ──────────────
+      erase_contact_data: {
+        Args: { p_workspace_id: string; p_contact_id: string; p_actor_id: string };
+        Returns: Json;
+      };
+      // ── Tanda 4 (00045): búsqueda y conteos agregados ────────────────────
+      search_contacts: {
+        Args: { p_workspace: string; p_q: string };
+        Returns: Database["public"]["Tables"]["contacts"]["Row"][];
+      };
+      search_cases: {
+        Args: { p_workspace: string; p_q: string };
+        Returns: Database["public"]["Tables"]["cases"]["Row"][];
+      };
+      search_inbox: {
+        Args: { p_workspace: string; p_q: string; p_limit?: number };
+        Returns: Database["public"]["Tables"]["conversations"]["Row"][];
+      };
+      analytics_flow_stats: {
+        Args: { p_workspace: string; p_from: string; p_to: string };
+        Returns: Array<{ flow_id: string; starts: number; completions: number }>;
+      };
+      analytics_daily: {
+        Args: { p_workspace: string; p_from: string; p_to: string };
+        Returns: Array<{ day: string; sent: number; failed: number; new_contacts: number }>;
+      };
+      metrics_inbound_hourly: {
+        Args: { p_workspace: string; p_from: string; p_to: string };
+        Returns: Array<{ hour_start: string; platform: string | null; n: number }>;
+      };
+      // ── Tanda 2 (00043) ──────────────────────────────────────────────────
+      rate_limit_hit: {
+        Args: {
+          p_bucket: string;
+          p_limit: number;
+          p_window_seconds: number;
+        };
+        Returns: Array<{ allowed: boolean; current_hits: number; retry_after_seconds: number }>;
+      };
+      revoke_user_sessions: {
+        Args: {
+          p_user_id: string;
+        };
+        Returns: number;
+      };
       increment_unread: {
         Args: {
           conv_id: string;

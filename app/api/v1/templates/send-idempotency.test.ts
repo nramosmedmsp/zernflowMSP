@@ -29,7 +29,8 @@ vi.mock("@/lib/zernio-client", () => ({
         return { data: { data: { messageId: "wamid-1" } }, response: { status: 200 } };
       },
     },
-    whatsapp: { getWhatsAppTemplate: async () => ({ data: undefined, error: { error: "no" }, response: { status: 404 } }) },
+    // Plantilla de servicio: sale a cualquiera (la categoría se prueba en send-consent.test.ts).
+    whatsapp: { getWhatsAppTemplate: async () => ({ data: { template: { category: "UTILITY" } }, response: { status: 200 } }) },
   }),
 }));
 

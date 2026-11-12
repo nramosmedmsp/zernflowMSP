@@ -9,6 +9,8 @@
 import { getWorkspace } from "@/lib/workspace";
 import { isAdminRole } from "@/lib/permissions";
 import { createServiceClient } from "@/lib/supabase/server";
+import { auditAction } from "@/lib/audit-server";
+import type { AuditAction } from "@/lib/audit";
 import { cleanSpellWord, normalizeWord } from "@/lib/spell-check";
 import { readMemberNames } from "@/lib/flow-lab/scenarios/server";
 import { notify, workspaceAdminIds } from "@/lib/cases/io";
@@ -32,6 +34,17 @@ export interface SpellWordsData {
 }
 
 const LINK = "/dashboard/settings/dictionary";
+
+/** Registro de cambios del diccionario (la palabra de la tienda; nunca falla la acción). */
+async function auditWord(
+  workspaceId: string,
+  actorId: string,
+  action: AuditAction,
+  word: string,
+  meta: Record<string, unknown> = {},
+): Promise<void> {
+  await auditAction({ workspaceId, actorId, action, entity: "dictionary", toValue: word, meta: { word, ...meta } });
+}
 const NOT_ADMIN = "Solo el Dueño o un Administrador pueden aprobar o quitar palabras.";
 
 export async function listSpellWords(): Promise<SpellWordsResult<{ data: SpellWordsData }>> {
@@ -115,6 +128,8 @@ export async function addOrRequestSpellWord(
       return { error: "No se pudo guardar la palabra. Inténtalo de nuevo." };
     }
 
+    if (isAdmin) await auditWord(workspace.id, user.id, "spell_word_added", data.word);
+
     if (!isAdmin) {
       const service = await createServiceClient();
       const admins = await workspaceAdminIds(service, workspace.id);
@@ -171,6 +186,7 @@ export async function approveSpellWord(
       console.error("[spell-words] approve", error.message);
       return { error: "No se pudo aprobar la palabra. Inténtalo de nuevo." };
     }
+    if (row.status !== "approved") await auditWord(workspace.id, user.id, "spell_word_approved", row.word);
     if (row.status === "pending" && row.added_by && row.added_by !== user.id) {
       await notify(await createServiceClient(), [
         {
@@ -206,7 +222,7 @@ export async function rejectSpellWord(id: string): Promise<SpellWordsResult> {
     if (!isAdminRole(role)) return { error: NOT_ADMIN };
     const row = await requesterOf(id);
     if (!row || row.status !== "pending") return { error: "No se encontró el pedido." };
-    const removed = await removeSpellWord(id);
+    const removed = await deleteSpellWord(id, "spell_word_rejected");
     if ("error" in removed) return removed;
     if (row.added_by && row.added_by !== user.id) {
       await notify(await createServiceClient(), [
@@ -227,9 +243,16 @@ export async function rejectSpellWord(id: string): Promise<SpellWordsResult> {
 }
 
 export async function removeSpellWord(id: string): Promise<SpellWordsResult> {
+  return deleteSpellWord(id, "spell_word_removed");
+}
+
+/** Borra la palabra o el pedido y deja el registro (quitada o rechazada). */
+async function deleteSpellWord(id: string, action: "spell_word_removed" | "spell_word_rejected"): Promise<SpellWordsResult> {
   try {
-    const { supabase, workspace, role } = await getWorkspace();
+    const { supabase, workspace, role, user } = await getWorkspace();
     if (!isAdminRole(role)) return { error: NOT_ADMIN };
+    // Se lee antes de borrar para que el registro diga cuál palabra fue.
+    const before = await requesterOf(id);
     const { data, error } = await supabase
       .from("spell_words")
       .delete()
@@ -240,6 +263,7 @@ export async function removeSpellWord(id: string): Promise<SpellWordsResult> {
       console.error("[spell-words] remove", error?.message);
       return { error: "No se pudo quitar la palabra. Inténtalo de nuevo." };
     }
+    if (before) await auditWord(workspace.id, user.id, action, before.word);
     return { ok: true };
   } catch (err) {
     console.error("[spell-words] remove", err);

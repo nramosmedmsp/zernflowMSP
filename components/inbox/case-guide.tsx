@@ -260,7 +260,7 @@ export function CaseGuidePanel({
     const ok = await run(
       "stage",
       async () => {
-        const result = await changeCaseStage(active.id, stageId, opts.jump ? { jump: true } : undefined);
+        const result = await changeCaseStage(active.id, stageId, { fromStageId, ...(opts.jump ? { jump: true } : {}) });
         if ("ok" in result && result.move) {
           made.notice = {
             caseId: active.id,

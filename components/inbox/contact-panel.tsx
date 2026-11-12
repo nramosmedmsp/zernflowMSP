@@ -40,6 +40,9 @@ import type { Database, Platform } from "@/lib/types/database";
 import { useContactCases } from "./use-contact-cases";
 import { inputClass, selectClass } from "./ui";
 import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
+import { MarketingConsentBlock } from "@/components/contacts/marketing-consent";
+import { ErasedNotice } from "@/components/contacts/erased-notice";
+import { displayNameFor, isContactErased } from "@/lib/contact-erased";
 import { useToast } from "@/components/ui/toast";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
@@ -126,8 +129,11 @@ function PhoneRow({
   fallback,
   saving,
   onSave,
+  readOnly = false,
 }: {
   phone: string | null;
+  /** Cliente eliminado: sin edición. */
+  readOnly?: boolean;
   /** Número de WhatsApp del chat, si el contacto no tiene teléfono guardado. */
   fallback: string | null;
   saving: boolean;
@@ -194,6 +200,7 @@ function PhoneRow({
                 Copiar
               </button>
             )}
+            {!readOnly && (
             <button
               onClick={() => {
                 setValue(phone ?? (formatPhoneDisplay(fallback) ? shown : ""));
@@ -205,6 +212,7 @@ function PhoneRow({
             >
               <Pencil className="h-3 w-3" />
             </button>
+            )}
           </div>
         </div>
       )}
@@ -362,6 +370,7 @@ export function ContactPanel({
   }
 
   const contact = details?.contact;
+  const erased = isContactErased(contact);
   const ownerId = contact?.owner_id ?? null;
   const teamId = contact?.team_id ?? null;
   const ownerName = ownerId ? members.find((m) => m.userId === ownerId)?.name ?? "Otra persona" : "Sin responsable";
@@ -372,7 +381,12 @@ export function ContactPanel({
   const availableTags = workspaceTags.filter((t) => !details?.tags.some((x) => x.id === t.id));
 
   return (
-    <div className="animate-slide-in-right flex h-full w-80 flex-col border-l border-border bg-background">
+    // Sin relleno "forwards": si la animación se queda aplicada, el panel actúa
+    // como contenedor de los diálogos (Modal usa "fixed") y salen metidos en el panel.
+    <div
+      className="animate-slide-in-right flex h-full w-80 flex-col border-l border-border bg-background"
+      style={{ animationFillMode: "backwards" }}
+    >
       {/* Header */}
       <div className="flex h-14 items-center justify-between border-b border-border px-4">
         <h3 className="text-sm font-semibold">Información del contacto</h3>
@@ -391,6 +405,13 @@ export function ContactPanel({
         </div>
       ) : details && contact ? (
         <div className="flex-1 overflow-y-auto">
+          {erased && (
+            <ErasedNotice
+              className="m-3 mb-0 text-xs"
+              erasedAt={contact.erased_at}
+              byName={isAdmin && contact.erased_by ? personName(contact.erased_by) : null}
+            />
+          )}
           {/* Profile section */}
           <div className="flex flex-col items-center border-b border-border p-6">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-xl font-semibold">
@@ -402,11 +423,11 @@ export function ContactPanel({
                   className="h-16 w-16 rounded-full object-cover"
                 />
               ) : (
-                contact.display_name?.[0]?.toUpperCase() ?? "?"
+                displayNameFor(contact, "?")[0]?.toUpperCase() ?? "?"
               )}
             </div>
             <p className="mt-3 text-sm font-semibold">
-              {contact.display_name ?? "Desconocido"}
+              {displayNameFor(contact, "Desconocido")}
             </p>
             {contact.email && (
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -414,7 +435,13 @@ export function ContactPanel({
               </p>
             )}
             {/* Tipo de contacto: arriba de la ficha, con desde cuándo, quién y los últimos cambios. */}
-            {cases ? (
+            {cases && erased ? (
+              <p className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm">
+                <span className="text-xs uppercase text-muted-foreground">Tipo de contacto</span>
+                <br />
+                {currentType ? currentType.name : <span className="text-muted-foreground">Sin tipo</span>}
+              </p>
+            ) : cases ? (
               <ContactTypeBlock
                 className="mt-3 w-full"
                 current={currentType}
@@ -427,18 +454,21 @@ export function ContactPanel({
             ) : (
               <div className="mt-3 h-[72px] w-full animate-pulse rounded-lg border border-border bg-muted/30" aria-hidden />
             )}
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
-              <span
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-[10px] font-medium",
-                  contact.is_subscribed
-                    ? "bg-green-100 text-green-700"
-                    : "bg-muted text-muted-foreground"
-                )}
-              >
-                {contact.is_subscribed ? "Suscrito" : "No suscrito"}
-              </span>
-            </div>
+            <MarketingConsentBlock
+              className="mt-3 w-full"
+              compact
+              contactId={contact.id}
+              status={contact.marketing_status}
+              at={contact.marketing_status_at}
+              source={contact.marketing_source}
+              note={contact.marketing_note}
+              setByName={contact.marketing_set_by ? personName(contact.marketing_set_by) : null}
+              erased={erased}
+              onChanged={() => {
+                void loadContact(contact.id);
+                onContactChanged?.();
+              }}
+            />
             <Link
               href={`/dashboard/contacts/${contact.id}`}
               className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -456,6 +486,7 @@ export function ContactPanel({
               phone={contact.phone}
               fallback={details.channels.find((ch) => ch.platform === "whatsapp")?.platform_sender_id ?? null}
               saving={saving === "phone"}
+              readOnly={erased}
               onSave={(phone) => updateContact("phone", (id) => updateContactPhone(id, phone))}
             />
 
@@ -466,7 +497,7 @@ export function ContactPanel({
                 Responsable
                 {saving === "owner" && <Loader2 className="h-3 w-3 animate-spin" />}
               </h4>
-              {isAdmin ? (
+              {isAdmin && !erased ? (
                 <select
                   value={ownerId ?? ""}
                   disabled={saving !== null}
@@ -490,14 +521,14 @@ export function ContactPanel({
             </div>
 
             {/* Team */}
-            {(isAdmin ? (cases?.teams.length ?? 0) > 0 : !!teamId) && (
+            {(isAdmin && !erased ? (cases?.teams.length ?? 0) > 0 : !!teamId) && (
               <div>
                 <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase text-muted-foreground">
                   <Users className="h-3 w-3" />
                   Equipo
                   {saving === "team" && <Loader2 className="h-3 w-3 animate-spin" />}
                 </h4>
-                {isAdmin ? (
+                {isAdmin && !erased ? (
                   <select
                     value={teamId ?? ""}
                     disabled={saving !== null}
@@ -606,7 +637,7 @@ export function ContactPanel({
                   Etiquetas
                   {saving === "tags" && <Loader2 className="h-3 w-3 animate-spin" />}
                 </h4>
-                {availableTags.length > 0 && !addingTag && (
+                {availableTags.length > 0 && !addingTag && !erased && (
                   <button
                     onClick={() => setAddingTag(true)}
                     disabled={saving !== null}
@@ -653,6 +684,7 @@ export function ContactPanel({
                       }
                     >
                       {tag.name}
+                      {!erased && (
                       <button
                         onClick={() => void removeTag(tag.id)}
                         disabled={saving !== null}
@@ -661,6 +693,7 @@ export function ContactPanel({
                       >
                         <X className="h-3 w-3" />
                       </button>
+                      )}
                     </span>
                   ))}
                 </div>

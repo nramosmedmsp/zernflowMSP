@@ -5,6 +5,7 @@
 // pedido lleva un número para descartar respuestas viejas. Así nunca se
 // mezclan los mensajes de dos clientes.
 
+import { errorFromResponse } from "@/lib/session-expired";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { applyStatusUpdate, mergeMessages, type InboxMessage, type MessagesPage } from "@/lib/inbox-messages";
@@ -32,7 +33,7 @@ async function fetchPage(conversationId: string, signal: AbortSignal, cursor?: s
   if (cursor) qs.set("cursor", cursor);
   const res = await fetch(`/api/v1/messages?${qs}`, { signal });
   const json = await res.json().catch(() => null);
-  if (!res.ok) throw new Error((json as { error?: string } | null)?.error || "No se pudieron cargar los mensajes");
+  if (!res.ok) throw new Error(errorFromResponse(res.status, (json as { error?: string } | null)?.error, "No se pudieron cargar los mensajes"));
   return json as MessagesPage;
 }
 
@@ -71,7 +72,7 @@ export function useThreadMessages(conversationId: string | null) {
     } catch (err) {
       if (ctrl.signal.aborted || mine !== seq.current) return;
       const message = err instanceof Error ? err.message : "No se pudieron cargar los mensajes";
-      console.error("Failed to load messages:", err);
+      console.error("No se pudieron cargar los mensajes:", err);
       setError(message);
       // Si ya había mensajes se conservan; solo la primera carga queda en error.
       if (!loaded.current) setStatus("error");
@@ -86,7 +87,7 @@ export function useThreadMessages(conversationId: string | null) {
       setMessages((prev) => mergeMessages(prev, page.messages));
       setOlderCursor(page.hasMore ? page.olderCursor : null);
     } catch (err) {
-      console.error("Failed to load older messages:", err);
+      console.error("No se pudieron cargar los mensajes anteriores:", err);
       setError(err instanceof Error ? err.message : "No se pudieron cargar los mensajes anteriores");
     } finally {
       setLoadingOlder(false);

@@ -114,10 +114,27 @@ const DEFAULTS: Record<string, () => Row> = {
   flow_sessions: () => ({ waiting_for_input: false, waiting_until: null, current_node_id: null, human_takeover_at: null, variables: {} }),
   case_notes: () => ({ mentions: [], conversation_id: null }),
   notifications: () => ({ body: null, link: null, read_at: null }),
+  // 00041: lo que no se manda queda como en la base (el código anterior solo manda event_id).
+  webhook_events: () => ({
+    status: "processed",
+    event_type: null,
+    channel_id: null,
+    payload: null,
+    attempts: 0,
+    last_error: null,
+    locked_until: null,
+    contact_id: null,
+    conversation_id: null,
+    is_first_message: null,
+    cases_ok_at: null,
+    flows_started_at: null,
+    processed_at: null,
+    received_at: new Date().toISOString(),
+  }),
   activity: () => ({ contact_id: null, case_id: null, conversation_id: null, actor_id: null, from_value: null, to_value: null, meta: {} }),
 };
 
-const NO_ID = new Set(["team_members", "workspace_members", "activity"]);
+const NO_ID = new Set(["team_members", "workspace_members", "activity", "cron_runs"]);
 
 function clone<T>(v: T): T {
   return v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T);
@@ -146,6 +163,15 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     private table: string,
   ) {}
 
+  /** Para rpc(): filtro de fila arbitrario y conteo exacto pedido al llamar la función. */
+  where(fn: Filter) {
+    this.filters.push(fn);
+    return this;
+  }
+  withCount() {
+    this.count = true;
+    return this;
+  }
   select(_cols?: string, opts?: { count?: string; head?: boolean }) {
     if (this.op === null) this.op = "select";
     else this.returning = true;
@@ -191,16 +217,40 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     this.filters.push((r) => r[col] === v);
     return this;
   }
-  /** Solo condiciones `col.eq.valor` y `col.is.null` separadas por comas. */
+  /**
+   * Condiciones `col.op.valor` (eq, is.null, lt, lte, gt, gte, in) separadas por
+   * comas, con `and(...)` y `or(...)` anidados como en PostgREST.
+   */
   or(expr: string) {
-    const parts = expr.split(",").map((p) => {
-      const [col, op, ...rest] = p.split(".");
+    const splitTop = (text: string): string[] => {
+      const out: string[] = [];
+      let depth = 0;
+      let cur = "";
+      for (const ch of text) {
+        if (ch === "(") depth++;
+        if (ch === ")") depth--;
+        if (ch === "," && depth === 0) {
+          out.push(cur);
+          cur = "";
+        } else cur += ch;
+      }
+      if (cur) out.push(cur);
+      return out;
+    };
+    const build = (part: string): ((r: Row) => boolean) => {
+      const group = /^(and|or)\((.*)\)$/.exec(part);
+      if (group) {
+        const subs = splitTop(group[2]).map(build);
+        return group[1] === "and" ? (r) => subs.every((f) => f(r)) : (r) => subs.some((f) => f(r));
+      }
+      const [col, op, ...rest] = part.split(".");
       const value = rest.join(".");
       return (r: Row) => {
         if (op === "eq") return String(r[col]) === value;
         if (op === "is" && value === "null") return (r[col] ?? null) === null;
         const cell = r[col];
         const has = cell !== null && cell !== undefined;
+        if (op === "not" && value === "is.null") return has;
         if (op === "lt") return has && compare(cell, value) < 0;
         if (op === "lte") return has && compare(cell, value) <= 0;
         if (op === "gt") return has && compare(cell, value) > 0;
@@ -208,7 +258,8 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         if (op === "in") return value.replace(/^\(|\)$/g, "").split(",").includes(String(cell));
         throw new Error(`or(${op}) no soportado`);
       };
-    });
+    };
+    const parts = splitTop(expr).map(build);
     this.filters.push((r) => parts.some((f) => f(r)));
     return this;
   }
@@ -371,6 +422,8 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         return this.finish(out);
       }
       case "update": {
+        // Simula una carrera: otra solicitud cambia la fila justo antes de que este UPDATE la busque.
+        this.db.beforeUpdate?.();
         const rows = this.matching();
         const now = new Date().toISOString();
         for (const r of rows) {
@@ -416,6 +469,8 @@ export class FakeDb {
   uniques = new Map<string, { cols: string[]; where?: (row: Row) => boolean }[]>();
   /** Se ejecuta justo antes de cada inserción en la tabla (para simular una carrera con otra solicitud). */
   beforeInsert = new Map<string, () => void>();
+  /** Se ejecuta justo antes de cada UPDATE (para simular que otra persona cambió la fila antes). */
+  beforeUpdate: (() => void) | undefined;
 
   /** Declara una restricción única; con `where`, solo cuenta las filas que la cumplen (índice único parcial). */
   unique(table: string, cols: string[], where?: (row: Row) => boolean): void {
@@ -473,7 +528,54 @@ export class FakeDb {
     },
   };
 
-  async rpc(name: string, args: Record<string, unknown>) {
+  /**
+   * Funciones que se encadenan como tabla (search_cases, 00045): devuelven un Query ya filtrado.
+   * Las demás son llamadas simples (async).
+   */
+  rpc(name: string, args: Record<string, unknown>, opts?: { count?: string }): ReturnType<FakeDb["rpcPlain"]> {
+    if (name === "search_cases") {
+      const norm = (t: unknown) =>
+        String(t ?? "")
+          .normalize("NFD")
+          .replace(/[̀-ͯ]/g, "")
+          .toLowerCase();
+      const digits = (t: unknown) => String(t ?? "").replace(/\D/g, "");
+      const q = norm(String(args.p_q ?? "").trim());
+      const d = digits(args.p_q);
+      const phoneish = /^[0-9+()\s.-]+$/.test(String(args.p_q ?? "")) && d.length >= 3;
+      const ids = new Set(
+        this.rows("contacts")
+          .filter(
+            (c) =>
+              c.workspace_id === args.p_workspace &&
+              q !== "" &&
+              (norm(c.display_name).includes(q) || norm(c.email).includes(q) || (phoneish && digits(c.phone).includes(d))),
+          )
+          .map((c) => c.id),
+      );
+      const query = new Query(this, "cases").where((r) => ids.has(r.contact_id));
+      // En ejecución es un Query encadenable (y esperable); el tipo es el de las demás rpc para no romper a quienes la espían.
+      return (opts?.count ? query.withCount() : query) as unknown as ReturnType<FakeDb["rpcPlain"]>;
+    }
+    return this.rpcPlain(name, args);
+  }
+
+  async rpcPlain(name: string, args: Record<string, unknown>) {
+    // 00043: cerrar las sesiones de una persona (aquí no hay sesiones que borrar).
+    if (name === "revoke_user_sessions") return { data: 0, error: null };
+    // supabase/migrations/00003_rpc_functions.sql: contadores de la difusión.
+    if (name === "increment_broadcast_sent" || name === "increment_broadcast_failed") {
+      const row = this.rows("broadcasts").find((b) => b.id === args.b_id);
+      if (row) {
+        if (name === "increment_broadcast_sent") {
+          row.sent = ((row.sent as number) ?? 0) + 1;
+          row.delivered = ((row.delivered as number) ?? 0) + 1;
+        } else {
+          row.failed = ((row.failed as number) ?? 0) + 1;
+        }
+      }
+      return { data: null, error: null };
+    }
     if (name === "increment_unread") {
       // supabase/migrations/00003_rpc_functions.sql
       const row = this.rows("conversations").find((c) => c.id === args.conv_id);

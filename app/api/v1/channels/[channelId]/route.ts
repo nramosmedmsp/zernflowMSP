@@ -3,6 +3,8 @@ import { createZernioClient } from "@/lib/zernio-client";
 import { requireApiAdmin } from "@/lib/api-auth";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { isDemoChannel } from "@/lib/demo";
+import { serverError } from "@/lib/server-error";
+import { auditAction } from "@/lib/audit-server";
 
 /**
  * DELETE /api/v1/channels/[channelId]
@@ -24,7 +26,7 @@ export async function DELETE(
 
   const { data: channel } = await supabase
     .from("channels")
-    .select("id, late_account_id")
+    .select("id, late_account_id, display_name, username, platform")
     .eq("id", channelId)
     .eq("workspace_id", workspace.id)
     .single();
@@ -42,17 +44,11 @@ export async function DELETE(
       });
       // A 404 means the account is already gone from Zernio; that's fine.
       if (res.error && res.response?.status !== 404) {
-        return NextResponse.json(
-          { error: `No se pudo desconectar en Zernio: ${JSON.stringify(res.error)}` },
-          { status: 502 }
-        );
+        return serverError("channels/delete", res.error, "No se pudo desconectar el canal en Zernio. Inténtalo de nuevo.", 502);
       }
     } catch (error) {
       console.error("Failed to disconnect Zernio account:", error);
-      return NextResponse.json(
-        { error: `No se pudo desconectar en Zernio: ${error instanceof Error ? error.message : String(error)}` },
-        { status: 502 }
-      );
+      return serverError("channels/delete", error, "No se pudo desconectar el canal en Zernio. Inténtalo de nuevo.", 502);
     }
   }
 
@@ -62,8 +58,22 @@ export async function DELETE(
     .eq("id", channelId)
     .eq("workspace_id", workspace.id);
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("channels/delete", error, "No se pudo eliminar el canal. Inténtalo de nuevo.");
+
+  // SEG-05: el borrado arrastra las conversaciones del canal; queda quién lo hizo.
+  await auditAction({
+    workspaceId: workspace.id,
+    actorId: guard.ctx.user.id,
+    action: "channel_deleted",
+    entity: "channel",
+    // El nombre y la red se anotan antes de que el canal desaparezca, para que el registro diga cuál fue.
+    meta: {
+      channel_id: channelId,
+      late_account_id: channel.late_account_id,
+      channel_name: channel.display_name || channel.username || null,
+      platform: channel.platform,
+    },
+  });
 
   return NextResponse.json({ ok: true });
 }
@@ -95,9 +105,19 @@ export async function PATCH(
     .eq("workspace_id", workspaceId)
     .select("id, is_active");
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("channels/patch", error, "No se pudo cambiar el canal. Inténtalo de nuevo.");
   if (!data || data.length === 0)
     return NextResponse.json({ error: "No se encontró el canal o no tienes permiso para cambiarlo." }, { status: 404 });
+
+  // SEG-05: encender o apagar un canal deja registro.
+  await auditAction({
+    workspaceId,
+    actorId: guard.ctx.user.id,
+    action: "channel_toggled",
+    entity: "channel",
+    toValue: body.is_active ? "on" : "off",
+    meta: { channel_id: channelId },
+  });
 
   return NextResponse.json(data[0]);
 }

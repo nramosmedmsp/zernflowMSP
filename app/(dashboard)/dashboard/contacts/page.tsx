@@ -6,6 +6,7 @@ import {
   applyContactListQuery,
   contactListHref,
   contactListSelect,
+  contactSearchText,
   contactPageCount,
   parseContactListParams,
   type ContactQueryBuilder,
@@ -23,10 +24,17 @@ export default async function ContactsPage({
 
   // Cliente del usuario: la RLS decide qué contactos ve. El filtrado, el orden
   // y la paginación ocurren en la base.
-  const base = supabase
-    .from("contacts")
-    .select(contactListSelect(params), { count: "exact" })
-    .eq("workspace_id", workspace.id);
+  // Con texto de búsqueda se parte de search_contacts (tildes, ñ y teléfonos con
+  // espacios; mismo permiso que la tabla); sin texto, de la tabla directa.
+  const searchText = contactSearchText(params);
+  const base = searchText
+    ? supabase
+        .rpc("search_contacts", { p_workspace: workspace.id, p_q: searchText }, { count: "exact" })
+        .select(contactListSelect(params))
+    : supabase
+        .from("contacts")
+        .select(contactListSelect(params), { count: "exact" })
+        .eq("workspace_id", workspace.id);
   const listQuery = applyContactListQuery(base as unknown as ContactQueryBuilder, params);
 
   const [contactsRes, tagsRes, typesRes, teamsRes, membersRes] = await Promise.all([

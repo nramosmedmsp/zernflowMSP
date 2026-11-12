@@ -15,7 +15,7 @@ function setup(lastInboundAt: string | null) {
   const db = new FakeDb();
   db.seed("workspaces", [{ id: WS, name: "Tienda", slug: "t" }]);
   db.seed("channels", [{ id: "ch-1", workspace_id: WS, platform: "whatsapp", late_account_id: "acc-real", is_active: true }]);
-  db.seed("contacts", [{ id: "ct-1", workspace_id: WS, display_name: "Lucía", is_subscribed: true, phone: null }]);
+  db.seed("contacts", [{ id: "ct-1", workspace_id: WS, display_name: "Lucía", is_subscribed: true, marketing_status: "accepted", phone: null }]);
   db.seed("contact_channels", [{ contact_id: "ct-1", channel_id: "ch-1", platform_sender_id: "51999111222" }]);
   db.seed("conversations", [
     { id: "cv-1", workspace_id: WS, channel_id: "ch-1", contact_id: "ct-1", platform: "whatsapp", late_conversation_id: "z-1", last_inbound_at: lastInboundAt },
@@ -55,5 +55,20 @@ describe("envío a un contacto (secuencias y difusión)", () => {
 
     const closed = await loadDeliveryContext(setup(hoursAgo(40)).asDb(), { workspaceId: WS, contactId: "ct-1", channelId: "ch-1" });
     expect(windowStateOf(closed, NOW)).toBe("closed");
+  });
+});
+
+describe("fallos generales (corte automático de la difusión)", () => {
+  const failing = { sendText: async () => ({ ok: false as const, error: "Zernio rechazó el mensaje" }), sendTemplate: async () => ({ ok: false as const, error: "Zernio rechazó el mensaje" }) };
+
+  it("si Zernio rechaza el envío es un fallo general; si el contacto no tiene conversación o la ventana está cerrada, no", async () => {
+    const { sendTextToContact } = await import("./delivery");
+    const open = await loadDeliveryContext(setup(hoursAgo(1)).asDb(), { workspaceId: WS, contactId: "ct-1", channelId: "ch-1" });
+    expect(await sendTextToContact(setup(hoursAgo(1)).asDb(), open, "Hola", { messenger: failing, checkWindow: true, now: NOW })).toMatchObject({ ok: false, general: true });
+
+    const closed = await loadDeliveryContext(setup(hoursAgo(40)).asDb(), { workspaceId: WS, contactId: "ct-1", channelId: "ch-1" });
+    const res = await sendTextToContact(setup(hoursAgo(40)).asDb(), closed, "Hola", { messenger: failing, checkWindow: true, now: NOW });
+    expect(res).toMatchObject({ ok: false });
+    expect(res).not.toHaveProperty("general");
   });
 });

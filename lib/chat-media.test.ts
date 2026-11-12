@@ -142,3 +142,15 @@ describe("validateReplyAttachment", () => {
     expect(imageMaxBytes("instagram")).toBe(8 * MB);
   });
 });
+
+describe("archivos vacíos (PAN-11)", () => {
+  it("un PDF o una foto de 0 bytes se rechaza con un mensaje claro", () => {
+    for (const mime of ["application/pdf", "image/png"]) {
+      const out = validateOutgoingAttachment("whatsapp", { mime, size: 0 });
+      expect(out.ok).toBe(false);
+      expect(out.ok === false && out.error).toContain("vacío");
+    }
+    expect(validateReplyAttachment({ mime: "application/pdf", size: 0 }).ok).toBe(false);
+    expect(validateOutgoingAttachment("whatsapp", { mime: "application/pdf", size: 1 }).ok).toBe(true);
+  });
+});

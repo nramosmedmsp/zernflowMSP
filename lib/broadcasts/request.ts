@@ -14,7 +14,8 @@ export const BROADCAST_STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
   scheduled: "Programada",
   sending: "Enviando",
-  completed: "Completada",
+  paused: "En pausa",
+  completed: "Terminada",
   cancelled: "Cancelada",
 };
 
@@ -89,8 +90,12 @@ export function describeExclusions(excluded: {
   closedWindow: number;
   noPhone: number;
   emptyVariable: number;
+  optedOut?: number;
+  noConsent?: number;
 }): string[] {
   const parts: string[] = [];
+  if ((excluded.noConsent ?? 0) > 0) parts.push(`${excluded.noConsent} sin consentimiento de publicidad registrado`);
+  if ((excluded.optedOut ?? 0) > 0) parts.push(`${excluded.optedOut} de baja de la publicidad`);
   if (excluded.closedWindow > 0) parts.push(`${excluded.closedWindow} con la ventana de 24 horas cerrada`);
   if (excluded.noConversation > 0) parts.push(`${excluded.noConversation} sin conversación en un canal activo`);
   if (excluded.noPhone > 0) parts.push(`${excluded.noPhone} sin teléfono de WhatsApp`);

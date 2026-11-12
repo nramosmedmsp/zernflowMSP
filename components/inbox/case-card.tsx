@@ -5,6 +5,7 @@
 // gestión» (case-guide.tsx): en qué paso va, qué hacer ahora y el siguiente paso.
 // Todas las escrituras pasan por las acciones de lib/actions/cases.ts.
 
+import { isCaseConflict } from "@/lib/cases/conflict";
 import { useCallback, useState } from "react";
 import {
   ArrowRightLeft,
@@ -118,6 +119,8 @@ export function CaseCard({
         const result = await action();
         if ("error" in result) {
           toast.error(result.error);
+          // Otra persona cambió la gestión antes: se vuelve a leer para mostrar cómo quedó.
+          if (isCaseConflict(result.error)) await onChanged();
           return false;
         }
         if (success) toast.success(success);

@@ -58,17 +58,31 @@ export function InboxView({
   cases: initialCases,
   workspaceId,
   meta,
+  casesTruncated: initialCasesTruncated = false,
+  recentPage,
+  totalConversations = null,
 }: {
   conversations: InboxConversation[];
   cases: InboxCase[];
   workspaceId: string;
   meta: InboxMeta;
+  casesTruncated?: boolean;
+  recentPage?: { hasMore: boolean; cursor: string | null };
+  /** Solo administradores: total de chats visibles ("Mostrando X de Y"). */
+  totalConversations?: number | null;
 }) {
   const router = useRouter();
   const toast = useToast();
   const searchParams = useSearchParams();
   const viewAs = useViewAs();
-  const data = useInboxData({ workspaceId, initialConversations, initialCases, viewing: viewAs.active });
+  const data = useInboxData({
+    workspaceId,
+    initialConversations,
+    initialCases,
+    initialCasesTruncated,
+    recentPage,
+    viewing: viewAs.active,
+  });
   const {
     conversations,
     casesByContact,
@@ -324,6 +338,15 @@ export function InboxView({
           syncing={syncing}
           syncError={conversations.length > 0 ? syncError : null}
           failedConversationIds={outbox.failedIds}
+          casesTruncated={data.casesTruncated}
+          paging={{
+            hasMore: data.hasMore,
+            loading: data.loadingMore,
+            failed: data.moreError,
+            total: totalConversations,
+            onLoadMore: () => void data.loadMore(),
+          }}
+          onSearchResults={data.addConversations}
           headerActions={
             viewing ? undefined : (
               <AlertSettingsButton settings={alerts.settings} onChange={alerts.update} scopes={alertScopesFor(meta)} />

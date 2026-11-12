@@ -7,12 +7,13 @@ import { FakeDb } from "@/lib/cases/fake-db.test-helper";
 const state = vi.hoisted(() => ({ fake: null as unknown, role: "admin" as string }));
 
 vi.mock("@/lib/workspace", () => ({
-  getWorkspace: async () => ({ workspace: { id: "ws-1" }, supabase: state.fake, role: state.role }),
+  getWorkspace: async () => ({ workspace: { id: "ws-1" }, user: { id: "u1" }, supabase: state.fake, role: state.role }),
 }));
+vi.mock("@/lib/supabase/server", () => ({ createServiceClient: async () => state.fake }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
 import { deleteBroadcast, updateBroadcastFilter } from "./broadcasts";
-import { createSequence, enrollContact, updateSequence } from "./sequences";
+import { createSequence, deleteSequence, enrollContact, updateSequence } from "./sequences";
 
 let fake: FakeDb;
 
@@ -96,16 +97,55 @@ describe("secuencias", () => {
     expect(await updateSequence(id, { steps: [{ type: "message", content: "" }] })).toMatchObject({ ok: true });
   });
 
+  const audits = () =>
+    fake
+      .rows("activity")
+      .filter((a) => (a.meta as { entity?: string }).entity === "sequence")
+      .map((a): Record<string, unknown> => ({ ...(a.meta as Record<string, unknown>), from: a.from_value, to: a.to_value, actor: a.actor_id }));
+
+  it("deja registro de crear, activar, pausar, editar pasos y borrar (solo nombre y conteos, nunca el texto de un paso)", async () => {
+    const id = await newSequence([]);
+    await updateSequence(id, { status: "active", steps: [{ type: "message", content: "TEXTO-SECRETO-DEL-PASO" }] });
+    await updateSequence(id, { steps: [{ type: "message", content: "TEXTO-SECRETO-DEL-PASO" }, { type: "delay", delayMinutes: 5 }] });
+    await updateSequence(id, { status: "paused" });
+    await updateSequence(id, { name: "Bienvenida 2" });
+    await deleteSequence(id);
+    const rows = audits();
+    expect(rows.map((r) => r.action)).toEqual([
+      "sequence_created",
+      "sequence_activated",
+      "sequence_edited", // pasos de 0 a 1 (ocurre en la misma guardada que activó)
+      "sequence_edited",
+      "sequence_paused",
+      "sequence_edited",
+      "sequence_deleted",
+    ]);
+    expect(rows[2]).toMatchObject({ steps_from: 0, steps_to: 1, fields: "pasos" });
+    expect(rows[3]).toMatchObject({ steps_from: 1, steps_to: 2 });
+    expect(rows[5]).toMatchObject({ from: "Bienvenida", to: "Bienvenida 2", fields: "nombre" });
+    expect(rows.every((r) => r.actor === "u1")).toBe(true);
+    expect(JSON.stringify(fake.rows("activity"))).not.toContain("TEXTO-SECRETO-DEL-PASO");
+  });
+
+  it("guardar sin cambios no deja filas de edición", async () => {
+    const id = await newSequence([{ type: "message", content: "Hola" }]);
+    const before = audits().length;
+    await updateSequence(id, { steps: [{ type: "message", content: "Hola" }] });
+    expect(audits().length).toBe(before);
+  });
+
   it("no inscribe a un contacto dado de baja", async () => {
     const id = await newSequence([{ type: "message", content: "Hola" }], "active");
     fake.seed("contacts", [
-      { id: "c-baja", workspace_id: "ws-1", is_subscribed: false },
-      { id: "c-ok", workspace_id: "ws-1", is_subscribed: true },
+      { id: "c-baja", workspace_id: "ws-1", is_subscribed: false, marketing_status: "opted_out" },
+      { id: "c-sin", workspace_id: "ws-1", is_subscribed: true, marketing_status: "unknown" },
+      { id: "c-ok", workspace_id: "ws-1", is_subscribed: true, marketing_status: "accepted" },
     ]);
     fake.seed("channels", [{ id: "ch-1", workspace_id: "ws-1" }]);
     expect(await enrollContact(id, "c-baja", "ch-1")).toEqual({
-      error: "El contacto canceló su suscripción y no puede recibir la secuencia",
+      error: "El contacto se dio de baja de la publicidad y no puede recibir la secuencia",
     });
+    expect(await enrollContact(id, "c-sin", "ch-1")).toMatchObject({ error: expect.stringContaining("aún no aceptó recibir publicidad") });
     expect(await enrollContact(id, "c-ok", "ch-1")).toMatchObject({ ok: true });
   });
 });

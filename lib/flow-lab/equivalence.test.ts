@@ -177,6 +177,8 @@ class Harness {
         store(demoTemplateText(input.templateName, input.params));
         return { ok: true, messageId: "m" };
       },
+      // El laboratorio no modela el consentimiento de publicidad: aquí la plantilla es de servicio.
+      templateKind: async () => "service",
     };
   }
 

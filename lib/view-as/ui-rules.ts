@@ -6,6 +6,9 @@ import type { ViewAsInfo, ViewAsPersonOption } from "./rules";
 import { VIEW_AS_READ_ONLY_CODE } from "./guard";
 
 /** La capa "La vista terminó" aparece este tiempo antes de la caducidad. */
+/** Nota corta junto a los botones que cambian datos del cliente en "Ver como". */
+export const VIEW_AS_UNAVAILABLE_NOTE = "No disponible en «Ver como»";
+
 export const VIEW_AS_END_LEAD_MS = 5_000;
 /** Cada cuánto se avisa al servidor que la vista sigue abierta. */
 export const VIEW_AS_TOUCH_INTERVAL_MS = 60_000;

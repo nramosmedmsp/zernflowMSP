@@ -7,6 +7,7 @@ import { demoConversationByLateId, demoConversationByPhone, storeDemoMessage } f
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { zernioErrorMessage, zernioFailed, zernioThrown } from "@/lib/zernio-error";
 import { isViewAsLocked, markReadOnlyHit, VIEW_AS_LOCKED_MESSAGE } from "@/lib/view-as/lock";
+import { resolveTemplateKind, type TemplateKind } from "@/lib/template-category";
 import type { Db } from "./io";
 
 export type SendResult = { ok: true; messageId: string | null } | { ok: false; error: string };
@@ -38,6 +39,11 @@ export interface CaseMessenger {
    * haya escrito (ver app/api/v1/templates/send/route.ts).
    */
   sendTemplate(input: SendTemplateInput): Promise<SendResult>;
+  /**
+   * ¿La plantilla es de servicio o de publicidad? (PRIV-05). Sin este método, o si
+   * no se puede saber, se trata como publicidad (lo más seguro).
+   */
+  templateKind?(input: { workspaceId: string; lateAccountId: string; templateName: string }): Promise<TemplateKind>;
 }
 
 const NO_KEY = "La clave de API de Zernio no está configurada.";
@@ -144,6 +150,10 @@ export function zernioMessenger(db: Db, options: MessengerOptions = {}): CaseMes
         if (rejected) return { ok: false, error: zernioErrorMessage(rejected, "No se pudo enviar la plantilla") };
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
+    },
+
+    async templateKind(input) {
+      return resolveTemplateKind(db, input);
     },
   };
 }

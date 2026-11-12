@@ -8,36 +8,30 @@ import { agentVisibilityFromSettings, isAdminRole } from "@/lib/permissions";
 import type { InboxCase, InboxConversation, InboxMeta } from "@/components/inbox/inbox-model";
 import { InboxView } from "./inbox-view";
 
-const RECENT_CONVERSATIONS = 200;
-const MAX_ACTIVE_CASES = 1000;
-const IN_CHUNK = 150;
+import { FETCH_IN_CHUNK, INBOX_PAGE_SIZE, chunkList, loadActiveCases, oldestMessageAt } from "@/components/inbox/inbox-paging";
 
-function chunks<T>(list: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
-  return out;
-}
+/** Consultas de chats en paralelo al traer los de las gestiones activas. */
+const PARALLEL_CHUNKS = 6;
 
 // Todo con el cliente del usuario: la RLS (can_see_contact) decide qué chats y
 // gestiones recibe. La vista y los filtros se aplican en el cliente.
+//
+// Sin recortes silenciosos (Tanda 4): las gestiones activas se leen TODAS por
+// páginas (con aviso si se pasa el tope) y de ellas salen los contadores; los
+// chats sin gestión activa (solo en "Todos / Todo") llegan de INBOX_PAGE_SIZE en
+// INBOX_PAGE_SIZE con "Cargar más"; la búsqueda la hace el servidor sobre todos.
 export default async function InboxPage() {
   const { user, workspace, role, supabase } = await getWorkspace();
 
-  const [{ data: recent }, { data: activeCases }, { data: types }, { data: teams }, membersResult, { data: channels }, { data: stages }, { data: contactTypes }] =
+  const [{ data: recent }, activeResult, { data: types }, { data: teams }, membersResult, { data: channels }, { data: stages }, { data: contactTypes }] =
     await Promise.all([
       supabase
         .from("conversations")
         .select("*, contacts(*)")
         .eq("workspace_id", workspace.id)
         .order("last_message_at", { ascending: false, nullsFirst: false })
-        .limit(RECENT_CONVERSATIONS),
-      supabase
-        .from("cases")
-        .select("*")
-        .eq("workspace_id", workspace.id)
-        .in("status", ["open", "scheduled"])
-        .order("waiting_since", { ascending: true, nullsFirst: false })
-        .limit(MAX_ACTIVE_CASES),
+        .limit(INBOX_PAGE_SIZE),
+      loadActiveCases(supabase, workspace.id),
       supabase
         .from("case_types")
         .select("id, name, color, archived_at, protected, solution_deadline_hours")
@@ -61,17 +55,32 @@ export default async function InboxPage() {
       supabase.from("contact_types").select("*").eq("workspace_id", workspace.id).order("position", { ascending: true }),
     ]);
 
+  const activeCases = activeResult.cases;
+  // Total de chats solo para administradores (ven "Todos"): el aviso "Mostrando X de Y".
+  const admin = isAdminRole(role);
+  const totalConversations = admin
+    ? ((await supabase.from("conversations").select("id", { count: "exact", head: true }).eq("workspace_id", workspace.id)).count ?? null)
+    : null;
+  const recentList = (recent ?? []) as InboxConversation[];
+  const hasMoreRecent = recentList.length >= INBOX_PAGE_SIZE;
+
   // Chats de contactos con gestiones activas que no están entre los recientes.
   const conversations: InboxConversation[] = [...((recent ?? []) as InboxConversation[])];
   const loadedContacts = new Set(conversations.map((c) => c.contact_id));
-  const missing = [...new Set((activeCases ?? []).map((c) => c.contact_id))].filter((id) => !loadedContacts.has(id));
+  const missing = [...new Set(activeCases.map((c) => c.contact_id))].filter((id) => !loadedContacts.has(id));
   if (missing.length) {
-    const extra = await Promise.all(
-      chunks(missing, IN_CHUNK).map((ids) =>
-        supabase.from("conversations").select("*, contacts(*)").eq("workspace_id", workspace.id).in("contact_id", ids),
-      ),
-    );
-    for (const { data } of extra) conversations.push(...((data ?? []) as InboxConversation[]));
+    const groups = chunkList(chunkList(missing, FETCH_IN_CHUNK), PARALLEL_CHUNKS);
+    for (const group of groups) {
+      const extra = await Promise.all(
+        group.map((ids) =>
+          supabase.from("conversations").select("*, contacts(*)").eq("workspace_id", workspace.id).in("contact_id", ids),
+        ),
+      );
+      for (const { data, error } of extra) {
+        if (error) throw new Error(`No se pudieron leer los chats: ${error.message}`);
+        conversations.push(...((data ?? []) as InboxConversation[]));
+      }
+    }
   }
 
   // R2-10: horarios (equipo y empresa) para contar el plazo de la solución en horas hábiles.
@@ -125,7 +134,10 @@ export default async function InboxPage() {
     <Suspense>
       <InboxView
         conversations={conversations}
-        cases={(activeCases ?? []) as InboxCase[]}
+        cases={activeCases as InboxCase[]}
+        casesTruncated={activeResult.truncated}
+        recentPage={{ hasMore: hasMoreRecent, cursor: oldestMessageAt(recentList) }}
+        totalConversations={totalConversations}
         workspaceId={workspace.id}
         meta={meta}
       />

@@ -3,6 +3,8 @@ import { rpcViewAsStart } from "@/lib/supabase/extra-rpc";
 import { VIEW_AS_COOKIE, VIEW_AS_HIT_COOKIE, formatViewAsCookie, viewAsCookieOptions } from "@/lib/view-as/cookie";
 import { parseViewAsInfo, parseViewAsStartBody, viewAsStartErrorMessage } from "@/lib/view-as/rules";
 import { requireRealOwner } from "@/lib/view-as/service";
+import { enforceRateLimit } from "@/lib/rate-limit-http";
+import { RATE_RULES } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,9 @@ export async function POST(request: NextRequest) {
   const guard = await requireRealOwner(request, { checkOrigin: true });
   if (!guard.ok) return guard.response;
   const { viewerId, authSessionId, workspaceId, service } = guard.ctx;
+  // SEG-01: tope de vistas iniciadas por el Dueño.
+  const limited = await enforceRateLimit(RATE_RULES.viewAsStart, viewerId);
+  if (limited) return limited;
 
   const body = await request.json().catch(() => null);
   const parsed = parseViewAsStartBody(body);

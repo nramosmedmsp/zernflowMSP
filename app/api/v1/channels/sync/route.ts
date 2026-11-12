@@ -10,6 +10,8 @@ import {
 import { backfillInboxConversations } from "@/lib/inbox-sync";
 import { isSupportedPlatform } from "@/lib/platforms";
 import { requireApiAdmin } from "@/lib/api-auth";
+import { serverError } from "@/lib/server-error";
+import { auditAction } from "@/lib/audit-server";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 
 /**
@@ -111,7 +113,8 @@ export async function POST() {
           // Reporting a channel we did not store is how #16 stayed hidden:
           // the platform check constraint rejected the row and the UI said OK.
           console.error("[channels/sync] channel insert failed:", insertErr);
-          failed.push(`${account.platform}: ${insertErr.message}`);
+          // SEG-13: el detalle de la base solo va al log; la pantalla recibe la plataforma.
+          failed.push(String(account.platform));
           continue;
         }
         created++;
@@ -130,6 +133,17 @@ export async function POST() {
           .eq("id", channel.id);
         deactivated++;
       }
+    }
+
+    // SEG-05: conectar o desactivar canales deja registro (quién y cuántos).
+    if (created > 0 || deactivated > 0) {
+      await auditAction({
+        workspaceId: workspace.id,
+        actorId: guard.ctx.user.id,
+        action: "channels_synced",
+        entity: "channel",
+        meta: { created, deactivated, updated },
+      });
     }
 
     // Re-register the webhook so inbound events reach the Inbox. Both the
@@ -190,10 +204,6 @@ export async function POST() {
       },
     });
   } catch (error) {
-    console.error("Failed to sync channels:", error);
-    return NextResponse.json(
-      { error: `No se pudieron sincronizar los canales: ${error instanceof Error ? error.message : String(error)}` },
-      { status: 500 }
-    );
+    return serverError("channels/sync", error, "No se pudieron sincronizar los canales. Inténtalo de nuevo.");
   }
 }

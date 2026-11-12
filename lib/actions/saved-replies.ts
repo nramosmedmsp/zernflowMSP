@@ -19,8 +19,13 @@ import { getWorkspace } from "@/lib/workspace";
 import { viewAsActorOverride } from "@/lib/view-as/rules";
 import { isAdminRole } from "@/lib/permissions";
 import { createServiceClient } from "@/lib/supabase/server";
+import { auditAction } from "@/lib/audit-server";
+import type { AuditAction } from "@/lib/audit";
 import { isReplyFilePath, parseMediaPath, replyMediaPath, safeFileName, validateReplyAttachment } from "@/lib/chat-media";
 import { createUploadUrl, objectInfo, removeObjects } from "@/lib/media-store";
+import { RATE_LIMIT_MESSAGE, RATE_RULES } from "@/lib/rate-limit";
+import { rateLimitDecision } from "@/lib/rate-limit-http";
+import { PENDING_UPLOADS_MESSAGE, markUploadsUsed, registerUpload } from "@/lib/upload-tracking";
 import {
   hasShortcutConflict,
   validateSavedReplyInput,
@@ -130,6 +135,30 @@ async function loadAccess(ctx: Ctx): Promise<Access> {
     teams: teams ?? [],
     supervised: new Set((memberships ?? []).filter((m) => m.role === "supervisor").map((m) => m.team_id)),
   };
+}
+
+/**
+ * Registro de cambios: solo las respuestas compartidas (de la empresa o de un equipo); las personales
+ * de cada asesor no se anotan. Guarda el título, nunca el texto. Un fallo no rompe la acción.
+ */
+async function auditSharedReply(
+  ctx: Ctx,
+  access: Access,
+  action: AuditAction,
+  row: { scope: SavedReplyScope; team_id: string | null; title: string },
+  extra: { fromValue?: string | null; toValue?: string | null; fields?: string } = {},
+): Promise<void> {
+  if (row.scope === "personal") return;
+  const teamName = row.team_id ? (access.teams.find((t) => t.id === row.team_id)?.name ?? null) : null;
+  await auditAction({
+    workspaceId: ctx.workspace.id,
+    actorId: ctx.user.id,
+    action,
+    entity: "saved_reply",
+    fromValue: extra.fromValue ?? null,
+    toValue: extra.toValue ?? null,
+    meta: { name: row.title, scope: row.scope, team_name: teamName, ...(extra.fields ? { fields: extra.fields } : {}) },
+  });
 }
 
 function canWrite(
@@ -250,13 +279,16 @@ async function removeReplyFile(path: string | null, workspaceId: string) {
  */
 async function writeAttachment(id: string, workspaceId: string, columns: AttachmentColumns) {
   const service = await createServiceClient();
-  return service
+  const result = await service
     .from("saved_replies")
     .update(columns)
     .eq("id", id)
     .eq("workspace_id", workspaceId)
     .select(REPLY_COLUMNS)
     .single();
+  // SEG-10: el archivo ya pertenece a una respuesta guardada; la limpieza diaria no lo toca.
+  if (!result.error && columns.attachment_url) await markUploadsUsed(service, [columns.attachment_url]);
+  return result;
 }
 
 /**
@@ -274,7 +306,15 @@ export async function createReplyUploadUrl(file: {
     const check = validateReplyAttachment(file);
     if (!check.ok) return { error: check.error };
     if (check.compress) return { error: "La foto pesa más de 5 MB." };
-    const upload = await createUploadUrl(await createServiceClient(), replyMediaPath(ctx.workspace.id, file.mime));
+    // SEG-01: mismo tope de enlaces de subida que el chat.
+    const limited = await rateLimitDecision(RATE_RULES.uploadUrl, ctx.user.id);
+    if (!limited.allowed) return { error: RATE_LIMIT_MESSAGE };
+    const service = await createServiceClient();
+    const path = replyMediaPath(ctx.workspace.id, file.mime);
+    // SEG-10: tope de subidas sin usar por usuario; la subida queda anotada para la limpieza diaria.
+    const registered = await registerUpload(service, { workspaceId: ctx.workspace.id, userId: ctx.user.id, path, source: "reply" });
+    if (!registered.ok) return { error: PENDING_UPLOADS_MESSAGE };
+    const upload = await createUploadUrl(service, path);
     if (!upload) return { error: "No se pudo preparar la subida. Inténtalo de nuevo." };
     return { ok: true, ...upload };
   } catch (err) {
@@ -425,6 +465,7 @@ export async function createSavedReply(
       }
       created = withFile.data as ReplyRow;
     }
+    await auditSharedReply(ctx, access, "saved_reply_created", created);
     return { ok: true, reply: toView(created, access, ctx.user.id) };
   } catch (err) {
     console.error("[saved-replies] create", err);
@@ -493,6 +534,19 @@ export async function updateSavedReply(
         await removeReplyFile(row.attachment_url, ctx.workspace.id);
       }
     }
+    const changed: string[] = [];
+    if (row.title !== updated.title) changed.push("título");
+    if (row.shortcut !== updated.shortcut) changed.push("atajo");
+    if (row.body !== updated.body) changed.push("texto");
+    if (row.case_type_id !== updated.case_type_id) changed.push("tipo de gestión");
+    if (row.attachment_url !== updated.attachment_url) changed.push("archivo adjunto");
+    if (changed.length > 0) {
+      await auditSharedReply(ctx, access, "saved_reply_updated", updated, {
+        fromValue: row.title !== updated.title ? row.title : null,
+        toValue: row.title !== updated.title ? updated.title : null,
+        fields: changed.join(", "),
+      });
+    }
     return { ok: true, reply: toView(updated, access, ctx.user.id) };
   } catch (err) {
     console.error("[saved-replies] update", err);
@@ -526,6 +580,7 @@ export async function deleteSavedReply(id: string): Promise<SavedReplyResult> {
       return { error: "No se pudo borrar la respuesta. Inténtalo de nuevo." };
     }
     await removeReplyFile(row.attachment_url, ctx.workspace.id);
+    await auditSharedReply(ctx, access, "saved_reply_deleted", row);
     return { ok: true };
   } catch (err) {
     console.error("[saved-replies] delete", err);

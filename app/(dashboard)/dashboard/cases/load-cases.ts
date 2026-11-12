@@ -7,7 +7,6 @@ import {
   CLOSED_STATUSES,
   NONE_FILTER,
   closedSinceIso,
-  ilikePattern,
   resolveAssigneeFilter,
   todayBounds,
   todayOrFilter,
@@ -81,16 +80,14 @@ interface RawRow {
   contacts: { display_name: string | null } | { display_name: string | null }[] | null;
 }
 
-async function activatedTodayIds(db: Db, workspaceId: string, startIso: string): Promise<string[]> {
-  const { data } = await db
-    .from("activity")
-    .select("case_id")
-    .eq("workspace_id", workspaceId)
-    .eq("type", "case_activated")
-    .gte("created_at", startIso)
-    .not("case_id", "is", null)
-    .limit(500);
-  return (data ?? []).map((r) => r.case_id).filter((id): id is string => !!id);
+/**
+ * "Para hoy": próximo contacto vencido o de hoy, o programada que se activó hoy
+ * (tiene fecha programada y se abrió hoy, hora de Lima). Todo se resuelve en la
+ * consulta: antes se leían hasta 500 ids de la bitácora y, pasados esos, se
+ * perdían en silencio.
+ */
+function todayFilter(bounds: { startIso: string; endIso: string }): string {
+  return `${todayOrFilter(bounds, [])},and(scheduled_for.not.is.null,opened_at.gte.${bounds.startIso},opened_at.lt.${bounds.endIso})`;
 }
 
 /** Filtros de pestaña, tipo, etapa, equipo, responsable y búsqueda: los mismos en las dos vistas. */
@@ -104,19 +101,22 @@ async function filteredQuery<C extends string>(
   columns: C,
   withCount: boolean,
 ) {
-  let query = db
-    .from("cases")
-    .select(columns, withCount ? { count: "exact" } : undefined)
-    .eq("workspace_id", workspaceId);
+  const fromTable = db.from("cases").select(columns, withCount ? { count: "exact" } : undefined);
+  // Con texto de búsqueda se parte de search_cases (00045): nombre, correo o teléfono sin
+  // tildes ni ñ ni formato, con índice y el mismo permiso que la tabla.
+  const source = params.q
+    ? (db
+        .rpc("search_cases", { p_workspace: workspaceId, p_q: params.q.replace(/\s+/g, " ").trim() }, withCount ? { count: "exact" } : undefined)
+        .select(columns) as unknown as typeof fromTable)
+    : fromTable;
+  let query = source.eq("workspace_id", workspaceId);
 
   switch (params.tab) {
     case "open":
       query = query.eq("status", "open");
       break;
     case "today": {
-      const bounds = todayBounds(now);
-      const activated = await activatedTodayIds(db, workspaceId, bounds.startIso);
-      query = query.eq("status", "open").or(todayOrFilter(bounds, activated));
+      query = query.eq("status", "open").or(todayFilter(todayBounds(now)));
       break;
     }
     case "scheduled":
@@ -140,7 +140,6 @@ async function filteredQuery<C extends string>(
   if (assignee.kind === "none") query = query.is("assignee_id", null);
   else if (assignee.kind === "user") query = query.eq("assignee_id", assignee.userId);
 
-  if (params.q) query = query.ilike("contacts.display_name", ilikePattern(params.q));
   // En un objeto: devolver el constructor tal cual desde una función async lo ejecutaría (es "thenable").
   return { query };
 }
@@ -502,6 +501,8 @@ export interface BoardResult {
   /** Total real por columna (id de etapa abierta). */
   columnTotals: Record<string, number>;
   total: number;
+  /** Se llegó al tope de lectura (MAX_GROUPED_CASES): faltan gestiones y los totales quedan cortos. */
+  truncated: boolean;
 }
 
 const BOARD_DETAIL_COLUMNS = `${FULL_COLUMNS}, category_id`;
@@ -520,7 +521,7 @@ export async function loadBoard(
 ): Promise<BoardResult> {
   const { workspaceId, userId, canSeeOthers, now } = args;
   const base: CaseListParams = { ...args.params, stage: "", page: 1 };
-  const empty: BoardResult = { chips: [], type: null, stages: [], cards: [], columnTotals: {}, total: 0 };
+  const empty: BoardResult = { chips: [], type: null, stages: [], cards: [], columnTotals: {}, total: 0, truncated: false };
 
   // 1. Chips: cuántas gestiones abiertas ve la persona de cada tipo activo.
   const counts = await Promise.all(
@@ -554,7 +555,9 @@ export async function loadBoard(
   };
   const columns = boardOpenStages(stages);
   const columnIds = columns.map((c) => c.id);
+  let truncated = false;
   const result = (cards: BoardCardRow[], columnTotals: Record<string, number>, total: number): BoardResult => ({
+    truncated,
     chips,
     type,
     stages,
@@ -589,6 +592,7 @@ export async function loadBoard(
     const part = (res.data ?? []) as unknown as (LightRow & { stage_id: string | null })[];
     light.push(...part);
     if (part.length < READ_CHUNK) break;
+    if (from + READ_CHUNK >= MAX_GROUPED_CASES) truncated = true;
   }
   const urgent = light.map((r) => ({
     id: r.id,

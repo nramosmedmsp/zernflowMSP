@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Settings,
   Key,
@@ -28,6 +28,7 @@ import {
   KeyRound,
   SpellCheck,
   FileCode2,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -37,6 +38,7 @@ import { settingsLinksFor, type SettingsLinkKey } from "./settings-nav";
 import { useToast } from "@/components/ui/toast";
 import { useViewAs } from "@/components/view-as/view-as-context";
 import { Spinner } from "@/components/ui/spinner";
+import type { GlobalKeywordAction } from "@/lib/flow-engine/global-keywords";
 
 const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
   general: Settings,
@@ -51,6 +53,7 @@ const LINK_ICONS: Record<SettingsLinkKey, LucideIcon> = {
   "whatsapp-templates": MessageCircle,
   dictionary: SpellCheck,
   source: FileCode2,
+  "audit-log": ScrollText,
   "view-as": Eye,
   password: KeyRound,
 };
@@ -100,7 +103,7 @@ interface WorkspaceSettings {
   name: string;
   hasApiKey: boolean;
   hasAiKey: boolean;
-  globalKeywords: string[];
+  globalKeywords: Array<{ keyword: string; action: GlobalKeywordAction }>;
 }
 
 interface TestResult {
@@ -113,19 +116,23 @@ export function SettingsView({
   workspace,
   role,
   canManageSecrets = false,
+  statusSlot,
 }: {
   workspace: WorkspaceSettings;
   role: string | null | undefined;
   /** Solo el Dueño cambia las claves; el resto ve si están configuradas. */
   canManageSecrets?: boolean;
+  /** Tarjeta "Estado del sistema" (la arma el servidor; solo Dueño y Administrador). */
+  statusSlot?: ReactNode;
 }) {
   const [name, setName] = useState(workspace.name);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [aiKey, setAiKey] = useState("");
   const [showAiKey, setShowAiKey] = useState(false);
-  const [keywords, setKeywords] = useState<string[]>(workspace.globalKeywords);
+  const [keywords, setKeywords] = useState(workspace.globalKeywords);
   const [newKeyword, setNewKeyword] = useState("");
+  const [newKeywordAction, setNewKeywordAction] = useState<GlobalKeywordAction>("unsubscribe");
   const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -136,16 +143,16 @@ export function SettingsView({
   function addKeyword() {
     const trimmed = newKeyword.trim().toLowerCase();
     if (!trimmed) return;
-    if (keywords.includes(trimmed)) {
+    if (keywords.some((k) => k.keyword === trimmed)) {
       setNewKeyword("");
       return;
     }
-    setKeywords((prev) => [...prev, trimmed]);
+    setKeywords((prev) => [...prev, { keyword: trimmed, action: newKeywordAction }]);
     setNewKeyword("");
   }
 
   function removeKeyword(kw: string) {
-    setKeywords((prev) => prev.filter((k) => k !== kw));
+    setKeywords((prev) => prev.filter((k) => k.keyword !== kw));
   }
 
   async function handleTestConnection() {
@@ -289,7 +296,7 @@ export function SettingsView({
           <section>
             <div className="flex items-center gap-2">
               <Key className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Clave de API de Zernio</h2>
+              <h2 className="text-sm font-semibold">Clave de acceso a Zernio</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Tu clave de API de Zernio se usa para conectar con las redes sociales.
@@ -397,7 +404,7 @@ export function SettingsView({
           <section>
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">AI Gateway</h2>
+              <h2 className="text-sm font-semibold">Respuestas con inteligencia artificial</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Necesaria para el nodo de respuesta con IA de los flujos. Usa{" "}
@@ -423,7 +430,7 @@ export function SettingsView({
                 placeholder={
                   workspace.hasAiKey
                     ? "Ingresa una clave nueva para reemplazar la actual"
-                    : "Ingresa tu clave de API de AI Gateway"
+                    : "Escribe tu clave de acceso de Vercel AI Gateway"
                 }
                 className="w-full rounded-lg border border-input bg-background px-3 py-2 pr-10 text-sm font-mono placeholder:text-muted-foreground placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-ring"
               />
@@ -443,7 +450,7 @@ export function SettingsView({
             {workspace.hasAiKey && (
               <p className="mt-1.5 flex items-center gap-1 text-xs text-green-600">
                 <Check className="h-3 w-3" />
-                Clave de AI Gateway configurada
+                Clave de inteligencia artificial configurada
               </p>
             )}
           </section>
@@ -457,11 +464,20 @@ export function SettingsView({
               <h2 className="text-sm font-semibold">Palabras clave globales</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Palabras clave que activan flujos en todos los canales. Los activadores propios de cada flujo tienen prioridad sobre las palabras clave globales.
+              Si el cliente escribe solo una de estas palabras (por ejemplo BAJA o STOP), queda de baja de la publicidad y deja de recibir difusiones y secuencias; con una palabra de alta (por ejemplo ALTA) queda registrado que aceptó recibir publicidad (con la fecha y «palabra clave» como origen). El cambio queda en el historial del contacto y ese mensaje no activa ningún flujo. No se envía una respuesta automática: si quieres confirmarle, hazlo desde la conversación.
             </p>
 
             {/* Campo de palabra clave */}
             <div className="mt-4 flex gap-2">
+              <select
+                value={newKeywordAction}
+                onChange={(e) => setNewKeywordAction(e.target.value as GlobalKeywordAction)}
+                aria-label="Qué hace la palabra"
+                className="rounded-lg border border-input bg-background px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="unsubscribe">Baja</option>
+                <option value="subscribe">Alta</option>
+              </select>
               <input
                 type="text"
                 value={newKeyword}
@@ -489,12 +505,15 @@ export function SettingsView({
               <div className="mt-3 flex flex-wrap gap-2">
                 {keywords.map((kw) => (
                   <span
-                    key={kw}
+                    key={kw.keyword}
                     className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-1 text-xs font-medium"
                   >
-                    {kw}
+                    {kw.keyword}
+                    <span className="text-[10px] font-normal text-muted-foreground">
+                      {kw.action === "subscribe" ? "alta" : "baja"}
+                    </span>
                     <button
-                      onClick={() => removeKeyword(kw)}
+                      onClick={() => removeKeyword(kw.keyword)}
                       className="ml-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
                     >
                       <X className="h-3 w-3" />
@@ -544,6 +563,8 @@ export function SettingsView({
               </span>
             )}
           </div>
+
+          {statusSlot}
         </div>
       </div>
     </div>

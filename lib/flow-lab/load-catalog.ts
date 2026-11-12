@@ -3,7 +3,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assignmentModeFromSettings } from "@/lib/cases/routing";
 import { parseBusinessHours, parseOffHoursReply, parseReassignAfterMinutes } from "@/lib/business-hours";
-import type { GlobalKeyword } from "@/lib/flow-engine/global-keywords";
+import { normalizeGlobalKeywords } from "@/lib/flow-engine/global-keywords";
 import type { Database } from "@/lib/types/database";
 import { deriveTriggers, normalizeCatalog } from "./catalog";
 import type { LabCaseType, LabCatalog, LabFlow, LabNode, LabEdge } from "./types";
@@ -140,7 +140,7 @@ export async function loadLabCatalog(workspaceId: string, options: LoadLabCatalo
     reassignAfterMinutes: parseReassignAfterMinutes(settings.reassign_after_minutes),
     // Sin la migración de feriados la tabla no existe: se sigue sin ellos.
     holidays: (holidayRows.error ? [] : (holidayRows.data ?? [])).map((h) => ({ date: String(h.date).slice(0, 10), teamId: h.team_id })),
-    globalKeywords: asArray<GlobalKeyword>(ws.global_keywords).filter((k) => k && typeof k.keyword === "string"),
+    globalKeywords: normalizeGlobalKeywords(ws.global_keywords),
     customFields: (fieldRows.data ?? []).map((f) => ({ slug: f.slug, name: f.name })),
     tags: (tagRows.data ?? []).map((t) => t.name),
   });

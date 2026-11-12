@@ -50,7 +50,9 @@ export default async function SequenceDetailPage({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    // Una sola columna con scroll propio: el editor no se encoge pase lo que pase con la
+    // lista de inscritos (PAN-01); la lista tiene su alto máximo y scroll (enrollment-list).
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <SequenceEditor
         workspaceId={workspace.id}
         sequence={{
@@ -61,7 +63,7 @@ export default async function SequenceDetailPage({
           steps: (sequence.steps as unknown as SequenceStep[]) || [],
         }}
       />
-      <div className="border-t border-border">
+      <div className="shrink-0 border-t border-border">
         <EnrollmentList
           enrollments={
             (enrollments ?? []).map((e) => ({

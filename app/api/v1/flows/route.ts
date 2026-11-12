@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
+import { serverError } from "@/lib/server-error";
 
 export async function GET() {
   const guard = await requireApiAdmin();
@@ -13,7 +14,7 @@ export async function GET() {
     .eq("workspace_id", membership.workspace_id)
     .order("updated_at", { ascending: false });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("flows/list", error, "No se pudieron cargar los flujos. Inténtalo de nuevo.");
 
   return NextResponse.json(flows);
 }
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
     .select("id, name, status")
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("flows/create", error, "No se pudo crear el flujo. Inténtalo de nuevo.");
 
   return NextResponse.json(flow, { status: 201 });
 }

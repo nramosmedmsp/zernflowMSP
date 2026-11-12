@@ -3,6 +3,8 @@ import { createZernioClient } from "@/lib/zernio-client";
 import { PLATFORMS, isSupportedPlatform } from "@/lib/platforms";
 import { requireApiAdmin } from "@/lib/api-auth";
 import { getLateApiKey } from "@/lib/workspace-secrets";
+import { serverError } from "@/lib/server-error";
+import { auditAction } from "@/lib/audit-server";
 
 /**
  * POST /api/v1/channels/connect
@@ -61,12 +63,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No se pudo obtener la URL de conexión" }, { status: 500 });
     }
 
+    // SEG-05: queda registrado quién empezó a conectar qué canal (la conexión termina en Zernio).
+    await auditAction({
+      workspaceId: guard.ctx.workspaceId,
+      actorId: guard.ctx.user.id,
+      action: "channel_connect_started",
+      entity: "channel",
+      meta: { platform },
+    });
+
     return NextResponse.json({ authUrl: res.data.authUrl });
   } catch (error) {
-    console.error("Failed to get connect URL:", error);
-    return NextResponse.json(
-      { error: `Falló la conexión: ${error instanceof Error ? error.message : String(error)}` },
-      { status: 500 }
-    );
+    return serverError("channels/connect", error, "No se pudo iniciar la conexión del canal. Inténtalo de nuevo.");
   }
 }

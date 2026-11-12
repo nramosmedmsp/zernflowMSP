@@ -368,3 +368,21 @@ describe("computeMetrics", () => {
     expect(computeMetrics(input({ inbound }), { period: "30d", channel: "instagram" }).volume.totalMessages).toBe(1);
   });
 });
+
+
+describe("volumen con mensajes agregados por hora (Tanda 4)", () => {
+  it("suma el conteo de cada hora: 12 000 mensajes en un día no se pierden", () => {
+    const range = { startDay: "2026-11-02", endDay: "2026-11-02", startIso: "2026-11-02T05:00:00.000Z", endIso: "2026-11-03T05:00:00.000Z" } as never;
+    const v = buildVolume(
+      [
+        { created_at: "2026-11-02T15:00:00.000Z", platform: "whatsapp", count: 9000 },
+        { created_at: "2026-11-02T16:00:00.000Z", platform: "whatsapp", count: 3000 },
+        { created_at: "2026-11-02T16:30:00.000Z", platform: null },
+      ],
+      [],
+      range,
+    );
+    expect(v.totalMessages).toBe(12_001);
+    expect(v.daily[0].messages).toBe(12_001);
+  });
+});

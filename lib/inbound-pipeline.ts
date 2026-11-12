@@ -6,7 +6,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { flagComplaint, handleInbound } from "@/lib/cases";
 import { executeFlow, FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
-import { resolveGlobalKeyword, type GlobalKeyword } from "@/lib/flow-engine/global-keywords";
+import { resolveGlobalKeyword } from "@/lib/flow-engine/global-keywords";
+import { logActivity } from "@/lib/cases/io";
+import { buildConsentChange, NOTE_MAX } from "@/lib/consent";
 import { applyWaitingMenuReply } from "@/lib/flow-engine/menu-reply";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { claimWaitingSession, findWaitingSession } from "@/lib/flow-engine/waiting-session";
@@ -34,54 +36,92 @@ export interface InboundPipelineInput {
   at?: string;
 }
 
-export async function runInboundPipeline(supabase: Db, input: InboundPipelineInput): Promise<void> {
+/**
+ * Para reprocesar un evento sin repetir lo ya hecho (lib/inbound-events.ts):
+ * lo que ya se hizo se salta y el avance se avisa por las funciones `on*`.
+ */
+export interface InboundPipelineOptions {
+  /** La gestión ya se abrió/retomó en un intento anterior. */
+  skipCases?: boolean;
+  /** Los flujos ya empezaron en un intento anterior: nunca se repiten (evita responder dos veces). */
+  skipFlows?: boolean;
+  /** Reintento: no volver a contar el mensaje en analítica. */
+  skipAnalytics?: boolean;
+  onCasesDone?: () => Promise<void> | void;
+  onFlowsStart?: () => Promise<void> | void;
+}
+
+export interface InboundPipelineResult {
+  /** false = falló abrir/retomar la gestión (el reintento solo repite esa parte). */
+  casesOk: boolean;
+  casesError?: string;
+}
+
+export async function runInboundPipeline(
+  supabase: Db,
+  input: InboundPipelineInput,
+  opts: InboundPipelineOptions = {},
+): Promise<InboundPipelineResult> {
   const { channel, contactId, conversation, message: msg } = input;
+  const result: InboundPipelineResult = { casesOk: true };
 
   // ── Gestiones (docs/FASE-1-TECNICO.md 3.1) ───────────────────────────────
   // Abre o retoma la gestión del contacto y la reparte. Un fallo aquí no debe
   // impedir que corran los flujos.
   let openedCaseId: string | null = null;
-  try {
-    const result = await handleInbound(supabase, {
-      workspaceId: channel.workspace_id,
-      contactId,
-      conversationId: conversation.id,
-      at: input.at ?? new Date().toISOString(),
-      text: msg.text,
-    });
-    if (result?.opened) openedCaseId = result.caseId;
-  } catch (err) {
-    console.error("Case engine (handleInbound) error:", err);
+  if (!opts.skipCases) {
+    try {
+      const handled = await handleInbound(supabase, {
+        workspaceId: channel.workspace_id,
+        contactId,
+        conversationId: conversation.id,
+        at: input.at ?? new Date().toISOString(),
+        text: msg.text,
+      });
+      // handleInbound devuelve null cuando no pudo abrir ni retomar la gestión
+      // (lo registra y no lanza): sin gestión no se da por hecho el paso.
+      if (!handled) throw new Error("no se pudo abrir ni retomar la gestión");
+      if (handled.opened) openedCaseId = handled.caseId;
+      await opts.onCasesDone?.();
+    } catch (err) {
+      console.error("Case engine (handleInbound) error:", err);
+      result.casesOk = false;
+      result.casesError = err instanceof Error ? err.message : String(err);
+    }
   }
 
   // ── Detector de reclamos (control de reclamos) ───────────────────────────
   // Si el texto parece un reclamo y no hay una Postventa abierta, marca la
   // conversación. Solo consulta la base cuando el texto coincide; un fallo no
   // corta el flujo. Ya corre después de responder al webhook (after()).
-  try {
-    await flagComplaint(supabase, {
-      workspaceId: channel.workspace_id,
-      contactId,
-      conversationId: conversation.id,
-      text: msg.text,
-      at: input.at ?? new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("Complaint detector error:", err);
+  if (!opts.skipCases) {
+    try {
+      await flagComplaint(supabase, {
+        workspaceId: channel.workspace_id,
+        contactId,
+        conversationId: conversation.id,
+        text: msg.text,
+        at: input.at ?? new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Complaint detector error:", err);
+    }
   }
 
   // ── Volumen de mensajes entrantes (fase 3) ───────────────────────────────
   // Un evento por mensaje del cliente; un fallo no corta el flujo.
-  try {
-    const { error } = await supabase.from("analytics_events").insert({
-      workspace_id: channel.workspace_id,
-      contact_id: contactId,
-      event_type: "message_received",
-      metadata: { platform: channel.platform },
-    });
-    if (error) console.error("message_received analytics error:", error.message);
-  } catch (err) {
-    console.error("message_received analytics error:", err);
+  if (!opts.skipAnalytics) {
+    try {
+      const { error } = await supabase.from("analytics_events").insert({
+        workspace_id: channel.workspace_id,
+        contact_id: contactId,
+        event_type: "message_received",
+        metadata: { platform: channel.platform },
+      });
+      if (error) console.error("message_received analytics error:", error.message);
+    } catch (err) {
+      console.error("message_received analytics error:", err);
+    }
   }
 
   // ── Flow engine ───────────────────────────────────────────────────────────
@@ -89,7 +129,16 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
   // Con el bot en pausa (hay un asesor atendiendo) el mensaje del cliente no
   // activa palabras clave, bienvenida ni retoma esperas. Los flujos de eventos
   // de gestión (lib/flow-engine/case-triggers.ts) sí corren.
-  if (conversation.is_automation_paused) return;
+  //
+  // Desde aquí los flujos se consideran empezados: un reintento no los repite
+  // (mejor no responder que responderle dos veces al cliente).
+  if (opts.skipFlows) return result;
+  try {
+    await opts.onFlowsStart?.();
+  } catch (err) {
+    console.error("Inbound onFlowsStart error:", err);
+  }
+  if (conversation.is_automation_paused) return result;
 
   const incomingMessage = {
     text: msg.text || undefined,
@@ -104,8 +153,15 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
   };
 
   // Las palabras clave globales (baja, alta) van primero.
-  const handled = await handleGlobalKeywords(supabase, channel.workspace_id, contactId, msg.text || undefined);
-  if (handled) return;
+  // Un fallo aquí (datos dañados, base caída) no debe tumbar el mensaje: se
+  // registra y el mensaje sigue su camino como si no hubiera coincidido.
+  let handled = false;
+  try {
+    handled = await handleGlobalKeywords(supabase, channel, contactId, conversation.id, msg.text || undefined);
+  } catch (err) {
+    console.error("Global keywords error:", err);
+  }
+  if (handled) return result;
 
   // Si el contacto tiene una sesión esperando su respuesta (Espera inteligente)
   // y la espera no venció, el mensaje la retoma sin buscar disparadores: así
@@ -117,7 +173,7 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
     openedByThisMessageCaseId: openedCaseId,
   });
   if (waiting) {
-    if (!(await claimWaitingSession(supabase, waiting.id))) return; // otro mensaje la retomó
+    if (!(await claimWaitingSession(supabase, waiting.id))) return result; // otro mensaje la retomó
     // "1", "2." o el texto exacto de una opción del último menú del bot retoman la
     // espera como esa opción: el mensaje pasa a ser el título (y la carga) del botón.
     const reply = applyWaitingMenuReply(waiting.variables, incomingMessage);
@@ -140,7 +196,7 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
         await supabase.from("flow_sessions").update({ waiting_for_input: true }).eq("id", waiting.id);
       }
     }
-    return;
+    return result;
   }
 
   const trigger = await matchTrigger(supabase, {
@@ -150,7 +206,7 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
     message: incomingMessage,
     isFirstMessage: input.isFirstMessage,
   });
-  if (!trigger) return;
+  if (!trigger) return result;
 
   try {
     await executeFlow(supabase, {
@@ -170,14 +226,17 @@ export async function runInboundPipeline(supabase: Db, input: InboundPipelineInp
   } catch (err) {
     console.error("Flow execution error:", err);
   }
+
+  return result;
 }
 
 // ── Global keywords ─────────────────────────────────────────────────────────
 
 async function handleGlobalKeywords(
   supabase: Db,
-  workspaceId: string,
+  channel: ChannelRow,
   contactId: string,
+  conversationId: string,
   text: string | undefined,
 ): Promise<boolean> {
   if (!text) return false;
@@ -185,17 +244,37 @@ async function handleGlobalKeywords(
   const { data: workspace } = await supabase
     .from("workspaces")
     .select("global_keywords")
-    .eq("id", workspaceId)
+    .eq("id", channel.workspace_id)
     .single();
 
   if (!workspace?.global_keywords) return false;
 
-  const result = resolveGlobalKeyword(text, workspace.global_keywords as unknown as GlobalKeyword[]);
+  // Tolera textos sueltos, objetos y datos dañados sin lanzar.
+  const result = resolveGlobalKeyword(text, workspace.global_keywords);
   if (!result.handled) return false;
 
-  await supabase
-    .from("contacts")
-    .update({ is_subscribed: result.action === "subscribe" })
-    .eq("id", contactId);
+  // Baja -> "de baja"; Alta -> "aceptó" con origen "palabra clave" (PRIV-01): queda
+  // la fecha y que fue el propio cliente. is_subscribed lo deja coherente la base.
+  const { data: current } = await supabase.from("contacts").select("marketing_status").eq("id", contactId).maybeSingle();
+  const change = buildConsentChange({
+    from: current?.marketing_status,
+    action: result.action === "subscribe" ? "accept" : "opt_out",
+    source: "keyword",
+    by: null,
+    note: `Palabra clave: ${result.keyword}`.slice(0, NOTE_MAX),
+    at: new Date().toISOString(),
+  });
+  const { error } = await supabase.from("contacts").update(change.patch).eq("id", contactId);
+  // Si no se pudo guardar, no se da por atendida: el mensaje sigue y queda el error.
+  if (error) throw new Error(`no se pudo cambiar la suscripción: ${error.message}`);
+
+  // Deja rastro con el origen (después nadie sabría por qué dejó de recibir difusiones).
+  await logActivity(supabase, {
+    workspace_id: channel.workspace_id,
+    type: result.action === "subscribe" ? "contact_subscribed" : "contact_unsubscribed",
+    contact_id: contactId,
+    conversation_id: conversationId,
+    meta: { source: "keyword", keyword: result.keyword },
+  });
   return true;
 }

@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   role: "owner" as string,
   authUsers: [] as Array<Record<string, unknown>>,
   mailConfigured: true,
+  /** Correos que "aún no existen" para auth_user_exists aunque generateAccessLink los devuelva (alta nueva). */
+  notYetExisting: [] as string[],
 }));
 
 vi.mock("@/lib/workspace", () => ({
@@ -32,7 +34,7 @@ vi.mock("@/lib/flow-engine/case-triggers", async (importOriginal) => {
 
 vi.mock("@/lib/supabase/extra-rpc", () => ({
   rpcAuthUserExists: async (_s: unknown, email: string) => ({
-    exists: state.authUsers.some((u) => u.email === email),
+    exists: state.authUsers.some((u) => u.email === email) && !state.notYetExisting.includes(email),
     error: null,
   }),
 }));
@@ -49,7 +51,7 @@ vi.mock("@/lib/supabase/admin-users", () => ({
 vi.mock("@/lib/mail/settings", () => ({ isMailConfigured: async () => state.mailConfigured }));
 vi.mock("@/lib/mail/send", () => ({ sendAppMail: vi.fn(async () => ({ ok: true })) }));
 
-import { createTeamUser, removeTeamMember, sendAccessEmail, updateTeamMember } from "./team";
+import { copyAccessLink, createTeamUser, removeTeamMember, sendAccessEmail, updateTeamMember } from "./team";
 
 const WS = randomUUID();
 const OWNER = randomUUID();
@@ -113,6 +115,26 @@ describe("quitar a una persona del espacio", () => {
     const row = fake.rows("cases").find((x) => x.id === c.id)!;
     expect(row.assignee_id === null || row.assignee_id === BETO).toBe(true);
     expect(fake.rows("activity").some((a) => a.type === "unassigned" && a.case_id === c.id)).toBe(true);
+  });
+
+  it("el registro guarda el nombre y el correo de quien se quitó (leídos antes de borrar)", async () => {
+    fake.users.set(ANA, { id: ANA, email: "ana@x.pe", user_metadata: { full_name: "Ana Asesora" } });
+    expect(await removeTeamMember(WS, ANA)).toEqual({ ok: true });
+    const row = fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")!;
+    expect(row).toMatchObject({
+      type: "config_changed",
+      actor_id: OWNER,
+      from_value: "member",
+      meta: { entity: "team", user_id: ANA, role: "member", name: "Ana Asesora", email: "ana@x.pe" },
+    });
+  });
+
+  it("si no se puede leer la cuenta, se quita igual y el registro queda sin nombre (frase general)", async () => {
+    expect(await removeTeamMember(WS, BETO)).toEqual({ ok: true });
+    const row = fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")!;
+    expect(row.meta).toMatchObject({ user_id: BETO, role: "member" });
+    expect(row.meta).not.toHaveProperty("name");
+    expect(row.meta).not.toHaveProperty("email");
   });
 
   it("un Miembro no puede quitar a nadie", async () => {
@@ -414,5 +436,126 @@ describe("varios Dueños: crear, quitar y enviar acceso", () => {
     expect(await sendAccessEmail(WS, OWNER2)).toMatchObject({ ok: true, delivery: { sent: true } });
     as(ADMIN, "admin");
     expect(await sendAccessEmail(WS, OWNER2)).toMatchObject({ error: expect.any(String) });
+  });
+});
+
+// SEG-05 (registro) y SEG-09 (cerrar sesiones abiertas).
+describe("registro de acciones sensibles y cierre de sesiones", () => {
+  const OWNER2 = randomUUID();
+  const putUser = (id: string, email: string, name: string, extra: Record<string, unknown> = {}) => {
+    const user = {
+      id,
+      email,
+      email_confirmed_at: null,
+      last_sign_in_at: null,
+      user_metadata: { full_name: name },
+      ...extra,
+    };
+    fake.users.set(id, user as never);
+    state.authUsers.push(user);
+    return user;
+  };
+  const actions = () => fake.rows("activity").map((a) => (a.meta as { action?: string }).action);
+  let revoked: string[];
+  let rpcOk: boolean;
+
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.test";
+    state.mailConfigured = true;
+    state.authUsers = [];
+    state.notYetExisting = [];
+    revoked = [];
+    rpcOk = true;
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const original = fake.rpc.bind(fake);
+    vi.spyOn(fake, "rpc").mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name !== "revoke_user_sessions") return original(name, args);
+      if (!rpcOk) return { data: null, error: { message: "function public.revoke_user_sessions does not exist" } };
+      revoked.push(String(args.p_user_id));
+      return { data: 1, error: null };
+    });
+    putUser(OWNER, "dueno@x.pe", "Dueña Uno", { email_confirmed_at: "2026-01-01", last_sign_in_at: "2026-02-01" });
+    putUser(ANA, "ana@x.pe", "Ana Torres", { email_confirmed_at: "2026-01-01", last_sign_in_at: "2026-02-01" });
+    putUser(ADMIN, "admin@x.pe", "Admin Uno", { email_confirmed_at: "2026-01-01", last_sign_in_at: "2026-02-01" });
+    fake.seed("workspace_members", [{ workspace_id: WS, user_id: OWNER2, role: "owner" }]);
+  });
+
+  it("el alta de un usuario nuevo queda registrada con su rol, sin enlace ni token", async () => {
+    putUser("u-nuevo", "nuevo@x.pe", "Nuevo Admin");
+    state.notYetExisting = ["nuevo@x.pe"];
+    const result = await createTeamUser(WS, { fullName: "Nuevo Admin", email: "nuevo@x.pe", role: "admin" });
+    expect(result).toMatchObject({ ok: true, outcome: "created" });
+    const row = fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_created")!;
+    expect(row).toMatchObject({
+      type: "config_changed",
+      actor_id: OWNER,
+      to_value: "admin",
+      meta: expect.objectContaining({ entity: "team", role: "admin", user_id: "u-nuevo", email: "nuevo@x.pe" }),
+    });
+    expect(JSON.stringify(row)).not.toMatch(/token|auth\/confirm|https?:/);
+  });
+
+  it("generar el enlace para copiarlo y enviar el acceso quedan registrados, sin la URL", async () => {
+    putUser("u-pend", "pend@x.pe", "Pendiente");
+    fake.seed("workspace_members", [{ workspace_id: WS, user_id: "u-pend", role: "member" }]);
+    expect(await copyAccessLink(WS, "u-pend")).toMatchObject({ ok: true });
+    expect(await sendAccessEmail(WS, "u-pend")).toMatchObject({ ok: true });
+    expect(actions()).toEqual(expect.arrayContaining(["access_link_copied", "access_email_sent"]));
+    const rows = fake.rows("activity").filter((a) => ["access_link_copied", "access_email_sent"].includes((a.meta as { action: string }).action));
+    expect(rows).toHaveLength(2);
+    expect(JSON.stringify(rows)).not.toMatch(/auth\/confirm|https?:|token/);
+    for (const r of rows) expect(r).toMatchObject({ actor_id: OWNER, meta: expect.objectContaining({ user_id: "u-pend" }) });
+  });
+
+  it("si el enlace no se pudo generar no se registra nada", async () => {
+    state.authUsers = [];
+    fake.users.delete(ANA);
+    expect(await copyAccessLink(WS, ANA)).toMatchObject({ error: expect.any(String) });
+    expect(actions()).not.toContain("access_link_copied");
+  });
+
+  it("quitar a alguien cierra sus sesiones y lo anota", async () => {
+    expect(await removeTeamMember(WS, ANA)).toEqual({ ok: true });
+    expect(revoked).toEqual([ANA]);
+    expect(fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")!.meta).toMatchObject({ sessions_revoked: true });
+  });
+
+  it("si no se pueden cerrar las sesiones, igual se quita y se anota que no se cerraron", async () => {
+    rpcOk = false;
+    expect(await removeTeamMember(WS, ANA)).toEqual({ ok: true });
+    expect(members()).not.toContain(ANA);
+    expect(fake.rows("activity").find((a) => (a.meta as { action?: string }).action === "member_removed")!.meta).toMatchObject({ sessions_revoked: false });
+  });
+
+  it("no cierra sesiones si no se pudo quitar (rol protegido)", async () => {
+    as(ADMIN, "admin");
+    expect(await removeTeamMember(WS, OWNER)).toMatchObject({ error: expect.any(String) });
+    expect(revoked).toEqual([]);
+  });
+
+  const edit = (id: string, over: Partial<{ fullName: string; email: string; role: string }>) =>
+    updateTeamMember(WS, id, { fullName: "Ana Torres", email: "ana@x.pe", role: "member", ...over });
+
+  it("cambiar el correo cierra las sesiones", async () => {
+    expect(await edit(ANA, { email: "ana.nueva@x.pe" })).toMatchObject({ ok: true });
+    expect(revoked).toEqual([ANA]);
+  });
+
+  it("bajar el rol cierra las sesiones; subirlo o cambiar solo el nombre, no", async () => {
+    putUser(BETO, "beto@x.pe", "Beto", { email_confirmed_at: "2026-01-01", last_sign_in_at: "2026-02-01" });
+    // Administrador -> Miembro: baja.
+    expect(await updateTeamMember(WS, ADMIN, { fullName: "Admin Uno", email: "admin@x.pe", role: "member" })).toMatchObject({ ok: true });
+    expect(revoked).toEqual([ADMIN]);
+    // Miembro -> Administrador: sube.
+    expect(await updateTeamMember(WS, BETO, { fullName: "Beto", email: "beto@x.pe", role: "admin" })).toMatchObject({ ok: true });
+    // Solo el nombre.
+    expect(await edit(ANA, { fullName: "Ana María Torres" })).toMatchObject({ ok: true });
+    expect(revoked).toEqual([ADMIN]);
+  });
+
+  it("si el cambio de correo falla, no se cierra ninguna sesión", async () => {
+    putUser("u-otro", "otro@x.pe", "Otro");
+    expect(await edit(ANA, { email: "otro@x.pe" })).toEqual({ error: "Ya existe una cuenta con ese correo." });
+    expect(revoked).toEqual([]);
   });
 });

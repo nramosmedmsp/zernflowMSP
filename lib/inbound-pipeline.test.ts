@@ -14,7 +14,7 @@ import { runInboundPipeline, type InboundPipelineInput } from "./inbound-pipelin
 
 const { matchTrigger, handleInbound, flagComplaint } = vi.hoisted(() => ({
   matchTrigger: vi.fn(),
-  handleInbound: vi.fn(async () => null),
+  handleInbound: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ caseId: "case-1", opened: false, reopened: false, assignment: null, offHoursReply: null })),
   flagComplaint: vi.fn(async (..._args: unknown[]) => "no_match"),
 }));
 vi.mock("@/lib/flow-engine/trigger-matcher", () => ({ matchTrigger }));
@@ -274,10 +274,104 @@ describe("entrada de mensajes: retomar la conversación", () => {
     await startWaitingFlow();
     await run({ text: "Baja" });
     expect(fake.rows("contacts")[0].is_subscribed).toBe(false);
+    // PRIV-01: queda en el modelo de consentimiento, con origen y fecha.
+    expect(fake.rows("contacts")[0]).toMatchObject({
+      marketing_status: "opted_out",
+      marketing_source: "keyword",
+      marketing_set_by: null,
+      marketing_note: "Palabra clave: baja",
+    });
+    expect(typeof fake.rows("contacts")[0].marketing_status_at).toBe("string");
     expect(notes()).toEqual([]);
     expect(matchTrigger).not.toHaveBeenCalled();
     // La conversación sigue esperando.
     expect(session()).toMatchObject({ status: "active", waiting_for_input: true });
+  });
+
+  // PRIV-03: Configuración guardaba textos sueltos y esto reventaba en cada mensaje.
+  it("con palabras guardadas como texto suelto, el mensaje no revienta y la baja se registra", async () => {
+    fake.rows("workspaces")[0].global_keywords = ["baja", "stop"];
+    await run({ text: "STOP" });
+    expect(fake.rows("contacts")[0].is_subscribed).toBe(false);
+    expect(fake.rows("activity")).toHaveLength(1);
+    expect(fake.rows("activity")[0]).toMatchObject({
+      type: "contact_unsubscribed",
+      contact_id: contactId,
+      conversation_id: conversationId,
+      meta: { source: "keyword", keyword: "stop" },
+    });
+    expect(matchTrigger).not.toHaveBeenCalled();
+  });
+
+  it("una palabra de alta vuelve a suscribir y lo deja en el historial", async () => {
+    fake.rows("workspaces")[0].global_keywords = [{ keyword: "alta", action: "subscribe" }];
+    fake.rows("contacts")[0].is_subscribed = false;
+    await run({ text: "Alta" });
+    expect(fake.rows("contacts")[0].is_subscribed).toBe(true);
+    // Alta -> "aceptó" con origen "palabra clave".
+    expect(fake.rows("contacts")[0]).toMatchObject({ marketing_status: "accepted", marketing_source: "keyword", marketing_set_by: null });
+    expect(fake.rows("activity")[0]).toMatchObject({ type: "contact_subscribed", meta: { source: "keyword", keyword: "alta" } });
+  });
+
+  it("con datos dañados en global_keywords el mensaje sigue su camino", async () => {
+    fake.rows("workspaces")[0].global_keywords = [null, 5, { keyword: 3 }];
+    matchTrigger.mockResolvedValue({ id: "tr2", flow_id: "flow-trigger" });
+    await run({ text: "hola" });
+    expect(notes()).toEqual(["DISPARADOR"]);
+    expect(fake.rows("activity").filter((a) => String(a.type).startsWith("contact_"))).toHaveLength(0);
+  });
+
+  it("si falla la palabra clave (la base rechaza el cambio) se registra y el mensaje no se pierde", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    fake.failNext.set("contacts", "update");
+    matchTrigger.mockResolvedValue({ id: "tr2", flow_id: "flow-trigger" });
+    const result = await run({ text: "baja" });
+    expect(result).toMatchObject({ casesOk: true });
+    expect(error).toHaveBeenCalledWith("Global keywords error:", expect.any(Error));
+    // Siguió al buscador de disparadores en vez de tumbar el procesamiento.
+    expect(matchTrigger).toHaveBeenCalledTimes(1);
+    expect(fake.rows("activity").filter((a) => String(a.type).startsWith("contact_"))).toHaveLength(0);
+    error.mockRestore();
+  });
+
+  // CONF-06/07: el avance se avisa y un reintento no repite lo ya hecho.
+  it("si no se pudo abrir la gestión (null) o lanza, avisa casesOk=false pero el bot sigue", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    matchTrigger.mockResolvedValue({ id: "tr2", flow_id: "flow-trigger" });
+    handleInbound.mockResolvedValueOnce(null);
+    const onCasesDone = vi.fn();
+    const r1 = await runInboundPipeline(fake.asDb(), input({ text: "hola" }), { onCasesDone });
+    expect(r1).toMatchObject({ casesOk: false });
+    expect(onCasesDone).not.toHaveBeenCalled();
+    expect(notes()).toEqual(["DISPARADOR"]);
+
+    handleInbound.mockRejectedValueOnce(new Error("base caída"));
+    const r2 = await runInboundPipeline(fake.asDb(), input({ text: "hola" }));
+    expect(r2).toEqual({ casesOk: false, casesError: "base caída" });
+  });
+
+  it("un reintento con skipCases y skipFlows no abre la gestión ni vuelve a ejecutar el bot", async () => {
+    matchTrigger.mockResolvedValue({ id: "tr2", flow_id: "flow-trigger" });
+    const result = await runInboundPipeline(fake.asDb(), input({ text: "hola" }), { skipCases: true, skipFlows: true, skipAnalytics: true });
+    expect(result).toEqual({ casesOk: true });
+    expect(handleInbound).not.toHaveBeenCalled();
+    expect(flagComplaint).not.toHaveBeenCalled();
+    expect(matchTrigger).not.toHaveBeenCalled();
+    expect(notes()).toEqual([]);
+    expect(fake.rows("analytics_events").filter((e) => e.event_type === "message_received")).toHaveLength(0);
+  });
+
+  it("avisa cuándo termina la gestión y cuándo empiezan los flujos (antes de ejecutarlos)", async () => {
+    const calls: string[] = [];
+    matchTrigger.mockImplementation(async () => {
+      calls.push("flujos");
+      return null;
+    });
+    await runInboundPipeline(fake.asDb(), input({ text: "hola" }), {
+      onCasesDone: () => void calls.push("gestion"),
+      onFlowsStart: () => void calls.push("inicio-flujos"),
+    });
+    expect(calls).toEqual(["gestion", "inicio-flujos", "flujos"]);
   });
 
   it("de dos mensajes seguidos solo uno retoma la sesión", async () => {

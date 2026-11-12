@@ -76,8 +76,11 @@ export interface MetricTeam {
 
 /** Mensaje entrante (analytics_events.message_received). */
 export interface MetricInboundEvent {
+  /** Instante del evento o, si viene agregado, el inicio de la hora. */
   created_at: string;
   platform: string | null;
+  /** Cuántos mensajes representa (por hora y canal); ausente = 1. */
+  count?: number;
 }
 
 /** Horario efectivo para medir tiempos "en horario". */

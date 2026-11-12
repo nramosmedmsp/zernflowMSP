@@ -24,6 +24,7 @@ const AUTH_ALLOWED: Record<string, string> = {
 const RAW_ALLOWED: Record<string, string> = {
   "lib/supabase/server.ts": "lo define",
   "lib/actions/cases.ts": "authIdentity (unstable_cache no puede leer cookies; solo lee nombre y correo)",
+  "lib/rate-limit-http.ts": "contador de frecuencia (SEG-01): solo suma a rate_limit_hits y debe poder escribir también durante una vista",
 };
 const RAW_ALLOWED_PREFIXES = ["lib/view-as/", "app/api/v1/view-as/", "app/(dashboard)/dashboard/settings/view-as/"];
 

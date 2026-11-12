@@ -2,16 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Loader2, Search, Send, X } from "lucide-react";
+import { Loader2, Lock, Search, Send, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeSearch } from "@/lib/saved-replies";
+import { templateGateView } from "@/lib/template-kind";
+import type { ConsentFields } from "@/lib/consent";
 import { useToast } from "@/components/ui/toast";
 import {
   buildTemplateParams,
   isSendable,
   renderTemplatePreview,
   suggestFirstParam,
-  templateCategoryLabel,
   type TemplateSummary,
 } from "./whatsapp-templates";
 
@@ -23,6 +24,8 @@ export interface TemplatePickerProps {
   onSent: () => void;
   /** Para precargar la primera variable si parece un nombre. */
   contactName?: string;
+  /** Estado de publicidad del contacto: decide qué plantillas se pueden enviar. */
+  contact?: (ConsentFields & { is_subscribed?: boolean | null; erased_at?: string | null }) | null;
 }
 
 /**
@@ -41,7 +44,7 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "ready"; templates: TemplateSummary[] };
 
-function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: TemplatePickerProps) {
+function TemplatePickerDialog({ conversationId, onClose, onSent, contactName, contact }: TemplatePickerProps) {
   const toast = useToast();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [search, setSearch] = useState("");
@@ -102,10 +105,11 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
 
   const preview = selected ? renderTemplatePreview(selected, values) : null;
   const built = selected ? buildTemplateParams(selected, values) : null;
-  const canSend = !!selected && !!built?.ok && !sending;
+  const selectedGate = selected ? templateGateView(contact, selected.category) : null;
+  const canSend = !!selected && !!built?.ok && !sending && !selectedGate?.locked;
 
   async function send() {
-    if (!selected || !built || !built.ok || sending) return;
+    if (!selected || !built || !built.ok || sending || selectedGate?.locked) return;
     setSending(true);
     setSendError(null);
     const fingerprint = JSON.stringify([conversationId, selected.name, selected.language, built.params]);
@@ -199,7 +203,9 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
                 {filtered.length === 0 && (
                   <li className="px-4 py-3 text-xs text-muted-foreground">Ninguna plantilla coincide.</li>
                 )}
-                {filtered.map((t) => (
+                {filtered.map((t) => {
+                  const gate = templateGateView(contact, t.category);
+                  return (
                   <li key={`${t.name}:${t.language}`}>
                     <button
                       onClick={() => choose(t)}
@@ -208,14 +214,29 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
                         selected?.name === t.name && selected.language === t.language && "bg-accent",
                       )}
                     >
-                      <span className="block truncate text-sm font-medium text-foreground">{t.name}</span>
-                      <span className="block text-[11px] text-muted-foreground">
-                        {templateCategoryLabel(t.category)} · {t.language}
-                        {t.variableCount > 0 && ` · ${t.variableCount} variable${t.variableCount === 1 ? "" : "s"}`}
+                      <span className="flex items-center gap-1.5">
+                        {gate.locked && <Lock className="h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300" aria-label="Bloqueada" />}
+                        <span className="block min-w-0 truncate text-sm font-medium text-foreground">{t.name}</span>
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-muted-foreground">
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                            gate.publicity
+                              ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                              : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+                          )}
+                        >
+                          {gate.label}
+                        </span>
+                        {gate.locked && <span className="text-amber-700 dark:text-amber-300">Bloqueada</span>}
+                        <span>· {t.language}</span>
+                        {t.variableCount > 0 && <span>· {t.variableCount} variable{t.variableCount === 1 ? "" : "s"}</span>}
                       </span>
                     </button>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             </div>
 
@@ -226,6 +247,18 @@ function TemplatePickerDialog({ conversationId, onClose, onSent, contactName }: 
                 </p>
               ) : (
                 <div className="space-y-4">
+                  {selectedGate?.locked && (
+                    <div
+                      className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground"
+                      role="alert"
+                    >
+                      <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
+                      <div>
+                        <p className="font-medium">Plantilla de publicidad bloqueada</p>
+                        <p className="text-muted-foreground">{selectedGate.message}</p>
+                      </div>
+                    </div>
+                  )}
                   <div className="rounded-xl rounded-tl-md bg-muted px-4 py-3 text-sm text-foreground">
                     {preview.header && <p className="mb-1 font-semibold">{preview.header}</p>}
                     {selected.headerFormat && selected.headerFormat !== "TEXT" && (

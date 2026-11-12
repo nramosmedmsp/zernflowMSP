@@ -82,3 +82,17 @@ describe("api-auth", () => {
     expect(await statusOf(await requireApiOwner())).toBe(200);
   });
 });
+
+describe("api-auth: fallo de lectura de la membresía (CONF-02)", () => {
+  it("un fallo pasajero se reintenta y el usuario entra", async () => {
+    fake.failNext.set("workspace_members", "select");
+    expect(await statusOf(await requireApiMember())).toBe(200);
+  });
+
+  it("un fallo persistente da 503 (reintentar), no 404 de 'sin espacio'", async () => {
+    const failing = { from: () => { throw new Error("red caída"); }, auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) } };
+    state.db = failing;
+    const res = (await statusOf(await requireApiMember())) as { status: number };
+    expect(res.status).toBe(503);
+  });
+});

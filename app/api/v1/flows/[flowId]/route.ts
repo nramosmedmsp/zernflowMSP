@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
+import { serverError } from "@/lib/server-error";
+import { auditAction } from "@/lib/audit-server";
 
 // Flujos: solo Dueño o Administrador (docs/FASE-1-TECNICO.md 2.3).
 
@@ -54,8 +56,7 @@ export async function PUT(
     .eq("workspace_id", workspaceId)
     .select("id, name, status, updated_at");
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("flows/save", error, "No se pudo guardar el flujo. Inténtalo de nuevo.");
   if (!rows || rows.length === 0)
     return NextResponse.json({ error: "No se encontró el flujo o no tienes permiso para guardarlo." }, { status: 404 });
 
@@ -77,8 +78,16 @@ export async function DELETE(
     .eq("id", flowId)
     .eq("workspace_id", workspaceId);
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("flows/delete", error, "No se pudo eliminar el flujo. Inténtalo de nuevo.");
+
+  // SEG-05: borrar un flujo deja registro.
+  await auditAction({
+    workspaceId,
+    actorId: guard.ctx.user.id,
+    action: "flow_deleted",
+    entity: "flow",
+    meta: { flow_id: flowId },
+  });
 
   return NextResponse.json({ ok: true });
 }

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
 import { publishFlowVersion, reviewFlowForPublish } from "@/lib/flow-publish";
 import { hasErrors } from "@/lib/flow-engine/validate";
+import { serverError } from "@/lib/server-error";
+import { auditAction } from "@/lib/audit-server";
 
 /**
  * POST /api/v1/flows/[flowId]/publish  { confirm?: boolean }
@@ -33,10 +35,7 @@ export async function POST(
     .single();
 
   if (error || !flow)
-    return NextResponse.json(
-      { error: error?.message || "No se encontró el flujo" },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: "No se encontró el flujo" }, { status: 404 });
 
   const issues = await reviewFlowForPublish(supabase, flow);
   if (hasErrors(issues)) {
@@ -53,8 +52,16 @@ export async function POST(
   }
 
   const published = await publishFlowVersion(supabase, flow, user.id);
-  if ("error" in published)
-    return NextResponse.json({ error: published.error }, { status: 500 });
+  if ("error" in published) return serverError("flows/publish", published.error, "No se pudo publicar el flujo. Inténtalo de nuevo.");
+
+  // SEG-05: publicar un flujo deja registro.
+  await auditAction({
+    workspaceId,
+    actorId: user.id,
+    action: "flow_published",
+    entity: "flow",
+    meta: { flow_id: flowId, version: published.version },
+  });
 
   return NextResponse.json({ ...flow, status: "published", version: published.version });
 }

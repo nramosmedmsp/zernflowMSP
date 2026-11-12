@@ -8,6 +8,8 @@
 
 import { revalidatePath } from "next/cache";
 import { getWorkspace } from "@/lib/workspace";
+import { auditAction } from "@/lib/audit-server";
+import { hoursChangeMeta } from "@/lib/audit-changes";
 import { mergeWorkspaceSettings } from "@/lib/workspace-settings";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
 import {
@@ -34,21 +36,25 @@ function isId(value: unknown): value is string {
 interface Admin {
   error?: undefined;
   workspaceId: string;
+  userId: string;
   supabase: Awaited<ReturnType<typeof getWorkspace>>["supabase"];
 }
 
 async function adminContext(): Promise<Admin | { error: string }> {
-  const { workspace, role, supabase } = await getWorkspace();
+  const { workspace, role, supabase, user } = await getWorkspace();
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
-  return { workspaceId: workspace.id, supabase };
+  return { workspaceId: workspace.id, userId: user.id, supabase };
 }
 
 /** Equipo del espacio actual (null si no existe o es de otro espacio). */
-async function ownedTeam(ctx: Admin, teamId: unknown): Promise<{ id: string } | null> {
+async function ownedTeam(
+  ctx: Admin,
+  teamId: unknown,
+): Promise<{ id: string; name: string; business_hours: Json | null } | null> {
   if (!isId(teamId)) return null;
   const { data } = await ctx.supabase
     .from("teams")
-    .select("id")
+    .select("id, name, business_hours")
     .eq("id", teamId)
     .eq("workspace_id", ctx.workspaceId)
     .maybeSingle();
@@ -80,6 +86,17 @@ export async function saveCompanyHours(workspaceId: string, hours: unknown): Pro
     console.error("[saveCompanyHours]", error);
     return { error: GENERIC_ERROR };
   }
+  // Registro de cambios: qué días cambiaron, de qué a qué (nunca falla la acción).
+  const hoursMeta = hoursChangeMeta((current.settings as Record<string, unknown> | null)?.business_hours, checked.value, "company");
+  if (hoursMeta) {
+    await auditAction({
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.userId,
+      action: "hours_changed",
+      entity: "hours",
+      meta: { scope: "company", ...hoursMeta },
+    });
+  }
   revalidatePath(PATH);
   revalidatePath("/dashboard/settings/attention");
   return { ok: true };
@@ -89,7 +106,8 @@ export async function saveCompanyHours(workspaceId: string, hours: unknown): Pro
 export async function saveTeamHours(teamId: string, hours: unknown): Promise<HoursActionResult> {
   const ctx = await adminContext();
   if (ctx.error !== undefined) return { error: ctx.error };
-  if (!(await ownedTeam(ctx, teamId))) return { error: TEAM_NOT_FOUND };
+  const team = await ownedTeam(ctx, teamId);
+  if (!team) return { error: TEAM_NOT_FOUND };
 
   const checked = checkHoursInput(hours, "team");
   if (!checked.ok) return { error: checked.error };
@@ -105,6 +123,16 @@ export async function saveTeamHours(teamId: string, hours: unknown): Promise<Hou
     console.error("[saveTeamHours]", error.message);
     return { error: GENERIC_ERROR };
   }
+  const hoursMeta = hoursChangeMeta(team.business_hours, checked.value, "team");
+  if (hoursMeta) {
+    await auditAction({
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.userId,
+      action: "hours_changed",
+      entity: "hours",
+      meta: { scope: "team", team_name: team.name, ...hoursMeta },
+    });
+  }
   revalidatePath(PATH);
   return { ok: true };
 }
@@ -118,7 +146,8 @@ export async function addHoliday(input: {
   const ctx = await adminContext();
   if (ctx.error !== undefined) return { error: ctx.error };
   const teamId = input?.teamId ?? null;
-  if (teamId !== null && !(await ownedTeam(ctx, teamId))) return { error: TEAM_NOT_FOUND };
+  const team = teamId !== null ? await ownedTeam(ctx, teamId) : null;
+  if (teamId !== null && !team) return { error: TEAM_NOT_FOUND };
 
   const checked = checkHolidayInput(input?.date, input?.name);
   if (!checked.ok) return { error: checked.error };
@@ -131,6 +160,13 @@ export async function addHoliday(input: {
     console.error("[addHoliday]", error.message);
     return { error: GENERIC_ERROR };
   }
+  await auditAction({
+    workspaceId: ctx.workspaceId,
+    actorId: ctx.userId,
+    action: "holiday_added",
+    entity: "hours",
+    meta: { name: checked.name, date: checked.date, ...(team ? { team_name: team.name } : {}) },
+  });
   revalidatePath(PATH);
   return { ok: true };
 }
@@ -141,10 +177,28 @@ export async function removeHoliday(id: string): Promise<HoursActionResult> {
   if (ctx.error !== undefined) return { error: ctx.error };
   if (!isId(id)) return { error: "No se encontró el feriado." };
 
+  // Se lee antes de borrar para que el registro diga cuál feriado fue.
+  const { data: holiday } = await ctx.supabase
+    .from("holidays")
+    .select("name, date, team_id")
+    .eq("id", id)
+    .eq("workspace_id", ctx.workspaceId)
+    .maybeSingle();
+
   const { error } = await ctx.supabase.from("holidays").delete().eq("id", id).eq("workspace_id", ctx.workspaceId);
   if (error) {
     console.error("[removeHoliday]", error.message);
     return { error: GENERIC_ERROR };
+  }
+  if (holiday) {
+    const team = holiday.team_id ? await ownedTeam(ctx, holiday.team_id) : null;
+    await auditAction({
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.userId,
+      action: "holiday_removed",
+      entity: "hours",
+      meta: { name: holiday.name, date: holiday.date, ...(team ? { team_name: team.name } : {}) },
+    });
   }
   revalidatePath(PATH);
   return { ok: true };
@@ -158,7 +212,8 @@ export async function loadPeruHolidays(input: {
   const ctx = await adminContext();
   if (ctx.error !== undefined) return { error: ctx.error };
   const teamId = input?.teamId ?? null;
-  if (teamId !== null && !(await ownedTeam(ctx, teamId))) return { error: TEAM_NOT_FOUND };
+  const team = teamId !== null ? await ownedTeam(ctx, teamId) : null;
+  if (teamId !== null && !team) return { error: TEAM_NOT_FOUND };
   if (!isHolidayYear(input?.year)) return { error: "El año no es válido." };
   const year = input.year;
 
@@ -188,6 +243,13 @@ export async function loadPeruHolidays(input: {
       console.error("[loadPeruHolidays]", error.message);
       return { error: GENERIC_ERROR };
     }
+    await auditAction({
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.userId,
+      action: "holidays_loaded",
+      entity: "hours",
+      meta: { year, added: missing.length, ...(team ? { team_name: team.name } : {}) },
+    });
   }
   revalidatePath(PATH);
   return { ok: true, added: missing.length, skipped: all - missing.length };

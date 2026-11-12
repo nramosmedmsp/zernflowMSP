@@ -48,11 +48,12 @@ export function buildVolume(
 
   for (const e of inbound) {
     if (!inRange(e.created_at, range)) continue;
+    const n = e.count ?? 1;
     const row = daily.get(limaDayKey(e.created_at));
-    if (row) row.messages += 1;
+    if (row) row.messages += n;
     const { weekday, hour } = limaWeekdayHour(e.created_at);
-    messagesMatrix[weekday][hour] += 1;
-    totalMessages += 1;
+    messagesMatrix[weekday][hour] += n;
+    totalMessages += n;
   }
   for (const c of newCases) {
     if (!c.opened_at || !inRange(c.opened_at, range)) continue;

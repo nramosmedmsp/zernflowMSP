@@ -17,10 +17,10 @@ import { createClient } from "@/lib/supabase/client";
 import { formatNumber } from "@/lib/format";
 import {
   formatDayKey,
-  limaDayKey,
   limaDayKeys,
   limaRangeFromDays,
 } from "./day-buckets";
+import { buildDailySeries, buildFlowPerformance } from "./aggregate";
 
 // --- Tipos ---
 
@@ -204,6 +204,7 @@ export function AnalyticsView({
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const [stats, setStats] = useState<Stats>(initialData.stats);
   const [flowPerformance, setFlowPerformance] = useState<FlowPerformance[]>(initialData.flowPerformance);
@@ -233,15 +234,9 @@ export function AnalyticsView({
         : getDateRange(timeRange);
 
     try {
-      const [flowsRes, contactsRes, sentRes, failedRes, startsRes, completionsRes, flowsListRes, contactEvents, msgEvents] = await Promise.all([
-        supabase
-          .from("flows")
-          .select("*", { count: "exact", head: true })
-          .eq("workspace_id", workspaceId),
-        supabase
-          .from("contacts")
-          .select("*", { count: "exact", head: true })
-          .eq("workspace_id", workspaceId),
+      const [flowsRes, contactsRes, sentRes, failedRes, statsRes, flowsListRes, dailyRes] = await Promise.all([
+        supabase.from("flows").select("*", { count: "exact", head: true }).eq("workspace_id", workspaceId),
+        supabase.from("contacts").select("*", { count: "exact", head: true }).eq("workspace_id", workspaceId),
         supabase
           .from("analytics_events")
           .select("*", { count: "exact", head: true })
@@ -256,42 +251,12 @@ export function AnalyticsView({
           .eq("event_type", "message_failed")
           .gte("created_at", range.start)
           .lte("created_at", range.end),
-        supabase
-          .from("analytics_events")
-          .select("flow_id")
-          .eq("workspace_id", workspaceId)
-          .eq("event_type", "flow_started")
-          .gte("created_at", range.start)
-          .lte("created_at", range.end)
-          .not("flow_id", "is", null),
-        supabase
-          .from("analytics_events")
-          .select("flow_id")
-          .eq("workspace_id", workspaceId)
-          .eq("event_type", "flow_completed")
-          .gte("created_at", range.start)
-          .lte("created_at", range.end)
-          .not("flow_id", "is", null),
-        supabase
-          .from("flows")
-          .select("id, name")
-          .eq("workspace_id", workspaceId),
-        supabase
-          .from("contacts")
-          .select("created_at")
-          .eq("workspace_id", workspaceId)
-          .gte("created_at", range.start)
-          .lte("created_at", range.end)
-          .order("created_at"),
-        supabase
-          .from("analytics_events")
-          .select("event_type, created_at")
-          .eq("workspace_id", workspaceId)
-          .in("event_type", ["message_sent", "message_failed"])
-          .gte("created_at", range.start)
-          .lte("created_at", range.end)
-          .order("created_at"),
+        // Conteos hechos en la base (00045): no dependen del tope de 1 000 filas de la API.
+        supabase.rpc("analytics_flow_stats", { p_workspace: workspaceId, p_from: range.start, p_to: range.end }),
+        supabase.from("flows").select("id, name").eq("workspace_id", workspaceId),
+        supabase.rpc("analytics_daily", { p_workspace: workspaceId, p_from: range.start, p_to: range.end }),
       ]);
+      if (statsRes.error || dailyRes.error) throw new Error((statsRes.error ?? dailyRes.error)?.message);
 
       setStats({
         totalFlows: flowsRes.count ?? 0,
@@ -299,63 +264,16 @@ export function AnalyticsView({
         messagesSent: sentRes.count ?? 0,
         messagesFailed: failedRes.count ?? 0,
       });
-
-      // Rendimiento de los flujos
-      const flowNames = new Map(
-        (flowsListRes.data ?? []).map((f) => [f.id, f.name])
-      );
-      const startCounts = new Map<string, number>();
-      (startsRes.data ?? []).forEach((e) => {
-        if (e.flow_id) startCounts.set(e.flow_id, (startCounts.get(e.flow_id) ?? 0) + 1);
-      });
-      const completionCounts = new Map<string, number>();
-      (completionsRes.data ?? []).forEach((e) => {
-        if (e.flow_id) completionCounts.set(e.flow_id, (completionCounts.get(e.flow_id) ?? 0) + 1);
-      });
-      const allFlowIds = new Set([...startCounts.keys(), ...completionCounts.keys()]);
-      const perfData: FlowPerformance[] = Array.from(allFlowIds)
-        .map((fid) => {
-          const starts = startCounts.get(fid) ?? 0;
-          const completions = completionCounts.get(fid) ?? 0;
-          const dropOffRate = starts > 0 ? Math.round(((starts - completions) / starts) * 100) : 0;
-          return { id: fid, name: flowNames.get(fid) ?? "Flujo desconocido", starts, completions, dropOffRate };
-        })
-        .sort((a, b) => b.starts - a.starts)
-        .slice(0, 10);
-      setFlowPerformance(perfData);
-
-      // Crecimiento de contactos por día
-      const growthByDay = new Map<string, number>();
-      (contactEvents.data ?? []).forEach((e) => {
-        const day = limaDayKey(e.created_at);
-        growthByDay.set(day, (growthByDay.get(day) ?? 0) + 1);
-      });
-      const dayKeys = limaDayKeys(range.start, range.end);
-      const growthData: DailyCount[] = dayKeys.map((dayStr) => ({
-        date: dayStr,
-        count: growthByDay.get(dayStr) ?? 0,
-      }));
-      setContactGrowth(growthData);
-
-      // Volumen de mensajes por día
-      const sentByDay = new Map<string, number>();
-      const failedByDay = new Map<string, number>();
-      (msgEvents.data ?? []).forEach((e) => {
-        const day = limaDayKey(e.created_at);
-        if (e.event_type === "message_sent") {
-          sentByDay.set(day, (sentByDay.get(day) ?? 0) + 1);
-        } else {
-          failedByDay.set(day, (failedByDay.get(day) ?? 0) + 1);
-        }
-      });
-      const msgData: DailyMessages[] = dayKeys.map((dayStr) => ({
-        date: dayStr,
-        sent: sentByDay.get(dayStr) ?? 0,
-        failed: failedByDay.get(dayStr) ?? 0,
-      }));
-      setMessageVolume(msgData);
+      const flowNames = new Map((flowsListRes.data ?? []).map((f) => [f.id, f.name]));
+      setFlowPerformance(buildFlowPerformance(statsRes.data ?? [], flowNames));
+      const series = buildDailySeries(dailyRes.data ?? [], limaDayKeys(range.start, range.end));
+      setContactGrowth(series.contactGrowth);
+      setMessageVolume(series.messageVolume);
+      setLoadError(false);
     } catch (err) {
       console.error("Failed to fetch analytics:", err);
+      // No dejar cifras de otro periodo como si fueran las de este.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -477,6 +395,11 @@ export function AnalyticsView({
           </div>
         ) : (
           <div className="space-y-8">
+            {loadError && (
+              <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                No se pudieron calcular las cifras de este periodo. Las que ves pueden ser de otro periodo; vuelve a elegirlo para reintentar.
+              </p>
+            )}
             {/* Tarjetas de estadísticas */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {statCards.map((card) => (

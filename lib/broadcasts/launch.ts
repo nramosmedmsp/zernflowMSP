@@ -1,16 +1,16 @@
-// Lanzar una difusión: elegir destinatarios, crearlos y programar los envíos,
-// sin que el mismo cliente reciba la promoción dos veces (A-9).
+// Lanzar una difusión: elegir destinatarios y crearlos como pendientes, sin que el
+// mismo cliente reciba la promoción dos veces (A-9). Los envíos los hace el cron a su
+// ritmo (lib/broadcasts/send-pass.ts); aquí no sale ningún mensaje.
 //
 //  1. Se "reclama" la difusión con una sola actualización condicional
 //     (borrador/programada -> enviándose). Quien llega segundo (doble clic, dos
 //     pestañas, dos administradores) no la gana y recibe 409.
-//  2. Con la difusión ya reclamada se crean los destinatarios y los trabajos.
+//  2. Con la difusión ya reclamada se crean los destinatarios (pendientes).
 //     La base impide además un destinatario repetido por difusión (00033).
 //  3. Si algo falla a medias, se deshace lo creado y la difusión vuelve a su
 //     estado anterior, para poder reintentar sin duplicar.
 
 import type { Db } from "@/lib/cases/io";
-import { scheduleBroadcastDelivery } from "@/lib/scheduler";
 import type { Json } from "@/lib/types/database";
 import type { ParsedBroadcastContent } from "./content";
 import { planBroadcast, type BroadcastPlan } from "./plan";
@@ -87,7 +87,7 @@ export async function launchBroadcast(db: Db, p: LaunchParams): Promise<LaunchRe
     return { ok: false, status: 409, error: ALREADY_SENDING_MESSAGE };
   }
 
-  // 2. Crear destinatarios y trabajos; ante cualquier fallo, deshacer.
+  // 2. Crear los destinatarios; ante cualquier fallo, deshacer.
   try {
     // Restos de un intento anterior que se cortó antes de esta corrección.
     await clearUnsent(db, p.broadcastId);
@@ -98,15 +98,13 @@ export async function launchBroadcast(db: Db, p: LaunchParams): Promise<LaunchRe
       channel_id: r.channelId,
       status: "pending",
     }));
-    const recipientIds: string[] = [];
+    let created = 0;
     for (let i = 0; i < rows.length; i += BATCH) {
       const { data: inserted, error } = await db.from("broadcast_recipients").insert(rows.slice(i, i + BATCH)).select("id");
       if (error) throw new Error(`recipients: ${error.message}`);
-      recipientIds.push(...(inserted ?? []).map((r) => r.id));
+      created += (inserted ?? []).length;
     }
-    if (recipientIds.length !== rows.length) throw new Error("recipients: no se crearon todos");
-
-    await scheduleBroadcastDelivery(db, p.broadcastId, recipientIds);
+    if (created !== rows.length) throw new Error("recipients: no se crearon todos");
   } catch (err) {
     console.error("[broadcasts/launch] fallo, se deshace", err);
     await rollback(db, p);
@@ -121,7 +119,7 @@ export async function launchBroadcast(db: Db, p: LaunchParams): Promise<LaunchRe
   };
 }
 
-/** Borra los destinatarios aún sin enviar de la difusión y sus trabajos programados. */
+/** Borra los destinatarios aún sin enviar de la difusión (y los trabajos de envío que dejara una versión anterior). */
 async function clearUnsent(db: Db, broadcastId: string): Promise<void> {
   const jobs = await db.from("scheduled_jobs").delete().eq("type", "send_broadcast").eq("payload->>broadcastId", broadcastId);
   if (jobs.error) throw new Error(`jobs: ${jobs.error.message}`);

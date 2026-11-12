@@ -29,7 +29,7 @@ beforeEach(() => {
   fake.seed("channels", [{ id: "ch-1", workspace_id: WS, platform: "whatsapp", late_account_id: "acc-1", is_active: true }]);
   const recent = new Date().toISOString();
   for (const [id, name] of [["c1", "Ana Pérez"], ["c2", "+51 987 654 321"]]) {
-    fake.seed("contacts", [{ id, workspace_id: WS, display_name: name, is_subscribed: true }]);
+    fake.seed("contacts", [{ id, workspace_id: WS, display_name: name, is_subscribed: true, marketing_status: "accepted" }]);
     fake.seed("conversations", [
       { workspace_id: WS, contact_id: id, channel_id: "ch-1", late_conversation_id: `late-${id}`, last_inbound_at: recent },
     ]);

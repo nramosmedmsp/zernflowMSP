@@ -289,6 +289,7 @@ describe("textos en español para todos los tipos de actividad (M-30)", () => {
     next_action_set: true,
     automation_paused: true,
     contact_unsubscribed: true,
+    contact_subscribed: true,
     automation_resumed: true,
     config_changed: true,
     off_hours_reply_sent: true,
@@ -305,6 +306,10 @@ describe("textos en español para todos los tipos de actividad (M-30)", () => {
     close_request_approved: true,
     close_request_rejected: true,
     complaint_dismissed: true,
+    contact_data_corrected: true,
+    contact_data_exported: true,
+    contact_data_erased: true,
+    contact_data_erase_files_retried: true,
   };
 
   it.each(Object.keys(ALL_TYPES))("%s tiene texto en español", (type) => {

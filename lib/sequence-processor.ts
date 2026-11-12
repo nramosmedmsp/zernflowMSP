@@ -1,3 +1,4 @@
+import { marketingDecision } from "@/lib/consent";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   loadDeliveryContext,
@@ -26,7 +27,7 @@ type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
  * Process all sequence enrollments that are due.
  * Called by the cron endpoint every 30-60 seconds.
  */
-export async function processSequenceSteps() {
+export async function processSequenceSteps(opts: { deadline?: number } = {}) {
   const supabase = await createServiceClient();
 
   // Fetch enrollments that are due
@@ -44,9 +45,16 @@ export async function processSequenceSteps() {
 
   let processed = 0;
   let failed = 0;
+  let skippedForTime = 0;
   const schedules = new ScheduleCache(supabase);
 
   for (const enrollment of enrollments) {
+    // CONF-03: sin tiempo para otro paso (un envío puede tardar hasta 20 s): lo que
+    // queda sigue con su fecha vencida y se toma en la siguiente pasada.
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) {
+      skippedForTime = enrollments.length - enrollments.indexOf(enrollment);
+      break;
+    }
     try {
       // Dos pasadas del cron a la vez no deben enviar el mismo paso dos veces:
       // quien no logra tomar la inscripción la deja.
@@ -62,7 +70,7 @@ export async function processSequenceSteps() {
     }
   }
 
-  return { processed, failed, total: enrollments.length };
+  return { processed, failed, total: enrollments.length, skippedForTime };
 }
 
 /** Si el proceso se cae a mitad de un paso, la inscripción vuelve a estar disponible pasado este tiempo. */
@@ -146,15 +154,16 @@ async function processEnrollment(
     return;
   }
 
-  // Un contacto que se dio de baja no recibe nada más de la secuencia.
+  // Las secuencias son publicidad: solo siguen para quien tiene consentimiento
+  // registrado. Quien se dio de baja, o nunca aceptó, no recibe nada más (PRIV-01).
   const { data: contact, error: contactError } = await supabase
     .from("contacts")
-    .select("is_subscribed")
+    .select("is_subscribed, marketing_status, erased_at")
     .eq("id", enrollment.contact_id)
     .eq("workspace_id", sequence.workspace_id)
     .maybeSingle();
   if (contactError) throw new Error(contactError.message);
-  if (!contact || contact.is_subscribed === false) {
+  if (!contact || contact.is_subscribed === false || contact.erased_at || !marketingDecision(contact).ok) {
     await supabase.from("sequence_enrollments").update({ status: "cancelled", next_step_at: null }).eq("id", enrollment.id);
     return;
   }

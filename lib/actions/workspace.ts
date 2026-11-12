@@ -17,13 +17,15 @@ export async function switchWorkspace(workspaceId: string) {
   if (await isViewAsLocked()) return { error: VIEW_AS_READ_ONLY_MESSAGE };
 
   // Validate user has access to this workspace
-  const { data: membership } = await supabase
+  const { data: membership, error: membershipError } = await supabase
     .from("workspace_members")
     .select("workspace_id")
     .eq("user_id", user.id)
     .eq("workspace_id", workspaceId)
-    .single();
+    .maybeSingle();
 
+  // Un fallo de lectura no es "sin acceso" (CONF-02).
+  if (membershipError) return { error: "No se pudo comprobar tu acceso. Inténtalo de nuevo en unos segundos." };
   if (!membership) return { error: "No tienes acceso a este espacio de trabajo." };
 
   await setWorkspaceCookie(workspaceId);
@@ -46,10 +48,11 @@ export async function createWorkspace(name: string) {
 
   // Solo el Dueño de algún espacio, o cualquiera si aún no hay espacios
   // (instalación nueva). La función de la base (00030) vuelve a comprobarlo.
-  const { data: mine } = await supabase
+  const { data: mine, error: mineError } = await supabase
     .from("workspace_members")
     .select("role")
     .eq("user_id", user.id);
+  if (mineError) return { error: "No se pudo comprobar tu rol. Inténtalo de nuevo en unos segundos." };
   const roles = (mine ?? []).map((m) => m.role);
   let anyWorkspaceExists = true;
   if (!roles.includes("owner")) {

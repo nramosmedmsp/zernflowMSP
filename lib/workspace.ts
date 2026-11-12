@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { effectiveUserFor, getRealSession, getViewAsState } from "@/lib/view-as/state";
+import { IdentityReadError, readOnceMore } from "@/lib/identity-read";
 import type { Database, MemberAvailability, WorkspaceRole } from "@/lib/types/database";
 
 export const WORKSPACE_COOKIE = "zernflow_workspace_id";
@@ -62,7 +63,11 @@ export const getWorkspace = cache(async () => {
   if (info && info.kind === "role") {
     // Identidad de ejemplo: no tiene filas en workspace_members. El espacio y el
     // rol vienen de la vista; el espacio se lee con la identidad efectiva (RLS).
-    const { data: ws } = await supabase.from("workspaces").select("*").eq("id", info.workspaceId).maybeSingle();
+    const { data: ws, error: wsError } = await readOnceMore(() =>
+      supabase.from("workspaces").select("*").eq("id", info.workspaceId).maybeSingle(),
+    );
+    // CONF-02: un fallo de lectura NO es "sin espacio": se propaga a la pantalla de error.
+    if (wsError) throw new IdentityReadError("workspaces", wsError);
     memberships = ws
       ? [{ workspace_id: info.workspaceId, role: info.roleWs ?? "member", availability: "available", workspaces: ws }]
       : [];
@@ -72,14 +77,17 @@ export const getWorkspace = cache(async () => {
       .select("workspace_id, role, availability, workspaces(*)")
       .eq("user_id", user.id);
     // En vista el espacio queda fijado al de la vista.
-    const { data } = await (info ? query.eq("workspace_id", info.workspaceId) : query);
+    const { data, error } = await readOnceMore(async () => await (info ? query.eq("workspace_id", info.workspaceId) : query));
+    // CONF-02: si la consulta falló (parpadeo de la base) no sabemos si tiene espacio:
+    // se lanza para que salga la pantalla de error con "Reintentar", nunca "/sin-espacio".
+    if (error) throw new IdentityReadError("workspace_members", error);
     memberships = data as Membership[] | null;
   }
 
   const usable = (memberships ?? []).filter((m) => m.workspaces);
   const membership = usable.find((m) => m.workspace_id === selectedId) ?? usable[0];
 
-  // Sesión válida pero sin membresía: /login devolvería al dashboard (bucle).
+  // Lectura buena pero vacía: sesión válida sin membresía (/login devolvería al dashboard: bucle).
   if (!membership?.workspaces) redirect("/sin-espacio");
 
   return {

@@ -34,7 +34,7 @@ beforeEach(() => {
   fake.seed("workspaces", [{ id: "ws-1", name: "Muscle Shop" }]);
   fake.seed("channels", [{ id: "ch", workspace_id: "ws-1", platform: "whatsapp", is_active: true }]);
   fake.seed("contacts", [
-    { id: "c1", workspace_id: "ws-1", display_name: "Ana", phone: "+51 987 654 321", is_subscribed: true },
+    { id: "c1", workspace_id: "ws-1", display_name: "Ana", phone: "+51 987 654 321", is_subscribed: true, marketing_status: "accepted" },
   ]);
   const [b] = fake.seed("broadcasts", [
     { workspace_id: "ws-1", name: "Promo", status: "draft", message_content: PROMO, total_recipients: 0 },
@@ -50,11 +50,11 @@ describe("POST /api/v1/broadcasts/:id/send", () => {
     expect(fake.rows("scheduled_jobs")).toHaveLength(0);
   });
 
-  it("un administrador la envía: un destinatario y un trabajo por contacto", async () => {
+  it("un administrador la envía: un destinatario pendiente por contacto (el cron envía a su ritmo)", async () => {
     const res = await call();
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ broadcastId, totalRecipients: 1, status: "sending" });
-    expect(fake.rows("scheduled_jobs")).toHaveLength(1);
+    expect(fake.rows("broadcast_recipients")).toMatchObject([{ status: "pending" }]);
   });
 
   it("enviar otra vez la misma difusión no repite los envíos", async () => {
@@ -62,7 +62,6 @@ describe("POST /api/v1/broadcasts/:id/send", () => {
     const second = await call();
     expect(second.status).toBeGreaterThanOrEqual(400);
     expect(fake.rows("broadcast_recipients")).toHaveLength(1);
-    expect(fake.rows("scheduled_jobs")).toHaveLength(1);
   });
 
   it("una difusión que no existe responde 404", async () => {

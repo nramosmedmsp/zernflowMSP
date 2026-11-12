@@ -270,7 +270,7 @@ export function MetricsView({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
               {truncatedCases
-                ? "Hay más de 5.000 gestiones en este periodo y solo se calcularon las más recientes. Acorta el periodo o usa los filtros para ver todo."
+                ? "Hay más de 50.000 gestiones en este periodo y solo se calcularon las más recientes. Acorta el periodo o usa los filtros para ver todo."
                 : "Hay muchos mensajes entrantes en este periodo y solo se contaron los primeros 20.000. Acorta el periodo para ver todo."}
             </span>
           </div>

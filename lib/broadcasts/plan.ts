@@ -11,13 +11,13 @@ import {
   type ChannelInfo,
   type ContactCandidate,
 } from "./recipients";
-import { resolveSegmentContacts, type SegmentContactRow } from "./resolve";
+import { resolveSegmentByConsent, type SegmentContactRow } from "./resolve";
 import type { SegmentFilter } from "./segment";
 import { buildContactTemplateParams, needsCustomFields, renderContactText } from "./variables";
 
 export interface BroadcastPlan {
   kind: "text" | "template";
-  /** Contactos suscritos que cumplen el filtro. */
+  /** Contactos que cumplen el filtro (aceptaran o no publicidad). */
   segmentTotal: number;
   recipients: { contactId: string; channelId: string }[];
   excluded: {
@@ -29,6 +29,10 @@ export interface BroadcastPlan {
     noPhone: number;
     /** Una variable queda vacía (o desconocida) para ese contacto. */
     emptyVariable: number;
+    /** Se dieron de baja de la publicidad (PRIV-01). */
+    optedOut: number;
+    /** No tienen consentimiento de publicidad registrado (PRIV-01). */
+    noConsent: number;
   };
 }
 
@@ -102,11 +106,21 @@ export async function planBroadcast(
   filter: SegmentFilter | null,
   now: number = Date.now(),
 ): Promise<BroadcastPlan> {
-  const contacts = await resolveSegmentContacts(db, workspaceId, filter);
+  // Solo reciben publicidad quienes aceptaron; el resto se cuenta aparte.
+  const byConsent = await resolveSegmentByConsent(db, workspaceId, filter);
+  const contacts = byConsent.accepted;
+  const segmentTotal = contacts.length + byConsent.optedOut + byConsent.noConsent;
   const channels = await loadChannels(db, workspaceId);
   const candidates = await loadCandidates(db, workspaceId, contacts, content.kind === "text");
 
-  const excluded = { noConversation: 0, closedWindow: 0, noPhone: 0, emptyVariable: 0 };
+  const excluded = {
+    noConversation: 0,
+    closedWindow: 0,
+    noPhone: 0,
+    emptyVariable: 0,
+    optedOut: byConsent.optedOut,
+    noConsent: byConsent.noConsent,
+  };
 
   if (content.kind === "text") {
     const plan = planTextRecipients(candidates, channels, now);
@@ -132,7 +146,7 @@ export async function planBroadcast(
       if (rendered.ok) recipients.push(r);
       else excluded.emptyVariable++;
     }
-    return { kind: "text", segmentTotal: contacts.length, recipients, excluded };
+    return { kind: "text", segmentTotal, recipients, excluded };
   }
 
   const plan = planTemplateRecipients(candidates, channels);
@@ -158,7 +172,7 @@ export async function planBroadcast(
     if (built.ok) recipients.push({ contactId: r.contactId, channelId: r.channelId });
     else excluded.emptyVariable++;
   }
-  return { kind: "template", segmentTotal: contacts.length, recipients, excluded };
+  return { kind: "template", segmentTotal, recipients, excluded };
 }
 
 async function loadCustomFields(db: Db, workspaceId: string, contactIds: string[]): Promise<Map<string, Record<string, string>>> {

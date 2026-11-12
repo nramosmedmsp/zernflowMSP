@@ -6,6 +6,7 @@
 
 import { normalizeSearch } from "@/lib/saved-replies";
 import { firstName } from "@/lib/names";
+import { templateKindFromCategory, templateKindLabel } from "@/lib/template-kind";
 
 export const TEMPLATE_BODY_MAX = 1024;
 export const TEMPLATE_PARAM_MAX = 1024;
@@ -23,18 +24,13 @@ export const TEMPLATE_STATUS_LABELS: Record<string, string> = {
   PENDING_DELETION: "Por eliminar",
 };
 
-export const TEMPLATE_CATEGORY_LABELS: Record<string, string> = {
-  UTILITY: "Utilidad",
-  MARKETING: "Marketing",
-  AUTHENTICATION: "Autenticación",
-};
-
 export function templateStatusLabel(status: string | null | undefined): string {
   return TEMPLATE_STATUS_LABELS[(status ?? "").toUpperCase()] ?? (status || "Desconocido");
 }
 
+/** Lo que lee la persona: "Publicidad" o "Servicio" (categoría desconocida: se trata como publicidad). */
 export function templateCategoryLabel(category: string | null | undefined): string {
-  return TEMPLATE_CATEGORY_LABELS[(category ?? "").toUpperCase()] ?? (category || "");
+  return templateKindLabel(templateKindFromCategory(category));
 }
 
 export type TemplateSlotSection = "header" | "body" | "button";
@@ -266,7 +262,7 @@ export function validateTemplateCreate(input: TemplateCreateInput): TemplateCrea
 
   const category = upper(input.category);
   if (!(CREATABLE_CATEGORIES as readonly string[]).includes(category)) {
-    return { ok: false, error: "La categoría debe ser Utilidad o Marketing." };
+    return { ok: false, error: "La categoría debe ser Servicio o Publicidad." };
   }
 
   const body = (input.body ?? "").trim();

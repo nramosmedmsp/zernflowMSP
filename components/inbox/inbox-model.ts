@@ -448,6 +448,8 @@ export function buildRows(
   filters: InboxFilters,
   meta: InboxMeta,
   now: Date,
+  /** Chats que el servidor encontró para la búsqueda actual (aunque no estén entre los coincidentes en memoria). */
+  serverHitIds?: ReadonlySet<string> | null,
 ): InboxRow[] {
   const rows: InboxRow[] = [];
   const typeOf = new Map(meta.caseTypes.map((t) => [t.id, t]));
@@ -465,7 +467,7 @@ export function buildRows(
   };
   for (const conversation of conversations) {
     if (filters.platform && conversation.platform !== filters.platform) continue;
-    if (!matchesSearch(conversation, filters.search)) continue;
+    if (!matchesSearch(conversation, filters.search) && !serverHitIds?.has(conversation.id)) continue;
 
     const all = [...(casesByContact.get(conversation.contact_id) ?? [])].sort((a, b) =>
       compareCases(a, b, meta.userId, urgency),

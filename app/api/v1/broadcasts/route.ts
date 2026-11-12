@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiAdmin } from "@/lib/api-auth";
 import { parseBroadcastContent } from "@/lib/broadcasts/content";
 import type { Json } from "@/lib/types/database";
+import { serverError } from "@/lib/server-error";
 
 export async function GET() {
   const guard = await requireApiAdmin();
@@ -15,7 +16,7 @@ export async function GET() {
     .eq("workspace_id", membership.workspace_id)
     .order("created_at", { ascending: false });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("broadcasts/list", error, "No se pudieron cargar las difusiones. Inténtalo de nuevo.");
 
   return NextResponse.json(broadcasts);
 }
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
     .select("*")
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return serverError("broadcasts/create", error, "No se pudo guardar la difusión. Inténtalo de nuevo.");
 
   return NextResponse.json(broadcast, { status: 201 });
 }

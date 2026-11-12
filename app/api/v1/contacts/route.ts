@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiMember } from "@/lib/api-auth";
+import { enforceRateLimit } from "@/lib/rate-limit-http";
+import { RATE_RULES } from "@/lib/rate-limit";
 import { cleanSearch } from "@/components/contacts/contact-list-query";
 import { ilikePattern } from "@/components/cases/case-filters";
 
@@ -14,6 +16,9 @@ const MAX_LIMIT = 100;
 export async function GET(request: NextRequest) {
   const guard = await requireApiMember();
   if (!guard.ok) return guard.response;
+  // SEG-01: tope de lecturas por usuario (evita vaciar la lista de contactos).
+  const limited = await enforceRateLimit(RATE_RULES.contactsRead, guard.ctx.user.id);
+  if (limited) return limited;
   const { supabase } = guard.ctx;
   const membership = { workspace_id: guard.ctx.workspaceId };
 
@@ -32,6 +37,8 @@ export async function GET(request: NextRequest) {
     .select("*, contact_tags(tag_id, tags(id, name, color)), contact_channels(platform_sender_id, channel_id, channels(platform))", { count: "exact" })
     .eq("workspace_id", membership.workspace_id)
     .order("last_interaction_at", { ascending: false })
+    // Desempate estable: varios contactos sin interacción (nulos) darían un orden distinto en cada consulta y repetirían u omitirían filas al paginar.
+    .order("id", { ascending: true })
     .range(offset, offset + limit - 1);
 
   // Mismo texto limpio que la pantalla de Contactos (comas y paréntesis rompen el filtro).

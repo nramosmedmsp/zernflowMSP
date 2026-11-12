@@ -26,6 +26,32 @@ export function normalizePhone(input: unknown): PhoneResult {
   return { ok: true, value: text };
 }
 
+export const MAX_NAME_LENGTH = 100;
+export const MAX_EMAIL_LENGTH = 254;
+
+export type TextResult = { ok: true; value: string | null } | { ok: false; error: string };
+
+/** Nombre de un contacto: entre 2 y 100 caracteres, sin espacios repetidos. */
+export function normalizeContactName(input: unknown): { ok: true; value: string } | { ok: false; error: string } {
+  if (typeof input !== "string") return { ok: false, error: "El nombre no es válido." };
+  const name = input.trim().replace(/\s+/g, " ");
+  if (name.length < 2) return { ok: false, error: "Escribe el nombre del cliente (al menos 2 letras)." };
+  if (name.length > MAX_NAME_LENGTH) return { ok: false, error: `El nombre no puede tener más de ${MAX_NAME_LENGTH} caracteres.` };
+  return { ok: true, value: name };
+}
+
+/** Correo opcional: vacío lo quita; si no, debe tener forma de correo. Se guarda en minúsculas. */
+export function normalizeContactEmail(input: unknown): TextResult {
+  if (input === null || input === undefined) return { ok: true, value: null };
+  if (typeof input !== "string") return { ok: false, error: "El correo no es válido." };
+  const email = input.trim().toLowerCase();
+  if (email === "") return { ok: true, value: null };
+  if (email.length > MAX_EMAIL_LENGTH || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, error: "El correo no es válido. Revisa que tenga la forma nombre@dominio.com." };
+  }
+  return { ok: true, value: email };
+}
+
 const SOURCE_KEY_LABELS: Record<string, string> = {
   channel: "Canal",
   platform: "Plataforma",
@@ -40,6 +66,13 @@ const SOURCE_KEY_LABELS: Record<string, string> = {
   import: "Importación",
 };
 
+/** Marcas que solo dicen "sí": se muestran como texto, sin "clave: true". */
+const SOURCE_FLAG_LABELS: Record<string, string> = {
+  manual: "Creado a mano",
+  erased: "Datos eliminados",
+  demo: "Contacto de prueba",
+};
+
 /** "Canal: whatsapp · Campaña: Verano" a partir de `contacts.source`; "" si está vacío. */
 export function describeSource(source: unknown): string {
   if (typeof source === "string") return source.trim();
@@ -47,6 +80,10 @@ export function describeSource(source: unknown): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
     if (value === null || value === undefined || typeof value === "object") continue;
+    if (typeof value === "boolean") {
+      if (value && SOURCE_FLAG_LABELS[key]) parts.push(SOURCE_FLAG_LABELS[key]);
+      continue;
+    }
     const text = String(value).trim();
     if (!text) continue;
     parts.push(`${SOURCE_KEY_LABELS[key] ?? key.replace(/_/g, " ")}: ${text}`);

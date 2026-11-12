@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { contactInitial, describeSource, keyDateLabel, normalizePhone } from "./contact-labels";
+import {
+  contactInitial,
+  describeSource,
+  keyDateLabel,
+  normalizeContactEmail,
+  normalizeContactName,
+  normalizePhone,
+} from "./contact-labels";
 import { matchesContactFilters, type FilterableContact } from "./contact-filters";
 
 describe("normalizePhone", () => {
@@ -37,6 +44,12 @@ describe("describeSource", () => {
     expect(describeSource(null)).toBe("");
     expect(describeSource([1, 2])).toBe("");
     expect(describeSource(" Instagram ")).toBe("Instagram");
+  });
+
+  it("las marcas de sí/no se leen en claro (PAN-14)", () => {
+    expect(describeSource({ manual: true })).toBe("Creado a mano");
+    expect(describeSource({ erased: true })).toBe("Datos eliminados");
+    expect(describeSource({ manual: false })).toBe("");
   });
 });
 
@@ -98,5 +111,24 @@ describe("filtros de la lista de contactos", () => {
     expect(
       matchesContactFilters(base, { search: "maría", tagId: "vip", contactTypeId: "k-lead", ownerId: "u-beto", teamId: "none" }),
     ).toBe(false);
+  });
+});
+
+describe("corregir nombre y correo", () => {
+  it("el nombre pide al menos 2 letras y limpia espacios", () => {
+    expect(normalizeContactName("  Ana   María  ")).toEqual({ ok: true, value: "Ana María" });
+    expect(normalizeContactName("A")).toMatchObject({ ok: false });
+    expect(normalizeContactName("")).toMatchObject({ ok: false });
+    expect(normalizeContactName(3)).toMatchObject({ ok: false });
+    expect(normalizeContactName("a".repeat(101))).toMatchObject({ ok: false });
+  });
+
+  it("el correo es opcional, va en minúsculas y debe tener forma de correo", () => {
+    expect(normalizeContactEmail("  Ana@Correo.PE ")).toEqual({ ok: true, value: "ana@correo.pe" });
+    expect(normalizeContactEmail("")).toEqual({ ok: true, value: null });
+    expect(normalizeContactEmail(null)).toEqual({ ok: true, value: null });
+    expect(normalizeContactEmail("sin-arroba")).toMatchObject({ ok: false });
+    expect(normalizeContactEmail("a b@c.com")).toMatchObject({ ok: false });
+    expect(normalizeContactEmail(5)).toMatchObject({ ok: false });
   });
 });

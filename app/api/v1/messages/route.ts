@@ -25,8 +25,13 @@ import {
 import type { Database } from "@/lib/types/database";
 import { zernioAttachmentType } from "@/lib/chat-media";
 import { prepareOutgoingMedia, type OutgoingMedia } from "@/lib/media-store";
+import { markUploadsUsed } from "@/lib/upload-tracking";
 import { recordOutboundSend } from "@/lib/outbound-log";
+import { checkMessage, tooLongError } from "@/lib/message-limits";
+import { erasedContactError } from "@/lib/contact-erased-guard";
 import { getEffectiveAuthUser } from "@/lib/view-as/state";
+import { enforceRateLimit } from "@/lib/rate-limit-http";
+import { RATE_RULES } from "@/lib/rate-limit";
 
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 
@@ -171,6 +176,9 @@ export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const user = await getEffectiveAuthUser(supabase);
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  // SEG-01: tope de envíos por usuario (cuenta robada o bucle).
+  const limited = await enforceRateLimit(RATE_RULES.messageSend, user.id);
+  if (limited) return limited;
 
   const body = await request.json();
   const { conversationId, clientMessageId } = body;
@@ -199,6 +207,16 @@ export async function POST(request: NextRequest) {
 
   if (!conversation) {
     return NextResponse.json({ error: "No se encontró la conversación" }, { status: 404 });
+  }
+
+  // Cliente eliminado: la ficha y el chat son solo de lectura (lib/contact-erased.ts).
+  const erased = await erasedContactError(supabase, conversation.workspace_id, conversation.contact_id);
+  if (erased) return NextResponse.json(erased, { status: 403 });
+
+  // PAN-06: mismo largo máximo que valida la caja de mensaje (lib/message-limits.ts).
+  const lengthCheck = checkMessage(text, conversation.platform);
+  if (!lengthCheck.ok) {
+    return NextResponse.json({ error: tooLongError(conversation.platform, lengthCheck) }, { status: 400 });
   }
 
   let media: OutgoingMedia | null = null;
@@ -456,6 +474,8 @@ async function recordOutgoingMedia(
     console.error("[messages] message_media:", error.message);
   }
   if (!id) return null;
+  // SEG-10: el archivo ya está en un mensaje enviado; la limpieza diaria no lo toca.
+  await markUploadsUsed(service, [media.path]);
   return { kind: media.kind, name: media.name, mime: media.mime, size: media.size, status: "stored", url: `/api/v1/media/${id}` };
 }
 
