@@ -64,9 +64,14 @@ export function EnrollmentList({
   }
 
   return (
-    <div className="px-8 py-6">
+    <div className="px-8 py-6" data-testid="enrollment-list">
       <div className="mx-auto max-w-2xl">
-        <h2 className="text-lg font-semibold">Inscripciones</h2>
+        <h2 className="text-lg font-semibold">
+          Inscripciones
+          {enrollments.length > 0 && (
+            <span className="ml-2 text-sm font-normal text-muted-foreground">({enrollments.length})</span>
+          )}
+        </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Contactos que están en esta secuencia
         </p>
@@ -82,7 +87,10 @@ export function EnrollmentList({
             </p>
           </div>
         ) : (
-          <div className="mt-4 divide-y divide-border rounded-lg border border-border">
+          <div
+            className="mt-4 max-h-[40vh] divide-y divide-border overflow-y-auto rounded-lg border border-border"
+            data-testid="enrollment-scroll"
+          >
             {enrollments.map((enrollment) => {
               const status = statusConfig[enrollment.status];
               const isCancelling = cancelling === enrollment.id;

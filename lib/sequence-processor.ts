@@ -26,7 +26,7 @@ type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
  * Process all sequence enrollments that are due.
  * Called by the cron endpoint every 30-60 seconds.
  */
-export async function processSequenceSteps() {
+export async function processSequenceSteps(opts: { deadline?: number } = {}) {
   const supabase = await createServiceClient();
 
   // Fetch enrollments that are due
@@ -44,9 +44,16 @@ export async function processSequenceSteps() {
 
   let processed = 0;
   let failed = 0;
+  let skippedForTime = 0;
   const schedules = new ScheduleCache(supabase);
 
   for (const enrollment of enrollments) {
+    // CONF-03: sin tiempo para otro paso (un envío puede tardar hasta 20 s): lo que
+    // queda sigue con su fecha vencida y se toma en la siguiente pasada.
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) {
+      skippedForTime = enrollments.length - enrollments.indexOf(enrollment);
+      break;
+    }
     try {
       // Dos pasadas del cron a la vez no deben enviar el mismo paso dos veces:
       // quien no logra tomar la inscripción la deja.
@@ -62,7 +69,7 @@ export async function processSequenceSteps() {
     }
   }
 
-  return { processed, failed, total: enrollments.length };
+  return { processed, failed, total: enrollments.length, skippedForTime };
 }
 
 /** Si el proceso se cae a mitad de un paso, la inscripción vuelve a estar disponible pasado este tiempo. */

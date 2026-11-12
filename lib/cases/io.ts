@@ -84,7 +84,9 @@ export type NotificationType =
   | "complaint_unclassified"
   | "commitment_changed"
   // Seguridad: cambio del servidor de correo (00030)
-  | "mail_settings_changed";
+  | "mail_settings_changed"
+  // Confiabilidad (00041): un mensaje entrante agotó sus reintentos sin procesarse
+  | "inbound_failed";
 
 export interface NotificationInput {
   workspace_id: string;

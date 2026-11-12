@@ -204,7 +204,9 @@ export function SequenceEditor({ workspaceId, sequence }: SequenceEditorProps) {
   const statusInfo = statusConfig[status];
 
   return (
-    <div className="flex-1 overflow-auto">
+    // shrink-0: el editor ocupa SU alto natural y nunca se encoge (PAN-01). El scroll lo
+    // pone la página contenedora; la lista de inscritos tiene el suyo aparte.
+    <div className="shrink-0" data-testid="sequence-editor">
       {/* Encabezado */}
       <div className="border-b border-border px-8 py-6">
         <div className="flex items-center gap-4">

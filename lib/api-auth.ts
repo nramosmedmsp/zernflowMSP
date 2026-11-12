@@ -12,6 +12,7 @@ import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { effectiveAuthUser, getVerifiedAuthUser, getViewAsState } from "@/lib/view-as/state";
 import { WORKSPACE_COOKIE } from "@/lib/workspace";
+import { IDENTITY_UNAVAILABLE_MESSAGE, readOnceMore } from "@/lib/identity-read";
 import { ADMIN_ONLY_MESSAGE, OWNER_ONLY_SECRETS_MESSAGE, isAdminRole, isOwnerRole } from "@/lib/permissions";
 
 type UserClient = Awaited<ReturnType<typeof createClient>>;
@@ -54,24 +55,31 @@ async function resolve(): Promise<ApiGuard> {
   const selectedId = info ? info.workspaceId : cookieStore.get(WORKSPACE_COOKIE)?.value;
 
   if (selectedId) {
-    const { data } = await supabase
-      .from("workspace_members")
-      .select("workspace_id, role")
-      .eq("user_id", user.id)
-      .eq("workspace_id", selectedId)
-      .maybeSingle();
+    const { data, error } = await readOnceMore(() =>
+      supabase
+        .from("workspace_members")
+        .select("workspace_id, role")
+        .eq("user_id", user.id)
+        .eq("workspace_id", selectedId)
+        .maybeSingle(),
+    );
+    // CONF-02: una lectura fallida no es "sin espacio": 503 para que el cliente reintente.
+    if (error) return fail(503, IDENTITY_UNAVAILABLE_MESSAGE);
     if (data) {
       return { ok: true, ctx: { supabase, user, workspaceId: data.workspace_id, role: data.role } };
     }
   }
 
-  const { data } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, role")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const { data, error } = await readOnceMore(() =>
+    supabase
+      .from("workspace_members")
+      .select("workspace_id, role")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  );
+  if (error) return fail(503, IDENTITY_UNAVAILABLE_MESSAGE);
   if (!data) return fail(404, NO_WORKSPACE_MESSAGE);
 
   return { ok: true, ctx: { supabase, user, workspaceId: data.workspace_id, role: data.role } };

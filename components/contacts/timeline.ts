@@ -113,6 +113,17 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
+/** Origen de una baja o alta: un flujo o una palabra clave que escribió el cliente. */
+function sourceDetail(meta: Record<string, unknown>): string | null {
+  const source = str(meta.source);
+  if (source === "flow") return "Por un flujo";
+  if (source === "keyword") {
+    const keyword = str(meta.keyword);
+    return keyword ? `Escribió la palabra clave «${keyword}»` : "Escribió una palabra clave";
+  }
+  return null;
+}
+
 function lookup(map: Record<string, string>, id: string | null | undefined, fallback: string): string {
   return (id && map[id]) || fallback;
 }
@@ -394,7 +405,14 @@ function activityPiece(
         kind: "system",
         tone: "muted",
         title: "El contacto se dio de baja de los mensajes",
-        detail: str(meta.source) === "flow" ? "Por un flujo" : null,
+        detail: sourceDetail(meta),
+      };
+    case "contact_subscribed":
+      return {
+        kind: "system",
+        tone: "muted",
+        title: "El contacto volvió a recibir mensajes",
+        detail: sourceDetail(meta),
       };
     case "automation_resumed": {
       const source = str(meta.source);

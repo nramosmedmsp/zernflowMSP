@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { MEDIA_RETENTION_DAYS, retentionCutoff } from "@/lib/chat-media";
 import { removeObjects } from "@/lib/media-store";
+import { recordCronEnd, recordCronStart } from "@/lib/cron-runs";
 
 export const maxDuration = 60;
 
@@ -21,7 +22,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const supabase = await createServiceClient();
+  await recordCronStart(supabase, "media_cleanup");
   const cutoff = retentionCutoff(new Date(), MEDIA_RETENTION_DAYS);
   let expired = 0;
 
@@ -35,6 +38,7 @@ export async function GET(request: NextRequest) {
       .limit(BATCH);
     if (error) {
       console.error("[media-cleanup] select", error.message);
+      await recordCronEnd(supabase, "media_cleanup", { startedAt, error: error.message });
       return NextResponse.json({ error: "No se pudo leer los archivos" }, { status: 500 });
     }
     if (!rows || rows.length === 0) break;
@@ -58,5 +62,6 @@ export async function GET(request: NextRequest) {
     if (rows.length < BATCH) break;
   }
 
+  await recordCronEnd(supabase, "media_cleanup", { startedAt, stats: { expired } });
   return NextResponse.json({ ok: true, expired, cutoff });
 }

@@ -244,6 +244,9 @@ export type CaseRuleParams = SetContactTypeParams | ScheduleCaseParams | AskKeyD
 /** saved_replies.scope */
 export type SavedReplyScope = "workspace" | "team" | "personal";
 
+/** 00041: estado de un evento de webhook en la bandeja durable. */
+export type WebhookEventStatus = "received" | "stored" | "processed" | "failed";
+
 /** activity.type */
 /** 00037: lo que una etapa pide antes de avanzar. */
 export type StageRequirement = "category" | "solution" | "note";
@@ -268,6 +271,7 @@ export type ActivityType =
   | "automation_paused"
   | "automation_resumed"
   | "contact_unsubscribed"
+  | "contact_subscribed"
   | "config_changed"
   // Fase 2 (00021)
   | "off_hours_reply_sent"
@@ -1400,13 +1404,89 @@ export interface Database {
         Row: {
           event_id: string;
           received_at: string;
+          /** 00041: received | stored | processed | failed. */
+          status: WebhookEventStatus;
+          event_type: string | null;
+          channel_id: string | null;
+          /** Cuerpo verificado y reducido; NULL cuando el evento queda processed. */
+          payload: Json | null;
+          attempts: number;
+          last_error: string | null;
+          locked_until: string | null;
+          contact_id: string | null;
+          conversation_id: string | null;
+          is_first_message: boolean | null;
+          cases_ok_at: string | null;
+          flows_started_at: string | null;
+          updated_at: string;
+          processed_at: string | null;
         };
         Insert: {
           event_id: string;
           received_at?: string;
+          status?: WebhookEventStatus;
+          event_type?: string | null;
+          channel_id?: string | null;
+          payload?: Json | null;
+          attempts?: number;
+          last_error?: string | null;
+          locked_until?: string | null;
+          contact_id?: string | null;
+          conversation_id?: string | null;
+          is_first_message?: boolean | null;
+          cases_ok_at?: string | null;
+          flows_started_at?: string | null;
+          updated_at?: string;
+          processed_at?: string | null;
         };
         Update: {
           received_at?: string;
+          status?: WebhookEventStatus;
+          event_type?: string | null;
+          channel_id?: string | null;
+          payload?: Json | null;
+          attempts?: number;
+          last_error?: string | null;
+          locked_until?: string | null;
+          contact_id?: string | null;
+          conversation_id?: string | null;
+          is_first_message?: boolean | null;
+          cases_ok_at?: string | null;
+          flows_started_at?: string | null;
+          updated_at?: string;
+          processed_at?: string | null;
+        };
+        Relationships: [];
+      };
+      cron_runs: {
+        Row: {
+          name: string;
+          last_started_at: string | null;
+          last_ok_at: string | null;
+          last_error_at: string | null;
+          last_error: string | null;
+          last_duration_ms: number | null;
+          last_stats: Json | null;
+          updated_at: string;
+        };
+        Insert: {
+          name: string;
+          last_started_at?: string | null;
+          last_ok_at?: string | null;
+          last_error_at?: string | null;
+          last_error?: string | null;
+          last_duration_ms?: number | null;
+          last_stats?: Json | null;
+          updated_at?: string;
+        };
+        Update: {
+          last_started_at?: string | null;
+          last_ok_at?: string | null;
+          last_error_at?: string | null;
+          last_error?: string | null;
+          last_duration_ms?: number | null;
+          last_stats?: Json | null;
+          updated_at?: string;
         };
         Relationships: [];
       };

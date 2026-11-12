@@ -5,14 +5,27 @@ import { FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import { shouldCancelResumeForPausedBot } from "@/lib/flow-engine/waiting-session";
 import type { Json } from "@/lib/types/database";
 import { runCaseTasks } from "@/lib/cases";
+import { recordCronEnd, recordCronStart } from "@/lib/cron-runs";
+import { pruneWebhookEvents, sweepInboundEvents, sweepOrphanChats } from "@/lib/inbound-events";
 
 export const maxDuration = 60;
 
-// Las tareas de gestiones paran de tomar lotes nuevos a los 45 s desde el
-// inicio de la invocación (y nunca usan más de 25 s propios), para terminar
-// holgadas antes de maxDuration aunque los trabajos de flujos hayan tardado.
-const ROUTE_BUDGET_MS = 45_000;
-const CASE_TASKS_BUDGET_MS = 25_000;
+// CONF-03: presupuesto de tiempo de una pasada (maxDuration = 60 s). Lo que
+// importa para el negocio va primero y con su propio tope, y la cola de envíos
+// usa el tiempo que quede, de modo que una cola lenta (Zernio tardando) nunca
+// deje sin correr las tareas de gestiones ni la recuperación de mensajes:
+//   1. recuperar mensajes entrantes pendientes ......... hasta 8 s
+//   2. tareas de gestiones (programadas, plazos, reclamos, reasignación) hasta 15 s
+//   3. trabajos programados (esperas de flujos, difusiones) mientras quede tiempo:
+//      no se empieza uno nuevo pasados 35 s, porque un envío a Zernio puede
+//      tardar hasta 20 s y hay que terminar antes de los 60 s.
+// Lo que no alcance queda pendiente para la siguiente pasada (todo es idempotente).
+const INBOUND_SWEEP_BUDGET_MS = 8_000;
+const CASE_TASKS_BUDGET_MS = 15_000;
+const JOBS_START_LIMIT_MS = 35_000;
+/** El barrido de chats sin gestión es más caro: una vez cada 5 minutos. */
+const ORPHAN_SWEEP_EVERY_MINUTES = 5;
+const JOBS_BATCH = 20;
 
 // Signals the handler to skip retry/backoff and route straight to the
 // failed + settle branch (which performs/re-attempts the session cancel).
@@ -50,15 +63,73 @@ export async function GET(request: NextRequest) {
   }
 
   const startedAt = Date.now();
-
   const supabase = await createServiceClient();
+  await recordCronStart(supabase, "jobs");
 
-  // Prune the webhook idempotency ledger; ids only matter for Zernio's retry
-  // window (hours), so anything older than 48h is dead weight.
-  await supabase
-    .from("webhook_events")
-    .delete()
-    .lt("received_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+  try {
+    const { status, body } = await runJobsCron(supabase, startedAt);
+    const error = "error" in body && typeof body.error === "string" ? body.error : null;
+    await recordCronEnd(supabase, "jobs", { startedAt, error, stats: error ? null : summarize(body) });
+    return NextResponse.json(body, { status });
+  } catch (err) {
+    console.error("Cron jobs failed:", err);
+    await recordCronEnd(supabase, "jobs", {
+      startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  }
+}
+
+/** Solo conteos (sin datos de personas) para cron_runs.last_stats. */
+function summarize(body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of ["processed", "failed", "total", "skippedForTime", "inbound", "orphans"]) {
+    if (key in body) out[key] = body[key];
+  }
+  return out;
+}
+
+type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
+
+async function runJobsCron(
+  supabase: ServiceClient,
+  startedAt: number,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  // Poda de la bandeja de entrada de webhooks: lo procesado a las 48 h (solo
+  // sirve para reconocer los reintentos de Zernio) y lo demás a los 7 días.
+  await pruneWebhookEvents(supabase);
+
+  // 1. Mensajes entrantes que no terminaron de procesarse (CONF-06/07): se retoman
+  // los pendientes y, cada 5 minutos, los chats con mensaje reciente sin gestión.
+  let inbound: Record<string, unknown> | { error: string };
+  let orphans: Record<string, unknown> | { error: string } | undefined;
+  const inboundDeadline = Date.now() + INBOUND_SWEEP_BUDGET_MS;
+  try {
+    if (Math.floor(Date.now() / 60_000) % ORPHAN_SWEEP_EVERY_MINUTES === 0) {
+      orphans = await sweepOrphanChats(supabase, { deadline: inboundDeadline });
+    }
+  } catch (err) {
+    console.error("Orphan chats sweep error:", err);
+    orphans = { error: err instanceof Error ? err.message : String(err) };
+  }
+  try {
+    inbound = { ...(await sweepInboundEvents(supabase, { deadline: inboundDeadline })) };
+  } catch (err) {
+    console.error("Inbound sweep error:", err);
+    inbound = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  // 2. Gestiones (docs/FASE-1-TECNICO.md 3.5): activar programadas, avisar
+  // próximos contactos vencidos y reintentar el reparto. Van antes que la cola
+  // de envíos y con su propio tope de tiempo.
+  let cases: Awaited<ReturnType<typeof runCaseTasks>> | { error: string };
+  try {
+    cases = await runCaseTasks(supabase, { deadline: Date.now() + CASE_TASKS_BUDGET_MS });
+  } catch (err) {
+    console.error("Case tasks error:", err);
+    cases = { error: err instanceof Error ? err.message : String(err) };
+  }
 
   // Pick up pending jobs that are due, plus 'processing' jobs whose claim is
   // stale: if the claim UPDATE commits but the response is lost, nothing else
@@ -69,25 +140,49 @@ export async function GET(request: NextRequest) {
   // during a deploy; a lt. comparison is NULL-hostile and would skip them
   // forever). Those rows are NOT processed directly, only stamped, see below.
   const staleClaimCutoff = new Date(Date.now() - STALE_INVOCATION_MS).toISOString();
-  const { data: jobs, error } = await supabase
+  // Primero las esperas de flujos y demás (clientes esperando una respuesta) y
+  // con lo que sobre del lote, los envíos de difusiones: una difusión grande no
+  // retrasa las esperas de los flujos (CONF-04).
+  const dueFilter = `status.eq.pending,and(status.eq.processing,or(claimed_at.lt.${staleClaimCutoff},claimed_at.is.null))`;
+  const nowIso = new Date().toISOString();
+  const { data: others, error: othersError } = await supabase
     .from("scheduled_jobs")
     .select("*")
-    .or(
-      `status.eq.pending,and(status.eq.processing,or(claimed_at.lt.${staleClaimCutoff},claimed_at.is.null))`
-    )
-    .lte("run_at", new Date().toISOString())
+    .or(dueFilter)
+    .neq("type", "send_broadcast")
+    .lte("run_at", nowIso)
     .order("run_at", { ascending: true })
-    .limit(20);
+    .limit(JOBS_BATCH);
+  const { data: broadcasts, error: broadcastsError } =
+    !othersError && (others?.length ?? 0) < JOBS_BATCH
+      ? await supabase
+          .from("scheduled_jobs")
+          .select("*")
+          .or(dueFilter)
+          .eq("type", "send_broadcast")
+          .lte("run_at", nowIso)
+          .order("run_at", { ascending: true })
+          .limit(JOBS_BATCH - (others?.length ?? 0))
+      : { data: [], error: null };
+  const error = othersError ?? broadcastsError;
+  const jobs = error || !others ? null : [...others, ...(broadcasts ?? [])];
 
   if (error || !jobs) {
-    return NextResponse.json({ error: "Failed to fetch jobs" }, { status: 500 });
+    return { status: 500, body: { error: "Failed to fetch jobs", cases } };
   }
 
   let processed = 0;
   let failed = 0;
   const maxAttempts = 3;
 
+  let skippedForTime = 0;
   for (const job of jobs) {
+    // CONF-03: sin tiempo para empezar otro envío (puede tardar hasta 20 s):
+    // lo que queda sigue pendiente para la siguiente pasada.
+    if (Date.now() - startedAt > JOBS_START_LIMIT_MS) {
+      skippedForTime = jobs.length - jobs.indexOf(job);
+      break;
+    }
     // A 'processing' row without claimed_at cannot be aged: it is either a
     // pre-backfill strand or a live claim by an old-code invocation that
     // never stamped claimed_at (deploy window). Processing it now could
@@ -193,20 +288,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Gestiones (docs/FASE-1-TECNICO.md 3.5): activar programadas, avisar
-  // próximos contactos vencidos y reintentar el reparto. Con fecha límite
-  // propia para no pasarse del tiempo de la función; lo que quede se hace en
-  // la siguiente vuelta (todo es idempotente).
-  let cases: Awaited<ReturnType<typeof runCaseTasks>> | { error: string };
-  const deadline = Math.min(startedAt + ROUTE_BUDGET_MS, Date.now() + CASE_TASKS_BUDGET_MS);
-  try {
-    cases = await runCaseTasks(supabase, { deadline });
-  } catch (err) {
-    console.error("Case tasks error:", err);
-    cases = { error: err instanceof Error ? err.message : String(err) };
-  }
-
-  return NextResponse.json({ processed, failed, total: jobs.length, cases });
+  return {
+    status: 200,
+    body: { processed, failed, total: jobs.length, skippedForTime, inbound, orphans, cases },
+  };
 }
 
 // Marks a job out of retries as failed. A failed resume_flow job would leave

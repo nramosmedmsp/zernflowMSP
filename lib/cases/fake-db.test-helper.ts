@@ -114,10 +114,27 @@ const DEFAULTS: Record<string, () => Row> = {
   flow_sessions: () => ({ waiting_for_input: false, waiting_until: null, current_node_id: null, human_takeover_at: null, variables: {} }),
   case_notes: () => ({ mentions: [], conversation_id: null }),
   notifications: () => ({ body: null, link: null, read_at: null }),
+  // 00041: lo que no se manda queda como en la base (el código anterior solo manda event_id).
+  webhook_events: () => ({
+    status: "processed",
+    event_type: null,
+    channel_id: null,
+    payload: null,
+    attempts: 0,
+    last_error: null,
+    locked_until: null,
+    contact_id: null,
+    conversation_id: null,
+    is_first_message: null,
+    cases_ok_at: null,
+    flows_started_at: null,
+    processed_at: null,
+    received_at: new Date().toISOString(),
+  }),
   activity: () => ({ contact_id: null, case_id: null, conversation_id: null, actor_id: null, from_value: null, to_value: null, meta: {} }),
 };
 
-const NO_ID = new Set(["team_members", "workspace_members", "activity"]);
+const NO_ID = new Set(["team_members", "workspace_members", "activity", "cron_runs"]);
 
 function clone<T>(v: T): T {
   return v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T);
@@ -191,10 +208,33 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     this.filters.push((r) => r[col] === v);
     return this;
   }
-  /** Solo condiciones `col.eq.valor` y `col.is.null` separadas por comas. */
+  /**
+   * Condiciones `col.op.valor` (eq, is.null, lt, lte, gt, gte, in) separadas por
+   * comas, con `and(...)` y `or(...)` anidados como en PostgREST.
+   */
   or(expr: string) {
-    const parts = expr.split(",").map((p) => {
-      const [col, op, ...rest] = p.split(".");
+    const splitTop = (text: string): string[] => {
+      const out: string[] = [];
+      let depth = 0;
+      let cur = "";
+      for (const ch of text) {
+        if (ch === "(") depth++;
+        if (ch === ")") depth--;
+        if (ch === "," && depth === 0) {
+          out.push(cur);
+          cur = "";
+        } else cur += ch;
+      }
+      if (cur) out.push(cur);
+      return out;
+    };
+    const build = (part: string): ((r: Row) => boolean) => {
+      const group = /^(and|or)\((.*)\)$/.exec(part);
+      if (group) {
+        const subs = splitTop(group[2]).map(build);
+        return group[1] === "and" ? (r) => subs.every((f) => f(r)) : (r) => subs.some((f) => f(r));
+      }
+      const [col, op, ...rest] = part.split(".");
       const value = rest.join(".");
       return (r: Row) => {
         if (op === "eq") return String(r[col]) === value;
@@ -208,7 +248,8 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         if (op === "in") return value.replace(/^\(|\)$/g, "").split(",").includes(String(cell));
         throw new Error(`or(${op}) no soportado`);
       };
-    });
+    };
+    const parts = splitTop(expr).map(build);
     this.filters.push((r) => parts.some((f) => f(r)));
     return this;
   }

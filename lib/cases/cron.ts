@@ -681,12 +681,12 @@ export async function runCaseTasks(
     stoppedEarly: false,
   };
 
-  const tasks: [string, () => Promise<void>][] = [
+  const tasks: [string, (deadline: number) => Promise<void>][] = [
     [
       "activate",
-      async () => {
+      async (deadline) => {
         const r = await activateScheduledCases(db, {
-          deadline: opts.deadline,
+          deadline,
           cache,
           messenger: opts.messenger,
           now: opts.now,
@@ -699,16 +699,16 @@ export async function runCaseTasks(
     ],
     [
       "overdue",
-      async () => {
-        const r = await notifyOverdueNextActions(db, { deadline: opts.deadline, now: opts.now });
+      async (deadline) => {
+        const r = await notifyOverdueNextActions(db, { deadline, now: opts.now });
         stats.overdueNotified = r.notified;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "reassign",
-      async () => {
-        const r = await reassignWaitingCases(db, { deadline: opts.deadline, cache, now: opts.now });
+      async (deadline) => {
+        const r = await reassignWaitingCases(db, { deadline, cache, now: opts.now });
         stats.reassigned = r.reassigned;
         stats.waitAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
@@ -716,8 +716,8 @@ export async function runCaseTasks(
     ],
     [
       "retry",
-      async () => {
-        const r = await retryUnassignedCases(db, { deadline: opts.deadline, cache, now: opts.now });
+      async (deadline) => {
+        const r = await retryUnassignedCases(db, { deadline, cache, now: opts.now });
         stats.retried = r.retried;
         stats.assigned = r.assigned;
         stats.stoppedEarly ||= r.stoppedEarly;
@@ -725,69 +725,76 @@ export async function runCaseTasks(
     ],
     [
       "no_reply",
-      async () => {
-        const r = await detectClientNoReply(db, { deadline: opts.deadline, now: opts.now });
+      async (deadline) => {
+        const r = await detectClientNoReply(db, { deadline, now: opts.now });
         stats.noReplyEvents = r.emitted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "sla",
-      async () => {
-        const r = await notifySlaBreaches(db, { deadline: opts.deadline, cache, now: opts.now });
+      async (deadline) => {
+        const r = await notifySlaBreaches(db, { deadline, cache, now: opts.now });
         stats.slaAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "solution_deadline",
-      async () => {
-        const r = await notifySolutionDeadlines(db, { deadline: opts.deadline, now: opts.now, cache });
+      async (deadline) => {
+        const r = await notifySolutionDeadlines(db, { deadline, now: opts.now, cache });
         stats.solutionAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "commitments",
-      async () => {
-        const r = await notifyCommitmentsOverdue(db, { deadline: opts.deadline, now: opts.now });
+      async (deadline) => {
+        const r = await notifyCommitmentsOverdue(db, { deadline, now: opts.now });
         stats.commitmentAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "complaints",
-      async () => {
-        const r = await alertUnhandledComplaints(db, { deadline: opts.deadline, now: opts.now });
+      async (deadline) => {
+        const r = await alertUnhandledComplaints(db, { deadline, now: opts.now });
         stats.complaintAlerts = r.alerted;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "bot_resume",
-      async () => {
-        const r = await resumeIdlePausedBots(db, { deadline: opts.deadline, now: opts.now });
+      async (deadline) => {
+        const r = await resumeIdlePausedBots(db, { deadline, now: opts.now });
         stats.botsResumed = r.resumed;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
     [
       "contact_inactivity",
-      async () => {
-        const r = await runContactInactivity(db, { deadline: opts.deadline, now: opts.now });
+      async (deadline) => {
+        const r = await runContactInactivity(db, { deadline, now: opts.now });
         stats.contactsInactivated = r.moved;
         stats.stoppedEarly ||= r.stoppedEarly;
       },
     ],
   ];
 
-  for (const [name, task] of tasks) {
+  // CONF-19: cada tarea tiene su parte del tiempo que queda (el doble de lo
+  // que le tocaría a partes iguales, sin pasar del plazo general). Así una tarea
+  // lenta o que siempre falla no deja sin correr a las siguientes.
+  for (let i = 0; i < tasks.length; i++) {
+    const [name, task] = tasks[i];
     if (!timeLeft(opts.deadline)) {
       stats.stoppedEarly = true;
       break;
     }
+    const remaining = opts.deadline - Date.now();
+    const share = Math.max(2_000, Math.ceil((remaining / (tasks.length - i)) * 2));
+    const taskDeadline = Math.min(opts.deadline, Date.now() + share);
     try {
-      await task();
+      await task(taskDeadline);
     } catch (err) {
       console.error(`[cases cron] ${name}`, err);
     }

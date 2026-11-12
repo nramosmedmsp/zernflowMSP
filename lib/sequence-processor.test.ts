@@ -234,3 +234,19 @@ describe("secuencias robustas (tanda 7B)", () => {
     expect(messages[0]).toMatchObject({ sent_by_node_id: "sequence:Bienvenida", text: "Hola Ana, ¿cómo vas con tu rutina?" });
   });
 });
+
+// CONF-03: sin tope de tiempo, una cola lenta de envíos pasaba de maxDuration.
+describe("tope de tiempo", () => {
+  it("con el plazo vencido no empieza otro paso: la inscripción queda vencida para la siguiente pasada", async () => {
+    const result = await processSequenceSteps({ deadline: Date.now() - 1 });
+    expect(result).toMatchObject({ processed: 0, total: 1, skippedForTime: 1 });
+    expect(state.sent).toHaveLength(0);
+    expect(new Date(enrollment().next_step_at as string).getTime()).toBeLessThan(Date.now());
+  });
+
+  it("con tiempo de sobra procesa todo, como antes", async () => {
+    const result = await processSequenceSteps({ deadline: Date.now() + 60_000 });
+    expect(result).toMatchObject({ processed: 1, skippedForTime: 0 });
+    expect(state.sent).toHaveLength(1);
+  });
+});

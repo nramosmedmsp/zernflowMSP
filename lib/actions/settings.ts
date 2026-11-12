@@ -19,6 +19,7 @@ import {
   parseAutomationInput,
   type AutomationForm,
 } from "@/app/(dashboard)/dashboard/settings/attention/automation-rules";
+import { DEFAULT_KEYWORD_ACTION, isKeywordAction, normalizeGlobalKeywords } from "@/lib/flow-engine/global-keywords";
 import type { Json } from "@/lib/types/database";
 import {
   getWorkspaceSecretsStatus,
@@ -38,7 +39,8 @@ const MAX_KEYWORDS = 200;
 export interface SaveWorkspaceSettingsInput {
   workspaceId: string;
   name: string;
-  globalKeywords: string[];
+  /** Textos sueltos (formato viejo) o `{keyword, action}`; se guarda siempre `{keyword, action}`. */
+  globalKeywords: Array<string | { keyword: string; action?: string }>;
   /** Solo si se escribió una clave nueva; vacío o ausente = no cambiar. */
   lateApiKey?: string;
   aiApiKey?: string;
@@ -57,16 +59,12 @@ export async function saveWorkspaceSettings(
     return { error: `El nombre no puede tener más de ${MAX_NAME_LENGTH} caracteres.` };
   }
 
-  const keywords = Array.isArray(input.globalKeywords)
-    ? [
-        ...new Set(
-          input.globalKeywords
-            .filter((k): k is string => typeof k === "string")
-            .map((k) => k.trim().toLowerCase())
-            .filter(Boolean),
-        ),
-      ]
-    : [];
+  // Siempre `{keyword, action}` (lib/flow-engine/global-keywords.ts): lo que lee el
+  // motor al recibir un mensaje. Un texto suelto se guarda como palabra de baja.
+  const keywords = normalizeGlobalKeywords(input.globalKeywords).map((k) => ({
+    keyword: k.keyword.toLowerCase(),
+    action: isKeywordAction(k.action) ? k.action : DEFAULT_KEYWORD_ACTION,
+  }));
   if (keywords.length > MAX_KEYWORDS) {
     return { error: `Puedes tener hasta ${MAX_KEYWORDS} palabras clave globales.` };
   }

@@ -5,8 +5,14 @@ import { pickChannelBySignature, type ChannelPick } from "@/lib/zernio-webhook";
 import { processComment } from "@/lib/comment-processor";
 import type { Database } from "@/lib/types/database";
 import { inboundPreview } from "@/lib/message-preview";
-import { runInboundPipeline } from "@/lib/inbound-pipeline";
-import { prepareInboundMessage, type PreparedInbound } from "@/lib/inbound-conversation";
+import {
+  buildStoredPayload,
+  claimInboundEvent,
+  prepareInboundEvent,
+  processStoredInbound,
+  releaseAfterPrepareFailure,
+  type InboundEventRow,
+} from "@/lib/inbound-events";
 import { storeInboundMedia, type InboundAttachmentInput } from "@/lib/media-store";
 import { getLateApiKey } from "@/lib/workspace-secrets";
 import { applyDeliveryEvent, type DeliveryEvent } from "@/lib/outbound-log";
@@ -131,13 +137,36 @@ export async function POST(request: NextRequest) {
   try {
     return await handleWebhook(request);
   } catch (err) {
+    // El detalle solo va al registro del servidor: nunca se devuelve a quien llama (SEG-02).
     console.error("Webhook handler error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+// ── Forma mínima del cuerpo (antes de tocar la base) ────────────────────────
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+
+/** Un cuerpo incompleto se rechaza con 400 genérico, sin lanzar ni consultar la base. */
+function isMessagePayload(p: Record<string, unknown>): boolean {
+  const { message, conversation, account } = p;
+  return (
+    isObj(message) &&
+    isObj(message.sender) &&
+    isStr(message.sender.id) &&
+    isObj(conversation) &&
+    isStr(conversation.id) &&
+    isObj(account) &&
+    isStr(account.id)
+  );
+}
+
+function isCommentPayload(p: Record<string, unknown>): boolean {
+  return isObj(p.comment) && isStr(p.comment.id) && isObj(p.account) && isStr(p.account.id);
+}
+
+const invalidPayload = () => NextResponse.json({ error: "Invalid payload" }, { status: 400 });
 
 /**
  * Claim an event id for processing. Returns false when another delivery of the
@@ -181,10 +210,12 @@ async function handleWebhook(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+  if (!isObj(parsed)) return invalidPayload();
 
   const eventId = parsed.id || headerEventId;
 
   if (parsed.event === "comment.received") {
+    if (!isCommentPayload(parsed)) return invalidPayload();
     return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature, eventId);
   }
 
@@ -197,7 +228,8 @@ async function handleWebhook(request: NextRequest) {
     return NextResponse.json({ ok: true, skipped: true });
   }
 
-  const payload = parsed as WebhookPayload;
+  if (!isMessagePayload(parsed)) return invalidPayload();
+  const payload = parsed as unknown as WebhookPayload;
 
   const { message: msg, account } = payload;
 
@@ -234,84 +266,60 @@ async function handleWebhook(request: NextRequest) {
     }
   }
 
-  if (!(await claimWebhookEvent(supabase, eventId))) {
+  // CONF-06: el evento se guarda COMPLETO (cuerpo verificado y reducido) en la
+  // bandeja durable antes de hacer nada más. Un reintento de Zernio solo cuenta
+  // como duplicado si el evento ya se procesó o lo está procesando otra
+  // ejecución; si quedó a medias, se retoma (lib/inbound-events.ts).
+  const at = new Date().toISOString();
+  const claim = await claimInboundEvent(supabase, {
+    eventId: eventId || (msg.platformMessageId ? `pm:${account.id}:${msg.platformMessageId}` : crypto.randomUUID()),
+    channelId: channel.id,
+    payload: buildStoredPayload({
+      at,
+      preview: inboundPreview(msg),
+      lateConversationId: payload.conversation.id,
+      lateAccountId: account.id,
+      platformMessageId: msg.platformMessageId,
+      text: typeof msg.text === "string" ? msg.text : null,
+      sender: { id: msg.sender.id, name: msg.sender.name, username: msg.sender.username || null },
+      metadata: payload.metadata,
+    }),
+  });
+  if (claim.kind === "duplicate") {
     return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
   }
+  const row: InboundEventRow = claim.row;
 
   // M-16: el contacto, su chat y el no leído se guardan ANTES de responder. Si
-  // fallan, se responde con error y se libera el id del evento: Zernio reintenta
-  // y el mensaje no se pierde. Es poco trabajo (unas consultas): cabe en los 5 s
-  // de Zernio. Lo demás (gestiones, bot, archivos) corre después de responder.
-  let prepared: PreparedInbound;
-  try {
-    prepared = await prepareInboundMessage(supabase, {
-      channel,
-      senderId: msg.sender.id,
-      senderName: msg.sender.name || msg.sender.username || msg.sender.id,
-      senderPicture: msg.sender.picture || null,
-      senderUsername: msg.sender.username || null,
-      lateConversationId: payload.conversation.id,
-      preview: inboundPreview(msg),
-      at: new Date().toISOString(),
-    });
-  } catch (err) {
-    prepared = { ok: false, error: err instanceof Error ? err.message : "error desconocido" };
-  }
+  // fallan, se responde con error y se libera el candado del evento: Zernio
+  // reintenta (o lo retoma el cron) y el mensaje no se pierde. Es poco trabajo
+  // (unas consultas): cabe en los 5 s de Zernio. Lo demás (gestiones, bot,
+  // archivos) corre después de responder.
+  const prepared = await prepareInboundEvent(supabase, row, channel);
   if (!prepared.ok) {
     console.error("Webhook: no se pudo registrar el mensaje entrante:", prepared.error);
-    await releaseWebhookEvent(supabase, eventId);
+    await releaseAfterPrepareFailure(supabase, row, prepared.error);
     return NextResponse.json({ error: "Could not store the message" }, { status: 500 });
   }
-  const stored = prepared;
 
   // Ack and process after the response: Zernio aborts deliveries at 5s and
   // retries, so flow execution (Zernio sends, AI nodes) must never run before
-  // the 200 goes out.
+  // the 200 goes out. Si esto falla o la función se corta, el evento queda
+  // pendiente y el cron lo retoma (sweepInboundEvents).
   after(async () => {
-    try {
-      await processMessageEvent(supabase, payload, channel, stored);
-    } catch (err) {
-      console.error("Webhook message processing error:", err);
-    }
+    // Messages are stored by Zernio (source of truth) — no local insert needed.
+    // Sus archivos sí se copian: WhatsApp los borra a los pocos días. Solo en la
+    // primera entrega: la bandeja no guarda los enlaces de los archivos.
+    const media =
+      claim.kind === "retake" || !row.conversation_id
+        ? Promise.resolve()
+        : copyInboundMedia(supabase, payload, channel.workspace_id, row.conversation_id);
+    const work = processStoredInbound(supabase, row, channel);
+    const [mediaResult] = await Promise.allSettled([media, work]);
+    if (mediaResult.status === "rejected") console.error("Webhook media copy error:", mediaResult.reason);
   });
 
   return NextResponse.json({ ok: true, queued: true });
-}
-
-async function processMessageEvent(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  payload: WebhookPayload,
-  channel: Database["public"]["Tables"]["channels"]["Row"],
-  stored: Extract<PreparedInbound, { ok: true }>,
-) {
-  const { message: msg, conversation: conv, account, metadata } = payload;
-  const { contactId, conversation } = stored;
-
-  // Messages are stored by Zernio (source of truth) — no local insert needed.
-  // Sus archivos sí se copian: WhatsApp los borra a los pocos días.
-  const media = copyInboundMedia(supabase, payload, channel.workspace_id, conversation.id);
-
-  // Gestiones y flujos (lib/inbound-pipeline.ts, compartido con la simulación
-  // de mensajes de los canales de prueba).
-  const pipeline = runInboundPipeline(supabase, {
-    channel,
-    contactId,
-    conversation,
-    isFirstMessage: !stored.existed,
-    message: {
-      text: msg.text,
-      postbackPayload: metadata?.postbackPayload,
-      quickReplyPayload: metadata?.quickReplyPayload,
-      callbackData: metadata?.callbackData,
-      sender: { id: msg.sender.id, name: msg.sender.name, username: msg.sender.username },
-    },
-    lateConversationId: conv.id,
-    lateAccountId: account.id,
-  });
-
-  const [mediaResult, pipelineResult] = await Promise.allSettled([media, pipeline]);
-  if (mediaResult.status === "rejected") console.error("Webhook media copy error:", mediaResult.reason);
-  if (pipelineResult.status === "rejected") throw pipelineResult.reason;
 }
 
 /** Nombre del archivo que mandó el cliente, si Zernio lo incluye. */
