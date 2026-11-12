@@ -222,7 +222,10 @@ function activityPiece(
       return {
         kind: "stage",
         tone: "default",
-        title: `Etapa: ${lookup(lk.stages, from, "Sin etapa")} → ${lookup(lk.stages, to, "Sin etapa")}`,
+        title:
+          meta.undo === true
+            ? `Se deshizo el cambio de etapa: ${lookup(lk.stages, from, "Sin etapa")} → ${lookup(lk.stages, to, "Sin etapa")}`
+            : `Etapa: ${lookup(lk.stages, from, "Sin etapa")} → ${lookup(lk.stages, to, "Sin etapa")}`,
       };
     case "assigned": {
       const via = str(meta.via);

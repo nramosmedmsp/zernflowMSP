@@ -39,6 +39,7 @@ import {
   setMyAvailability,
   takeCase,
   transferCase,
+  undoCaseStageChange,
 } from "./cases";
 
 const WS = randomUUID();
@@ -111,8 +112,27 @@ describe("acciones de gestiones: permisos", () => {
     if (!("ok" in view)) throw new Error();
     expect(view.data.activeCaseId).toBe(caseId);
     expect(view.data.cases[0].permissions).toMatchObject({ canEdit: true, canAssign: false, canTransfer: false });
-    expect(await changeCaseStage(caseId, stageId("Asesorando"))).toEqual({ ok: true });
+    expect(await changeCaseStage(caseId, stageId("Asesorando"))).toMatchObject({ ok: true });
     expect(await closeCase({ caseId, kind: "won" })).toMatchObject({ ok: true, status: "won" });
+  });
+
+  it("deshacer: solo quien movió la gestión; devuelve la etapa y queda en el historial", async () => {
+    as(ANA);
+    const moved = await changeCaseStage(caseId, stageId("Asesorando"));
+    expect(moved).toMatchObject({ ok: true, move: { toStageId: stageId("Asesorando"), irreversible: null } });
+
+    // Sara, supervisora, ve la gestión pero no es quien la movió.
+    as(SUP);
+    expect(await undoCaseStageChange(caseId, stageId("Asesorando"))).toMatchObject({ error: expect.stringContaining("Solo quien movió") });
+
+    // Beto no tiene relación con el contacto: ni siquiera la ve.
+    as(BETO);
+    expect(await undoCaseStageChange(caseId, stageId("Asesorando"))).toEqual({ error: CASE_NOT_FOUND });
+
+    as(ANA);
+    expect(await undoCaseStageChange(caseId, stageId("Asesorando"))).toEqual({ ok: true, stageId: stageId("Nuevo interesado") });
+    const log = fake.rows("activity").filter((a) => a.case_id === caseId && a.type === "stage_changed");
+    expect(log.at(-1)).toMatchObject({ actor_id: ANA, meta: { undo: true } });
   });
 
   it("asesor sin relación con el contacto: no lo ve ni lo toca", async () => {

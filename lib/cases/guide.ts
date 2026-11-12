@@ -143,6 +143,8 @@ export interface GuideExit {
   stageId: string | null;
   stageKind: StageKind | null;
   label: string;
+  /** El texto del botón lo escribió la empresa (si no, es el nombre de la etapa o el de la ayuda). */
+  customLabel: boolean;
   tone: ExitTone;
 }
 
@@ -188,6 +190,7 @@ export function resolveExits(stages: readonly GuideStage[], currentStageId: stri
         stageId: stage.id,
         stageKind: stage.kind,
         label: step.label ?? stage.name,
+        customLabel: step.label !== null,
         tone: stage.kind === "lost" ? "danger" : "ghost",
       });
     } else if (step.action) {
@@ -196,6 +199,7 @@ export function resolveExits(stages: readonly GuideStage[], currentStageId: stri
         stageId: null,
         stageKind: null,
         label: step.label ?? "Recordarle mañana",
+        customLabel: step.label !== null,
         tone: "ghost",
       });
     }

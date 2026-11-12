@@ -45,6 +45,12 @@ describe("pasos siguientes", () => {
     ]);
   });
 
+  it("distingue una etiqueta escrita por la empresa de la que sale del nombre de la etapa", () => {
+    expect(resolveExits(stages, "a").map((e) => e.customLabel)).toEqual([false, false, false]);
+    const list = stages.map((s) => (s.id === "a" ? { ...s, nextSteps: [{ stageId: "b", action: null, label: "Ya sé qué busca" }] } : s));
+    expect(resolveExits(list, "a")[0]).toMatchObject({ label: "Ya sé qué busca", customLabel: true });
+  });
+
   it("en la última etapa abierta solo quedan los cierres", () => {
     expect(resolveExits(stages, "c").map((e) => e.stageId)).toEqual(["w", "l"]);
   });

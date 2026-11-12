@@ -64,6 +64,11 @@
     from { opacity: 0; transform: translateY(8px) scale(0.98); }
     to { opacity: 1; transform: none; }
   }
+  /* Cuenta atrás del aviso «Deshacer» de la tarjeta de gestión. */
+  @keyframes undo-shrink {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
 }
 
 :root {

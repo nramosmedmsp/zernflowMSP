@@ -20,10 +20,12 @@ import {
   pageRangeLabel,
   type CaseListParams,
 } from "@/components/cases/case-filters";
+import { CasesBoard } from "@/components/cases/cases-board";
+import { boardHeadline, boardSupportsTab } from "@/components/cases/board-model";
 import { CasesByClient } from "@/components/cases/cases-by-client";
 import { NewCaseDialog } from "@/components/cases/new-case-dialog";
 import { startRouteProgress } from "@/components/ui/route-progress";
-import type { CaseListRow, ClientGroup } from "@/app/(dashboard)/dashboard/cases/load-cases";
+import type { BoardResult, CaseListRow, ClientGroup } from "@/app/(dashboard)/dashboard/cases/load-cases";
 import { claimBadge, solutionScheduleFor, type SolutionSchedules } from "@/lib/cases/protection";
 import type { CaseStatus } from "@/lib/types/database";
 
@@ -55,6 +57,8 @@ export interface CasesViewProps {
   clientGroups?: ClientGroup[];
   /** Totales de "Por cliente" (null en "Por gestión"). */
   clientTotals?: { clients: number; cases: number; truncated: boolean } | null;
+  /** Vista "Tablero" (null en las otras). */
+  board?: BoardResult | null;
   contactTypes?: { id: string; name: string; color: string | null }[];
   /** Filas a paginar: gestiones (Por gestión) o clientes (Por cliente). */
   total: number;
@@ -66,7 +70,7 @@ export interface CasesViewProps {
   teams: { id: string; name: string }[];
   members: PersonOption[];
   assignableMembers: PersonOption[];
-  me: { userId: string; canSeeOthers: boolean };
+  me: { userId: string; canSeeOthers: boolean; isAdmin: boolean; supervisedTeamIds: string[] };
 }
 
 const STATUS_STYLES: Record<CaseStatus, string> = {
@@ -95,8 +99,13 @@ function ColorBadge({ label, color }: { label: string; color: string | null }) {
 export function CasesView(props: CasesViewProps) {
   const { rows, total, page, params, caseTypes, stages, teams, members, assignableMembers, me } = props;
   const byClient = params.view === "client";
+  const isBoard = params.view === "board";
   const clientGroups = props.clientGroups ?? [];
   const listLength = byClient ? clientGroups.length : rows.length;
+  const boardActor = useMemo(
+    () => ({ userId: me.userId, isAdmin: me.isAdmin, supervisedTeamIds: me.supervisedTeamIds }),
+    [me.userId, me.isAdmin, me.supervisedTeamIds],
+  );
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState(params.q);
@@ -141,7 +150,10 @@ export function CasesView(props: CasesViewProps) {
     : stages;
   const showAssigneeFilter = params.tab !== "today" || me.canSeeOthers;
   const assigneeValue = params.assignee || (params.tab === "today" ? "me" : "");
-  const hasFilters = !!(params.type || params.stage || params.team || params.q || params.assignee);
+  // En el tablero el tipo lo eligen los chips y la etapa son las columnas: no cuentan como filtros.
+  const hasFilters = isBoard
+    ? !!(params.team || params.q || params.assignee)
+    : !!(params.type || params.stage || params.team || params.q || params.assignee);
   const pages = Math.max(1, Math.ceil(total / CASES_PAGE_SIZE));
 
   const dateColumnLabel =
@@ -154,10 +166,12 @@ export function CasesView(props: CasesViewProps) {
           <div>
             <h1 className="text-2xl font-bold">Gestiones</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {byClient && props.clientTotals
-                ? clientsHeadline(props.clientTotals.clients, props.clientTotals.cases)
-                : `${formatNumber(total)} ${total === 1 ? "gestión" : "gestiones"}`}
-              {params.tab === "today" && " para hoy"}
+              {isBoard
+                ? boardHeadline(total, props.board?.type?.name ?? null, params.tab)
+                : byClient && props.clientTotals
+                  ? clientsHeadline(props.clientTotals.clients, props.clientTotals.cases)
+                  : `${formatNumber(total)} ${total === 1 ? "gestión" : "gestiones"}`}
+              {params.tab === "today" && !isBoard && " para hoy"}
             </p>
             {byClient && props.clientTotals?.truncated && (
               <p className="mt-1 text-xs text-amber-700">
@@ -195,7 +209,15 @@ export function CasesView(props: CasesViewProps) {
               key={tab.key}
               role="tab"
               aria-selected={params.tab === tab.key}
-              onClick={() => go({ tab: tab.key, assignee: "", stage: params.stage })}
+              // El tablero solo muestra gestiones abiertas: Programadas y Cerradas se ven en la lista.
+              onClick={() =>
+                go({
+                  tab: tab.key,
+                  assignee: "",
+                  stage: params.stage,
+                  ...(isBoard && !boardSupportsTab(tab.key) ? { view: "client" as const } : {}),
+                })
+              }
               className={cn(
                 "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
                 params.tab === tab.key
@@ -216,7 +238,7 @@ export function CasesView(props: CasesViewProps) {
                 key={v.key}
                 type="button"
                 aria-pressed={params.view === v.key}
-                onClick={() => go({ view: v.key })}
+                onClick={() => go({ view: v.key, ...(v.key === "board" && !boardSupportsTab(params.tab) ? { tab: "open" as const } : {}) })}
                 className={cn(
                   "rounded-md px-3 py-1 transition-colors",
                   params.view === v.key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
@@ -240,6 +262,7 @@ export function CasesView(props: CasesViewProps) {
               className="w-full rounded-lg border border-input bg-background py-1.5 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
+          {!isBoard && (
           <select
             aria-label="Tipo de gestión"
             value={params.type}
@@ -255,6 +278,8 @@ export function CasesView(props: CasesViewProps) {
               </option>
             ))}
           </select>
+          )}
+          {!isBoard && (
           <select
             aria-label="Etapa"
             value={params.stage}
@@ -282,6 +307,7 @@ export function CasesView(props: CasesViewProps) {
                     </optgroup>
                   ))}
           </select>
+          )}
           {showAssigneeFilter && (
             <select
               aria-label="Responsable"
@@ -343,7 +369,7 @@ export function CasesView(props: CasesViewProps) {
           )}
           {hasFilters && (
             <button
-              onClick={() => go({ type: "", stage: "", team: "", q: "", assignee: "" })}
+              onClick={() => go({ type: isBoard ? params.type : "", stage: "", team: "", q: "", assignee: "" })}
               className="text-sm text-muted-foreground underline hover:text-foreground"
             >
               Limpiar filtros
@@ -354,8 +380,19 @@ export function CasesView(props: CasesViewProps) {
       </div>
 
       {/* Tabla */}
-      <div className={cn("flex-1 overflow-auto", pending && "opacity-70")}>
-        {listLength === 0 ? (
+      <div className={cn("min-h-0 flex-1", isBoard ? "overflow-hidden" : "overflow-auto", pending && !isBoard && "opacity-70")}>
+        {isBoard && props.board ? (
+          <CasesBoard
+            board={props.board}
+            tab={params.tab}
+            nowIso={props.nowIso}
+            memberName={memberName}
+            solutionSchedules={props.solutionSchedules}
+            actor={boardActor}
+            pending={pending}
+            onSelectType={(typeId) => go({ type: typeId })}
+          />
+        ) : listLength === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Briefcase className="h-10 w-10 text-muted-foreground/40" />
             <p className="mt-3 text-sm font-medium text-muted-foreground">No hay gestiones aquí</p>
@@ -529,7 +566,7 @@ export function CasesView(props: CasesViewProps) {
       </div>
 
       {/* Paginación */}
-      {total > 0 && (
+      {total > 0 && !isBoard && (
         <div className="flex items-center justify-between border-t border-border px-8 py-3 text-sm text-muted-foreground">
           <span>{pageRangeLabel(page, CASES_PAGE_SIZE, total, byClient ? "clientes" : "")}</span>
           <div className="flex items-center gap-2">

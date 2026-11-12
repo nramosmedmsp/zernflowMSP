@@ -237,6 +237,8 @@ export interface SolutionBanner {
   /** Botón: registrar la solución (falta) o actualizarla (ya está en proceso). */
   action: "register" | "update";
   actionLabel: string;
+  /** Versión corta del plazo para la lista «Para avanzar» («antes de hoy 21:00 · quedan 7 h»). */
+  short: string;
 }
 
 /**
@@ -259,6 +261,7 @@ export function solutionBanner(
         text: `${input.typeName}: registra la solución antes de ${relativeDayTime(new Date(state.dueAt), now)} (quedan ${formatSpan(state.businessMsLeft ?? state.msLeft, { round: "up" })}${state.businessMsLeft === undefined ? "" : " hábiles"})`,
         action: "register",
         actionLabel: "Registrar solución",
+        short: `antes de ${relativeDayTime(new Date(state.dueAt), now)} · quedan ${formatSpan(state.businessMsLeft ?? state.msLeft, { round: "up" })}${state.businessMsLeft === undefined ? "" : " hábiles"}`,
       };
     case "overdue":
       return {
@@ -266,6 +269,7 @@ export function solutionBanner(
         text: `Atrasada: debía registrarse la solución hace ${formatSpan(state.msLate)}`,
         action: "register",
         actionLabel: "Registrar solución",
+        short: `atrasada hace ${formatSpan(state.msLate)}`,
       };
     case "in_progress": {
       const note = state.note?.trim() || "sin detalle";
@@ -276,12 +280,14 @@ export function solutionBanner(
             text: `Compromiso vencido${when ? ` (${when})` : ""}: ${note}`,
             action: "update",
             actionLabel: "Actualizar",
+            short: "compromiso vencido",
           }
         : {
             tone: "ok",
             text: `Solución en proceso: ${note}${when ? ` · compromiso ${when}` : ""}`,
             action: "update",
             actionLabel: "Actualizar",
+            short: "en proceso",
           };
     }
   }

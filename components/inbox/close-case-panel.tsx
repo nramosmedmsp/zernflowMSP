@@ -7,7 +7,7 @@
 // y el cierre del servidor, con las mismas reglas que antes tenía el diálogo.
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Loader2, TriangleAlert } from "lucide-react";
+import { Check, Loader2, TriangleAlert, X } from "lucide-react";
 import { describeSkippedEffects } from "@/lib/cases/close-messages";
 import { closeCase, previewCloseCase, type CaseTypeOption, type CaseView } from "@/lib/actions/cases";
 import type { ClosePreview } from "@/lib/cases/close";
@@ -16,10 +16,34 @@ import { closeConsequences } from "@/lib/cases/guide";
 import { OUTCOME_LABELS } from "@/lib/cases/rules";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { closeSelection } from "./case-card-model";
+import { closeMenuItems, closeOptions, closeSelection } from "./case-card-model";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
 
-// Se monta solo mientras está abierto: cada apertura empieza con el formulario limpio.
+/**
+ * Panel de cierre de una gestión: resultado (chips), consecuencias, motivo,
+ * categoría obligatoria, nota, fecha clave y «No programar esta vez». En un
+ * tipo protegido, cerrar como perdida la pide a un supervisor (el panel lo
+ * dice y el botón pasa a «Pedir aprobación»). Lo usan la tarjeta del chat y se
+ * puede usar en cualquier otra pantalla (p. ej. el tablero) sin más contexto.
+ *
+ * Props:
+ *  - `caseView`: la gestión (CaseView de getContactCases). Debe estar abierta;
+ *    de ella salen `canSupervise`, `closeRequest` (pedido pendiente) y la categoría.
+ *  - `caseType`: su tipo (CaseTypeOption) con etapas finales, motivos y
+ *    categorías; null = sin tipo (solo se puede resolver).
+ *  - `stageId`: resultado preseleccionado = id de una etapa final del tipo; null
+ *    si el tipo no tiene etapas finales (se resuelve). El usuario puede cambiarlo
+ *    con los chips de arriba.
+ *  - `contactTypeName`: nombre de un tipo de contacto por id (para «El contacto
+ *    pasará a …»; devuelve null si no se conoce).
+ *  - `onCancel`: se pulsó «Cancelar» o «Todavía no».
+ *  - `onClosed(message, problem?)`: la gestión se cerró (o se envió el pedido de
+ *    aprobación). `message` es el texto para el aviso; `problem` indica que algún
+ *    efecto de las reglas no se aplicó (mostrarlo como error). Quien lo usa debe
+ *    recargar sus datos.
+ *  - `hideResultPicker`: oculta los chips de resultado (si ya se eligió fuera).
+ * Se monta solo mientras está abierto: cada apertura empieza con el formulario limpio.
+ */
 export function CloseCasePanel({
   caseView,
   caseType,
@@ -27,22 +51,31 @@ export function CloseCasePanel({
   contactTypeName,
   onCancel,
   onClosed,
+  hideResultPicker = false,
 }: {
   caseView: CaseView;
   caseType: CaseTypeOption | null;
-  /** Etapa final elegida en la guía (null = tipo sin etapas finales: se resuelve). */
   stageId: string | null;
-  /** Nombre de un tipo de contacto por id (para «El contacto pasará a …»). */
   contactTypeName: (id: string | null) => string | null;
   onCancel: () => void;
-  /** `problem`: la gestión se cerró pero algún efecto de las reglas no se aplicó (el aviso es de error). */
   onClosed: (message: string, problem?: boolean) => void;
+  hideResultPicker?: boolean;
 }) {
-  const initial = useMemo(() => closeSelection(caseType?.stages, initialStageId), [caseType, initialStageId]);
+  const [pickedStageId, setPickedStageId] = useState<string | null>(initialStageId);
+  const initial = useMemo(() => closeSelection(caseType?.stages, pickedStageId), [caseType, pickedStageId]);
   const kind = initial?.kind ?? "resolved";
   const stageId = initial?.stageId ?? "";
-  const stage = caseType?.stages.find((s) => s.id === initialStageId) ?? null;
+  const stage = caseType?.stages.find((s) => s.id === pickedStageId) ?? null;
   const outcomeName = stage?.name ?? OUTCOME_LABELS[kind];
+  const resultItems = useMemo(
+    () =>
+      closeMenuItems(closeOptions(caseType?.stages), {
+        isProtected: !!caseType?.protected,
+        canSupervise: caseView.canSupervise,
+        hasPendingRequest: !!caseView.closeRequest,
+      }),
+    [caseType, caseView.canSupervise, caseView.closeRequest],
+  );
 
   const [reasonId, setReasonId] = useState("");
   const [categoryId, setCategoryId] = useState(caseView.categoryId ?? "");
@@ -182,6 +215,45 @@ export function CloseCasePanel({
           Cancelar
         </button>
       </div>
+
+      {!hideResultPicker && resultItems.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Resultado">
+          <span className="text-[11px] font-medium text-muted-foreground">Resultado:</span>
+          {resultItems.map(({ option, label, disabledReason }) => {
+            const selected = (option.stageId ?? null) === pickedStageId;
+            const positive = option.tone === "positive";
+            return (
+              <button
+                key={option.stageId ?? option.kind}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={!!disabledReason}
+                title={disabledReason ?? undefined}
+                onClick={() => {
+                  if (selected) return;
+                  setPickedStageId(option.stageId);
+                  // Los motivos son de cada resultado.
+                  setReasonId("");
+                  setError(null);
+                }}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50",
+                  selected
+                    ? positive
+                      ? "border-green-400 bg-green-50 font-medium text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
+                      : "border-red-300 bg-red-50 font-medium text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+                    : "border-border bg-background hover:bg-accent",
+                )}
+              >
+                {selected && positive && <Check className="h-3 w-3" aria-hidden />}
+                {!positive && <X className="h-3 w-3" aria-hidden />}
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {reasonsOfKind.length > 0 && (
         <div className="space-y-1">

@@ -91,7 +91,7 @@ describe("orden estricto en changeStage", () => {
 
   it("apagado: el asesor puede ir a cualquier etapa abierta", async () => {
     const r = await changeStage(db(), { caseId, stageId: stageId("Esperando pago"), actorId: ANA, guide: { canSupervise: false } });
-    expect(r).toEqual({ ok: true });
+    expect(r).toMatchObject({ ok: true });
   });
 
   it("encendido: el asesor solo va a los pasos siguientes", async () => {
@@ -102,7 +102,7 @@ describe("orden estricto en changeStage", () => {
     expect(caseRow(caseId).stage_id).toBe(stageId("Nuevo interesado"));
 
     const ok = await changeStage(db(), { caseId, stageId: stageId("Asesorando"), actorId: ANA, guide: { canSupervise: false } });
-    expect(ok).toEqual({ ok: true });
+    expect(ok).toMatchObject({ ok: true });
     expect(caseRow(caseId).stage_id).toBe(stageId("Asesorando"));
   });
 
@@ -110,7 +110,7 @@ describe("orden estricto en changeStage", () => {
     setStrict(true);
     await changeStage(db(), { caseId, stageId: stageId("Asesorando"), actorId: ANA, guide: { canSupervise: false } });
     const back = await changeStage(db(), { caseId, stageId: stageId("Nuevo interesado"), actorId: ANA, guide: { canSupervise: false } });
-    expect(back).toEqual({ ok: true });
+    expect(back).toMatchObject({ ok: true });
   });
 
   it("encendido: el supervisor salta y queda en el historial con quién fue", async () => {
@@ -121,7 +121,7 @@ describe("orden estricto en changeStage", () => {
       actorId: SARA,
       guide: { canSupervise: true, jump: true },
     });
-    expect(r).toEqual({ ok: true });
+    expect(r).toMatchObject({ ok: true });
     const log = fake.rows("activity").filter((a) => a.type === "stage_changed" && a.case_id === caseId);
     expect(log).toHaveLength(1);
     expect(log[0]).toMatchObject({ actor_id: SARA, to_value: stageId("Esperando pago"), meta: { jump: true } });
@@ -136,7 +136,7 @@ describe("orden estricto en changeStage", () => {
   it("encendido: un flujo o regla (sin guía) mueve la gestión a cualquier etapa", async () => {
     setStrict(true);
     const r = await changeStage(db(), { caseId, stageId: stageId("Esperando pago"), actorId: null });
-    expect(r).toEqual({ ok: true });
+    expect(r).toMatchObject({ ok: true });
     expect(caseRow(caseId).stage_id).toBe(stageId("Esperando pago"));
   });
 });
@@ -157,7 +157,7 @@ describe("la etapa pide categoría (Postventa › Nueva)", () => {
     expect(blocked).toMatchObject({ error: expect.stringContaining("categoría") });
 
     fake.rows("cases").find((c) => c.id === caseId)!.category_id = byName("case_categories", "Producto dañado").id;
-    expect(await changeStage(db(), { caseId, stageId: target, actorId: ANA, guide: { canSupervise: false } })).toEqual({ ok: true });
+    expect(await changeStage(db(), { caseId, stageId: target, actorId: ANA, guide: { canSupervise: false } })).toMatchObject({ ok: true });
   });
 
   it("la automatización no queda limitada", async () => {
