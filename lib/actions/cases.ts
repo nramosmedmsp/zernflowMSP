@@ -106,6 +106,14 @@ export interface CaseView {
   canSupervise: boolean;
 }
 
+/** Cambio de etapa hecho desde la interfaz (para el aviso «Deshacer»). */
+export interface StageMoveView {
+  fromStageId: string | null;
+  toStageId: string;
+  /** Lo que el cambio ya disparó y Deshacer no revierte (null = nada). */
+  irreversible: string | null;
+}
+
 export interface CloseRequestView {
   stageId: string | null;
   reasonId: string | null;
@@ -736,16 +744,49 @@ export async function changeCaseStage(
   caseId: string,
   stageId: string,
   options?: { jump?: boolean },
-): Promise<CaseActionResult> {
+): Promise<CaseActionResult<{ move?: StageMoveView }>> {
   if (!isId(stageId)) return { error: INVALID };
   const ctx = await withCase(caseId, (p) => p.canEdit);
   if ("error" in ctx) return ctx;
   const canSupervise = isCaseSupervisor(ctx.s.actor, ctx.access.row.team_id);
-  return engine.changeStage(ctx.s.db, {
+  const result = await engine.changeStage(ctx.s.db, {
     caseId: ctx.access.row.id,
     stageId,
     actorId: ctx.s.userId,
     guide: { canSupervise, jump: options?.jump === true },
+  });
+  if ("error" in result) return result;
+  return {
+    ok: true,
+    ...(result.move
+      ? {
+          move: {
+            fromStageId: result.move.fromStageId,
+            toStageId: result.move.toStageId,
+            irreversible: result.move.irreversible,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Deshace el último cambio de etapa (aviso «Deshacer» de la tarjeta). Solo
+ * quien movió la gestión, dentro de la ventana y mientras nadie más haya
+ * cambiado nada; no vuelve a disparar flujos ni reglas (lib/cases/undo.ts).
+ * `expectedStageId` es la etapa a la que se movió: evita deshacer otro cambio.
+ */
+export async function undoCaseStageChange(
+  caseId: string,
+  expectedStageId: string,
+): Promise<CaseActionResult<{ stageId: string }>> {
+  if (!isId(expectedStageId)) return { error: INVALID };
+  const ctx = await withCase(caseId, (p) => p.canEdit);
+  if ("error" in ctx) return ctx;
+  return engine.undoStageChange(ctx.s.db, {
+    caseId: ctx.access.row.id,
+    actorId: ctx.s.userId,
+    expectedStageId,
   });
 }
 

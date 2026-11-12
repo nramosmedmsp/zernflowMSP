@@ -236,6 +236,7 @@ describe("solutionBanner", () => {
       text: "Postventa: registra la solución antes de mañana 5:00 (quedan 19 h)",
       action: "register",
       actionLabel: "Registrar solución",
+      short: "antes de mañana 5:00 · quedan 19 h",
     });
     expect(banner({ openedAt: "2026-10-27T16:00:00Z" })?.text).toBe(
       "Postventa: registra la solución antes de hoy 11:00 (quedan 1 h)",
@@ -259,6 +260,7 @@ describe("solutionBanner", () => {
       text: "Solución en proceso: Cambio del producto · compromiso vie 18:00",
       action: "update",
       actionLabel: "Actualizar",
+      short: "en proceso",
     });
     const late = banner({ solutionStatus: "in_progress", solutionNote: "Cambio del producto", nextActionAt: "2026-10-28T13:00:00Z" });
     expect(late).toMatchObject({ tone: "red", text: "Compromiso vencido (hoy 8:00): Cambio del producto" });

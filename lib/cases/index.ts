@@ -13,6 +13,8 @@ export {
   setCategory,
   setNextAction,
   transferCase,
+  undoStageChange,
+  type StageMove,
 } from "./changes";
 export { setConversationBotPaused } from "./bot-pause";
 export { closeCase, previewClose, type CloseCaseInput, type ClosePreview } from "./close";

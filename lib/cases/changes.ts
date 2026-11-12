@@ -26,7 +26,9 @@ import {
   type Db,
   type EngineResult,
 } from "./io";
+import { matchesCaseEvent } from "@/lib/flow-engine/case-trigger-match";
 import { checkRequirements, checkStrictOrder, loadGuideStages } from "./guide";
+import { irreversibleNotice, undoBlockReason, type StageMoveEffects, type UndoActivity } from "./undo";
 import { typeLockMessage } from "./protection";
 import { resolveTargetTeamId } from "./routing";
 import { isSupervisorInDb, notifySupervisors } from "./supervisors";
@@ -49,6 +51,30 @@ function isError(value: unknown): value is { error: string } {
   return !!value && typeof value === "object" && "error" in value;
 }
 
+/** Lo que devuelve changeStage cuando la etapa cambió de verdad. */
+export interface StageMove {
+  fromStageId: string | null;
+  toStageId: string;
+  /** Lo que el cambio disparó y Deshacer no revierte. */
+  effects: StageMoveEffects;
+  /** Texto listo para mostrar con ese aviso (null = no disparó nada). */
+  irreversible: string | null;
+}
+
+/** Flujos publicados con el disparador «cambió de etapa» que coinciden con la nueva etapa. */
+async function countStageFlows(db: Db, row: CaseRow, stageId: string): Promise<number> {
+  const { data } = await db
+    .from("triggers")
+    .select("id, type, config, flows!inner(status, workspace_id)")
+    .eq("type", "case_stage_changed")
+    .eq("is_active", true)
+    .eq("flows.status", "published")
+    .eq("flows.workspace_id", row.workspace_id);
+  return (data ?? []).filter((t) =>
+    matchesCaseEvent({ type: t.type, config: t.config }, { type: "case_stage_changed", caseTypeId: row.case_type_id, stageId }),
+  ).length;
+}
+
 /**
  * Cambia la etapa (solo etapas abiertas: para cerrar se usa closeCase).
  *
@@ -67,7 +93,7 @@ export async function changeStage(
     flowChain?: readonly string[];
     guide?: { canSupervise: boolean; jump?: boolean };
   },
-): Promise<EngineResult> {
+): Promise<EngineResult<{ move?: StageMove }>> {
   const row = await activeCase(db, params.caseId);
   if (isError(row)) return row;
   if (!row.case_type_id) return { error: "Clasifica la gestión antes de cambiar la etapa." };
@@ -126,7 +152,7 @@ export async function changeStage(
     ...(params.guide?.jump && params.guide.canSupervise ? { meta: { jump: true } } : {}),
   });
   emitStageChanged(db, row, row.stage_id, stage.id, params.flowChain);
-  await runEventRules(db, {
+  const ruleEffects = await runEventRules(db, {
     caseRow: { ...row, stage_id: stage.id },
     ctx: {
       trigger: "on_stage",
@@ -136,7 +162,91 @@ export async function changeStage(
     },
     actorId: params.actorId,
   });
-  return { ok: true };
+  // Para el aviso de Deshacer (solo la interfaz lo usa): qué se disparó y no se puede revertir.
+  if (!params.guide) return { ok: true };
+  const effects: StageMoveEffects = {
+    flows: await countStageFlows(db, row, stage.id).catch(() => 0),
+    contactTypeChanged: !!ruleEffects?.contactType,
+    scheduledCases: ruleEffects?.scheduled.length ?? 0,
+  };
+  return {
+    ok: true,
+    move: { fromStageId: row.stage_id, toStageId: stage.id, effects, irreversible: irreversibleNotice(effects) },
+  };
+}
+
+/**
+ * Deshace el último cambio de etapa de la persona (docs: lib/cases/undo.ts).
+ * Solo restaura `stage_id` y deja constancia en el historial; NO emite el
+ * evento de flujos ni corre las reglas de la etapa restaurada, así que no se
+ * reenvía ningún mensaje. Se rechaza si no fue quien movió, si pasó la ventana
+ * o si una persona cambió algo en la gestión desde entonces.
+ */
+export async function undoStageChange(
+  db: Db,
+  params: { caseId: string; actorId: string; expectedStageId: string },
+  now: Date = new Date(),
+): Promise<EngineResult<{ stageId: string }>> {
+  const row = await activeCase(db, params.caseId);
+  if (isError(row)) return row;
+
+  const { data: recent } = await db
+    .from("activity")
+    .select("id, type, actor_id, from_value, to_value, created_at, meta")
+    .eq("case_id", row.id)
+    .order("id", { ascending: false })
+    .limit(30);
+  const rows = (recent ?? []) as (UndoActivity & { meta: unknown })[];
+  // El último cambio de etapa hecho por una persona y lo que se registró después.
+  const lastIndex = rows.findIndex((r) => r.type === "stage_changed" && r.actor_id !== null);
+  const last = lastIndex >= 0 ? rows[lastIndex] : null;
+  const wasUndo = !!last && !!last.meta && typeof last.meta === "object" && (last.meta as Record<string, unknown>).undo === true;
+  const blocked = wasUndo
+    ? "Ese cambio ya se deshizo."
+    : undoBlockReason({
+        last,
+        after: lastIndex > 0 ? rows.slice(0, lastIndex) : [],
+        actorId: params.actorId,
+        currentStageId: row.stage_id,
+        now,
+      });
+  if (blocked || !last) return { error: blocked ?? "No hay un cambio de etapa reciente para deshacer." };
+  if (last.to_value !== params.expectedStageId) return { error: "Alguien más cambió la gestión después: ya no se puede deshacer." };
+  const targetId = last.from_value as string;
+
+  const { data: target } = await db
+    .from("case_stages")
+    .select("id, kind, archived_at")
+    .eq("id", targetId)
+    .eq("case_type_id", row.case_type_id ?? "")
+    .maybeSingle();
+  if (!target || target.archived_at || target.kind !== "open") {
+    return { error: "La etapa anterior ya no está disponible: no se puede deshacer." };
+  }
+
+  // Solo si la gestión sigue en la etapa a la que se movió (otra solicitud puede haberla cambiado).
+  const { data: changed, error } = await db
+    .from("cases")
+    .update({ stage_id: target.id })
+    .eq("id", row.id)
+    .eq("stage_id", last.to_value)
+    .select("id");
+  if (error) return { error: GENERIC_ERROR };
+  if (!changed || changed.length === 0) return { error: "Alguien más cambió la gestión después: ya no se puede deshacer." };
+
+  await logActivity(db, {
+    workspace_id: row.workspace_id,
+    type: "stage_changed",
+    case_id: row.id,
+    contact_id: row.contact_id,
+    actor_id: params.actorId,
+    from_value: last.to_value,
+    to_value: target.id,
+    meta: { undo: true, undoes: last.id },
+  });
+  // A propósito, sin emitStageChanged ni runEventRules: volver a una etapa no
+  // dispara sus automatizaciones de «entrar» (no se reenvían mensajes).
+  return { ok: true, stageId: target.id };
 }
 
 /**
