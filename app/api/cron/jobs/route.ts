@@ -7,6 +7,8 @@ import type { Json } from "@/lib/types/database";
 import { runCaseTasks } from "@/lib/cases";
 import { recordCronEnd, recordCronStart } from "@/lib/cron-runs";
 import { pruneWebhookEvents, sweepInboundEvents, sweepOrphanChats } from "@/lib/inbound-events";
+import { BROADCAST_START_LIMIT_MS, OTHER_JOBS_START_LIMIT_MS } from "@/lib/broadcasts/pacing";
+import { runBroadcastSendPass } from "@/lib/broadcasts/send-pass";
 
 export const maxDuration = 60;
 
@@ -16,13 +18,17 @@ export const maxDuration = 60;
 // deje sin correr las tareas de gestiones ni la recuperación de mensajes:
 //   1. recuperar mensajes entrantes pendientes ......... hasta 8 s
 //   2. tareas de gestiones (programadas, plazos, reclamos, reasignación) hasta 15 s
-//   3. trabajos programados (esperas de flujos, difusiones) mientras quede tiempo:
-//      no se empieza uno nuevo pasados 35 s, porque un envío a Zernio puede
-//      tardar hasta 20 s y hay que terminar antes de los 60 s.
+//   3. trabajos programados (esperas de flujos...): no se empieza uno nuevo
+//      pasados 25 s, para dejar siempre tiempo a las difusiones;
+//   4. envíos de difusión, con su PROPIA porción (CONF-04/05): un máximo de envíos
+//      por pasada y sin empezar ninguno pasados 35 s, porque un envío a Zernio
+//      puede tardar hasta 20 s y hay que terminar antes de los 60 s. Su ritmo y su
+//      razón están en lib/broadcasts/pacing.ts. Una difusión grande nunca deja sin
+//      correr lo anterior, y lo anterior nunca la deja sin su turno completo en
+//      una pasada normal.
 // Lo que no alcance queda pendiente para la siguiente pasada (todo es idempotente).
 const INBOUND_SWEEP_BUDGET_MS = 8_000;
 const CASE_TASKS_BUDGET_MS = 15_000;
-const JOBS_START_LIMIT_MS = 35_000;
 /** El barrido de chats sin gestión es más caro: una vez cada 5 minutos. */
 const ORPHAN_SWEEP_EVERY_MINUTES = 5;
 const JOBS_BATCH = 20;
@@ -84,7 +90,7 @@ export async function GET(request: NextRequest) {
 /** Solo conteos (sin datos de personas) para cron_runs.last_stats. */
 function summarize(body: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const key of ["processed", "failed", "total", "skippedForTime", "inbound", "orphans"]) {
+  for (const key of ["processed", "failed", "total", "skippedForTime", "inbound", "orphans", "broadcasts"]) {
     if (key in body) out[key] = body[key];
   }
   return out;
@@ -140,32 +146,15 @@ async function runJobsCron(
   // during a deploy; a lt. comparison is NULL-hostile and would skip them
   // forever). Those rows are NOT processed directly, only stamped, see below.
   const staleClaimCutoff = new Date(Date.now() - STALE_INVOCATION_MS).toISOString();
-  // Primero las esperas de flujos y demás (clientes esperando una respuesta) y
-  // con lo que sobre del lote, los envíos de difusiones: una difusión grande no
-  // retrasa las esperas de los flujos (CONF-04).
+  // Las difusiones ya no pasan por esta cola (tienen su propia fase al final de la pasada).
   const dueFilter = `status.eq.pending,and(status.eq.processing,or(claimed_at.lt.${staleClaimCutoff},claimed_at.is.null))`;
-  const nowIso = new Date().toISOString();
-  const { data: others, error: othersError } = await supabase
+  const { data: jobs, error } = await supabase
     .from("scheduled_jobs")
     .select("*")
     .or(dueFilter)
-    .neq("type", "send_broadcast")
-    .lte("run_at", nowIso)
+    .lte("run_at", new Date().toISOString())
     .order("run_at", { ascending: true })
     .limit(JOBS_BATCH);
-  const { data: broadcasts, error: broadcastsError } =
-    !othersError && (others?.length ?? 0) < JOBS_BATCH
-      ? await supabase
-          .from("scheduled_jobs")
-          .select("*")
-          .or(dueFilter)
-          .eq("type", "send_broadcast")
-          .lte("run_at", nowIso)
-          .order("run_at", { ascending: true })
-          .limit(JOBS_BATCH - (others?.length ?? 0))
-      : { data: [], error: null };
-  const error = othersError ?? broadcastsError;
-  const jobs = error || !others ? null : [...others, ...(broadcasts ?? [])];
 
   if (error || !jobs) {
     return { status: 500, body: { error: "Failed to fetch jobs", cases } };
@@ -177,9 +166,9 @@ async function runJobsCron(
 
   let skippedForTime = 0;
   for (const job of jobs) {
-    // CONF-03: sin tiempo para empezar otro envío (puede tardar hasta 20 s):
-    // lo que queda sigue pendiente para la siguiente pasada.
-    if (Date.now() - startedAt > JOBS_START_LIMIT_MS) {
+    // CONF-03: sin tiempo para empezar otro trabajo (puede tardar hasta 20 s) y
+    // dejar su turno a las difusiones: lo que queda sigue pendiente para la siguiente pasada.
+    if (Date.now() - startedAt > OTHER_JOBS_START_LIMIT_MS) {
       skippedForTime = jobs.length - jobs.indexOf(job);
       break;
     }
@@ -288,9 +277,18 @@ async function runJobsCron(
     }
   }
 
+  // 4. Difusiones: su propia porción, después de todo lo urgente.
+  let broadcasts: Awaited<ReturnType<typeof runBroadcastSendPass>> | { error: string };
+  try {
+    broadcasts = await runBroadcastSendPass(supabase, { deadline: startedAt + BROADCAST_START_LIMIT_MS });
+  } catch (err) {
+    console.error("Broadcast send pass error:", err);
+    broadcasts = { error: err instanceof Error ? err.message : String(err) };
+  }
+
   return {
     status: 200,
-    body: { processed, failed, total: jobs.length, skippedForTime, inbound, orphans, cases },
+    body: { processed, failed, total: jobs.length, skippedForTime, inbound, orphans, cases, broadcasts },
   };
 }
 
@@ -321,11 +319,6 @@ async function failJobAndSettleSession({
     .from("scheduled_jobs")
     .update({ status: "failed", last_error: errorMessage })
     .eq("id", job.id);
-
-  if (job.type === "send_broadcast") {
-    await settleBroadcastRecipientAsFailed({ supabase, job, errorMessage });
-    return;
-  }
 
   if (job.type !== "resume_flow") return;
   const payload = job.payload as { sessionId?: string; nodeId?: string } | null;
@@ -390,57 +383,6 @@ async function failJobAndSettleSession({
       settleError
     );
   }
-}
-
-// Motivos que se ven en el detalle de la difusión (los técnicos van solo al registro).
-const BROADCAST_INTERRUPTED_MESSAGE =
-  "El envío se interrumpió y no se sabe si el mensaje llegó. Revisa el chat del contacto antes de volver a enviarlo.";
-const BROADCAST_GAVE_UP_MESSAGE =
-  "No se pudo enviar el mensaje después de varios intentos. Revisa el chat del contacto antes de volver a enviarlo.";
-
-// A send_broadcast job out of retries would otherwise leave its recipient
-// stuck in 'pending'/'sending' forever (no other job touches the row, and
-// settleBroadcastIfDone counts both as unfinished, so the broadcast would
-// stay 'sending' too). Settle the recipient as failed; best-effort, the job
-// is already marked failed.
-async function settleBroadcastRecipientAsFailed({
-  supabase,
-  job,
-  errorMessage,
-}: {
-  supabase: Awaited<ReturnType<typeof createServiceClient>>;
-  job: { id: string; payload: Json };
-  errorMessage: string;
-}) {
-  const payload = job.payload as {
-    broadcastId?: string;
-    recipientId?: string;
-  } | null;
-  if (!payload?.broadcastId || !payload?.recipientId) return;
-  // El detalle técnico queda en el registro; en pantalla, un motivo en español.
-  console.error(`Broadcast recipient ${payload.recipientId} gave up: ${errorMessage}`);
-
-  const { data: settled, error } = await supabase
-    .from("broadcast_recipients")
-    .update({ status: "failed", error_message: BROADCAST_GAVE_UP_MESSAGE })
-    .eq("id", payload.recipientId)
-    .in("status", ["pending", "sending"])
-    .select();
-  if (error) {
-    console.error(
-      `Failed to settle broadcast recipient ${payload.recipientId} after job ${job.id} exhausted retries; recipient may be left unfinished:`,
-      error
-    );
-    return;
-  }
-  if (settled && settled.length > 0) {
-    await supabase.rpc("increment_broadcast_failed", {
-      b_id: payload.broadcastId,
-    });
-  }
-  // Run even when no row matched: a previous invocation may have settled the
-  // recipient but died before settling the broadcast.
-  await settleBroadcastIfDone(supabase, payload.broadcastId);
 }
 
 // A session that moved past a delay node is healthy only if the resume that
@@ -607,157 +549,14 @@ async function processJob(
     }
 
     case "send_broadcast": {
-      const payload = job.payload as {
-        broadcastId: string;
-        recipientId: string;
-      };
-
-      // Process individual broadcast recipient
-      const { data: recipient, error: recipientError } = await supabase
-        .from("broadcast_recipients")
-        .select("*, contacts(*), channels(*), broadcasts(*)")
-        .eq("id", payload.recipientId)
-        .single();
-
-      if (!recipient) {
-        // Only PGRST116 (zero rows) means the recipient row is genuinely
-        // gone; a transient failure must throw so the job retries instead of
-        // dropping the send and stranding the broadcast in 'sending'.
-        if (recipientError && recipientError.code !== "PGRST116") {
-          throw new Error(
-            `broadcast recipient ${payload.recipientId} could not be loaded: ${recipientError.message}`
-          );
-        }
-        return;
-      }
-
-      // A 'sending' row means a previous invocation of this job died between
-      // claiming the recipient and recording the outcome (the stale-claim
-      // reclaim resurrects such jobs). The message may or may not have
-      // reached the contact, so mark it failed instead of re-sending: a
-      // duplicate customer-visible message is worse than a false failure.
-      if (recipient.status === "sending") {
-        const { data: settled, error: settleError } = await supabase
-          .from("broadcast_recipients")
-          .update({
-            status: "failed",
-            error_message: BROADCAST_INTERRUPTED_MESSAGE,
-          })
-          .eq("id", payload.recipientId)
-          .eq("status", "sending")
-          .select();
-        if (settleError) {
-          // Unknown outcome: throw so the job retries; incrementing the
-          // failed counter now could count a recipient still stuck in
-          // 'sending', and completing the job would strand it forever.
-          throw new Error(
-            `failed to settle interrupted broadcast recipient ${payload.recipientId}: ${settleError.message}`
-          );
-        }
-        if (!settled || settled.length === 0) return; // Another run settled it
-        await supabase.rpc("increment_broadcast_failed", {
-          b_id: payload.broadcastId,
-        });
-        await settleBroadcastIfDone(supabase, payload.broadcastId);
-        return;
-      }
-
-      if (recipient.status !== "pending") return;
-
-      // Fase 2: la difusión puede ser texto o plantilla de WhatsApp; el envío
-      // (clave, canal, conversación, ventana de 24 h, teléfono y variables)
-      // vive en lib/broadcasts/deliver.ts y devuelve el motivo si falla.
-      const broadcast = recipient.broadcasts as { workspace_id: string; message_content: unknown } | null;
-      if (!broadcast) return;
-
-      // CAS to 'sending' before the API call so a crash between the send and
-      // the 'sent' write cannot cause a re-send when the job is reclaimed
-      // (the 'sending' branch above settles it as failed instead).
-      const { data: sendClaim, error: sendClaimError } = await supabase
-        .from("broadcast_recipients")
-        .update({ status: "sending" })
-        .eq("id", payload.recipientId)
-        .eq("status", "pending")
-        .select();
-      if (sendClaimError) {
-        // Unknown outcome: throw so the job retries; if the CAS committed,
-        // the retry finds 'sending' and settles the recipient as failed.
-        throw new Error(
-          `failed to claim broadcast recipient ${payload.recipientId}: ${sendClaimError.message}`
-        );
-      }
-      if (!sendClaim || sendClaim.length === 0) return;
-
-      // El SDK de Zernio no lanza excepciones: deliverBroadcast revisa
-      // res.error y devuelve { ok: false, error } con el motivo.
-      let delivery: { ok: true } | { ok: false; error: string; skipped?: true };
-      try {
-        const { deliverBroadcast } = await import("@/lib/broadcasts/deliver");
-        delivery = await deliverBroadcast(supabase, {
-          workspaceId: broadcast.workspace_id,
-          contactId: recipient.contact_id,
-          channelId: recipient.channel_id,
-          messageContent: broadcast.message_content,
-        });
-      } catch (err) {
-        console.error(`Broadcast recipient ${payload.recipientId} delivery threw:`, err);
-        delivery = { ok: false, error: "No se pudo enviar el mensaje por un error inesperado. Inténtalo de nuevo más tarde." };
-      }
-
-      if (delivery.ok) {
-        await supabase
-          .from("broadcast_recipients")
-          .update({ status: "sent", sent_at: new Date().toISOString() })
-          .eq("id", payload.recipientId);
-
-        // Increment broadcast sent count
-        await supabase.rpc("increment_broadcast_sent", {
-          b_id: payload.broadcastId,
-        });
-      } else if (delivery.skipped) {
-        // PRIV-05: se dio de baja o no tiene consentimiento al momento de enviar. No es un fallo.
-        await supabase
-          .from("broadcast_recipients")
-          .update({ status: "skipped", error_message: delivery.error })
-          .eq("id", payload.recipientId);
-      } else {
-        await supabase
-          .from("broadcast_recipients")
-          .update({ status: "failed", error_message: delivery.error })
-          .eq("id", payload.recipientId);
-
-        await supabase.rpc("increment_broadcast_failed", {
-          b_id: payload.broadcastId,
-        });
-      }
-
-      await settleBroadcastIfDone(supabase, payload.broadcastId);
+      // Versión anterior: había un trabajo por destinatario. Ahora los envíos los toma
+      // runBroadcastSendPass directo de broadcast_recipients; este trabajo ya no hace nada
+      // (si quedara alguno, solo se cierra). Nadie recibe el mensaje dos veces: el
+      // destinatario sigue pendiente y lo envía la fase de difusiones.
       break;
     }
 
     default:
       console.warn(`Unknown job type: ${job.type}`);
-  }
-}
-
-// Marks the broadcast completed once no recipient is left unfinished.
-// 'sending' counts as unfinished: it is an in-flight (or crashed) send that
-// will still be settled to sent/failed.
-async function settleBroadcastIfDone(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  broadcastId: string
-) {
-  const { count } = await supabase
-    .from("broadcast_recipients")
-    .select("id", { count: "exact", head: true })
-    .eq("broadcast_id", broadcastId)
-    .in("status", ["pending", "sending"]);
-
-  if (count === 0) {
-    await supabase
-      .from("broadcasts")
-      .update({ status: "completed" })
-      .eq("id", broadcastId)
-      .eq("status", "sending");
   }
 }

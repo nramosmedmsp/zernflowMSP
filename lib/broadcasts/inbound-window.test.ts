@@ -57,3 +57,18 @@ describe("envío a un contacto (secuencias y difusión)", () => {
     expect(windowStateOf(closed, NOW)).toBe("closed");
   });
 });
+
+describe("fallos generales (corte automático de la difusión)", () => {
+  const failing = { sendText: async () => ({ ok: false as const, error: "Zernio rechazó el mensaje" }), sendTemplate: async () => ({ ok: false as const, error: "Zernio rechazó el mensaje" }) };
+
+  it("si Zernio rechaza el envío es un fallo general; si el contacto no tiene conversación o la ventana está cerrada, no", async () => {
+    const { sendTextToContact } = await import("./delivery");
+    const open = await loadDeliveryContext(setup(hoursAgo(1)).asDb(), { workspaceId: WS, contactId: "ct-1", channelId: "ch-1" });
+    expect(await sendTextToContact(setup(hoursAgo(1)).asDb(), open, "Hola", { messenger: failing, checkWindow: true, now: NOW })).toMatchObject({ ok: false, general: true });
+
+    const closed = await loadDeliveryContext(setup(hoursAgo(40)).asDb(), { workspaceId: WS, contactId: "ct-1", channelId: "ch-1" });
+    const res = await sendTextToContact(setup(hoursAgo(40)).asDb(), closed, "Hola", { messenger: failing, checkWindow: true, now: NOW });
+    expect(res).toMatchObject({ ok: false });
+    expect(res).not.toHaveProperty("general");
+  });
+});

@@ -38,11 +38,13 @@ beforeEach(() => {
 });
 
 describe("launchBroadcast", () => {
-  it("crea un destinatario por contacto que aceptó publicidad, programa un trabajo por cada uno y deja la difusión enviándose", async () => {
+  it("crea un destinatario pendiente por contacto que aceptó publicidad, no envía nada todavía (lo hace el cron) y deja la difusión enviándose", async () => {
     const res = await launchBroadcast(fake.asDb(), params());
     expect(res).toMatchObject({ ok: true, totalRecipients: 2 });
     expect(fake.rows("broadcast_recipients").map((r) => r.contact_id).sort()).toEqual(["c1", "c2"]);
-    expect(fake.rows("scheduled_jobs")).toHaveLength(2);
+    expect(fake.rows("broadcast_recipients").every((r) => r.status === "pending")).toBe(true);
+    // Ya no hay un trabajo por destinatario: el cron toma los pendientes directamente.
+    expect(fake.rows("scheduled_jobs")).toHaveLength(0);
     expect(broadcast()).toMatchObject({ status: "sending", total_recipients: 2 });
   });
 
@@ -74,7 +76,6 @@ describe("launchBroadcast", () => {
     const loser = results.find((r) => !r.ok);
     expect(loser).toEqual({ ok: false, status: 409, error: ALREADY_SENDING_MESSAGE });
     expect(fake.rows("broadcast_recipients")).toHaveLength(2);
-    expect(fake.rows("scheduled_jobs")).toHaveLength(2);
   });
 
   it("enviar una difusión que ya se está enviando o terminó responde 409 y no crea nada", async () => {
@@ -86,7 +87,7 @@ describe("launchBroadcast", () => {
   });
 
   it("si falla a la mitad, deshace lo creado y la difusión vuelve a borrador (sin mensaje técnico)", async () => {
-    fake.failNext.set("scheduled_jobs", "insert");
+    fake.failNext.set("broadcast_recipients", "insert");
     const res = await launchBroadcast(fake.asDb(), params());
     expect(res).toEqual({ ok: false, status: 500, error: LAUNCH_FAILED_MESSAGE });
     expect(fake.rows("broadcast_recipients")).toHaveLength(0);

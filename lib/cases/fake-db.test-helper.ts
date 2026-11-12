@@ -563,6 +563,19 @@ export class FakeDb {
   async rpcPlain(name: string, args: Record<string, unknown>) {
     // 00043: cerrar las sesiones de una persona (aquí no hay sesiones que borrar).
     if (name === "revoke_user_sessions") return { data: 0, error: null };
+    // supabase/migrations/00003_rpc_functions.sql: contadores de la difusión.
+    if (name === "increment_broadcast_sent" || name === "increment_broadcast_failed") {
+      const row = this.rows("broadcasts").find((b) => b.id === args.b_id);
+      if (row) {
+        if (name === "increment_broadcast_sent") {
+          row.sent = ((row.sent as number) ?? 0) + 1;
+          row.delivered = ((row.delivered as number) ?? 0) + 1;
+        } else {
+          row.failed = ((row.failed as number) ?? 0) + 1;
+        }
+      }
+      return { data: null, error: null };
+    }
     if (name === "increment_unread") {
       // supabase/migrations/00003_rpc_functions.sql
       const row = this.rows("conversations").find((c) => c.id === args.conv_id);

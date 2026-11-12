@@ -69,10 +69,16 @@ describe("deliverBroadcast", () => {
     const res = await deliver(TEMPLATE);
     expect(res).toMatchObject({ ok: false, error: expect.stringContaining("No se pudo comprobar") });
     expect(res).not.toHaveProperty("skipped");
+    // No depende del contacto: si pasa muchas veces seguidas, la difusión se pausa sola.
+    expect(res).toMatchObject({ general: true });
     expect(sent.template).not.toHaveBeenCalled();
   });
 
-  it("un contenido inválido sigue siendo un fallo", async () => {
-    expect(await deliver({ kind: "otra" })).toMatchObject({ ok: false });
+  it("un contenido inválido sigue siendo un fallo, y es general (no del contacto)", async () => {
+    expect(await deliver({ kind: "otra" })).toMatchObject({ ok: false, general: true });
+  });
+
+  it("omitir por consentimiento no es un fallo general", async () => {
+    expect(await deliver(TEMPLATE, "c2")).not.toHaveProperty("general");
   });
 });

@@ -23,8 +23,11 @@ export type BroadcastStatus =
   | "draft"
   | "scheduled"
   | "sending"
+  | "paused"
   | "completed"
   | "cancelled";
+/** Por qué está en pausa una difusión: la pausó una persona o se pausó sola por fallos seguidos. */
+export type BroadcastPauseReason = "manual" | "auto_failures";
 export type JobStatus = "pending" | "processing" | "completed" | "failed";
 export type TriggerType =
   | "keyword"
@@ -1173,6 +1176,11 @@ export interface Database {
           sent: number;
           delivered: number;
           failed: number;
+          paused_at: string | null;
+          paused_reason: BroadcastPauseReason | null;
+          pause_note: string | null;
+          consecutive_failures: number;
+          cancelled_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -1188,6 +1196,11 @@ export interface Database {
           sent?: number;
           delivered?: number;
           failed?: number;
+          paused_at?: string | null;
+          paused_reason?: BroadcastPauseReason | null;
+          pause_note?: string | null;
+          consecutive_failures?: number;
+          cancelled_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1201,6 +1214,11 @@ export interface Database {
           sent?: number;
           delivered?: number;
           failed?: number;
+          paused_at?: string | null;
+          paused_reason?: BroadcastPauseReason | null;
+          pause_note?: string | null;
+          consecutive_failures?: number;
+          cancelled_at?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -1222,6 +1240,7 @@ export interface Database {
           status: string;
           sent_at: string | null;
           error_message: string | null;
+          claimed_at: string | null;
         };
         Insert: {
           id?: string;
@@ -1231,11 +1250,13 @@ export interface Database {
           status?: string;
           sent_at?: string | null;
           error_message?: string | null;
+          claimed_at?: string | null;
         };
         Update: {
           status?: string;
           sent_at?: string | null;
           error_message?: string | null;
+          claimed_at?: string | null;
         };
         Relationships: [
           {

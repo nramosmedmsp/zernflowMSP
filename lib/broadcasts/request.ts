@@ -14,7 +14,8 @@ export const BROADCAST_STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
   scheduled: "Programada",
   sending: "Enviando",
-  completed: "Completada",
+  paused: "En pausa",
+  completed: "Terminada",
   cancelled: "Cancelada",
 };
 

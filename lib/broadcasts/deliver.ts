@@ -18,7 +18,7 @@ export async function deliverBroadcast(
   params: { workspaceId: string; contactId: string; channelId: string; messageContent: unknown },
 ): Promise<DeliveryResult> {
   const content = parseBroadcastContent(params.messageContent);
-  if (!content) return { ok: false, error: "La difusión no tiene un contenido válido" };
+  if (!content) return { ok: false, error: "La difusión no tiene un contenido válido", general: true };
 
   // Consentimiento al momento de enviar (no el de cuando se lanzó la difusión).
   const { data: contact, error: contactError } = await db
@@ -30,7 +30,7 @@ export async function deliverBroadcast(
   // Si no se puede comprobar, no se envía (queda como fallido, con el motivo).
   if (contactError) {
     console.error("[broadcasts/deliver] consentimiento:", contactError.message);
-    return { ok: false, error: "No se pudo comprobar el consentimiento del contacto. No se envió nada." };
+    return { ok: false, error: "No se pudo comprobar el consentimiento del contacto. No se envió nada.", general: true };
   }
   const decision = contact && !contact.erased_at ? marketingDecision(contact) : null;
   if (!decision || !decision.ok) {

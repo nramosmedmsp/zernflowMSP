@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Radio,
   Plus,
@@ -16,6 +16,8 @@ import {
   ArrowLeft,
   AlertCircle,
   Trash2,
+  Pause,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -32,6 +34,19 @@ import { SegmentSummary } from "@/components/broadcasts/segment-summary";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { deleteBroadcast, updateBroadcastFilter } from "@/lib/actions/broadcasts";
 import { incompleteFilterProblem } from "@/lib/broadcasts/segment";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { BROADCAST_SENDS_PER_PASS, describeBroadcastEta } from "@/lib/broadcasts/pacing";
+import {
+  BROADCAST_STATUS_TEXT,
+  cancelConfirmMessage,
+  cancelledSummary,
+  isBroadcastLive,
+  pauseExplanation,
+  progressFromCounts,
+  progressPercent,
+  waitingCount,
+  type BroadcastProgress,
+} from "@/lib/broadcasts/status";
 import type {
   Database,
   BroadcastStatus,
@@ -46,27 +61,32 @@ const statusConfig: Record<
   { label: string; icon: React.ElementType; className: string }
 > = {
   draft: {
-    label: "Borrador",
+    label: BROADCAST_STATUS_TEXT.draft,
     icon: FileEdit,
     className: "bg-muted text-muted-foreground",
   },
   scheduled: {
-    label: "Programada",
+    label: BROADCAST_STATUS_TEXT.scheduled,
     icon: Clock,
     className: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
   },
   sending: {
-    label: "Enviando",
+    label: BROADCAST_STATUS_TEXT.sending,
     icon: Loader2,
     className: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
   },
+  paused: {
+    label: BROADCAST_STATUS_TEXT.paused,
+    icon: Pause,
+    className: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+  },
   completed: {
-    label: "Completada",
+    label: BROADCAST_STATUS_TEXT.completed,
     icon: CheckCircle2,
     className: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
   },
   cancelled: {
-    label: "Cancelada",
+    label: BROADCAST_STATUS_TEXT.cancelled,
     icon: XCircle,
     className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   },
@@ -75,9 +95,12 @@ const statusConfig: Record<
 export function BroadcastsView({
   broadcasts,
   workspaceId,
+  initialSelectedId = null,
 }: {
   broadcasts: Broadcast[];
   workspaceId: string;
+  /** Difusión que se abre al entrar (por ejemplo, desde un aviso). */
+  initialSelectedId?: string | null;
 }) {
   const toast = useToast();
   const [showCreate, setShowCreate] = useState(false);
@@ -88,7 +111,7 @@ export function BroadcastsView({
     createEmptyFilter()
   );
   const [showSegmentFilter, setShowSegmentFilter] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   const [newKind, setNewKind] = useState<ContentKind>("text");
 
   async function handleCreate() {
@@ -445,6 +468,95 @@ function KindToggle({
   );
 }
 
+/** Estado en palabras claras, barra de avance y conteos por resultado. */
+function BroadcastProgressPanel({ broadcast, progress }: { broadcast: Broadcast; progress: BroadcastProgress | null }) {
+  // Mientras llega la primera consulta se usan los contadores de la propia difusión.
+  const p =
+    progress ??
+    progressFromCounts({
+      sent: broadcast.sent,
+      failed: broadcast.failed,
+      pending: Math.max(0, broadcast.total_recipients - broadcast.sent - broadcast.failed),
+    });
+  const waiting = waitingCount(p);
+  const percent = progressPercent(p);
+
+  let banner: { text: string; className: string } | null = null;
+  if (broadcast.status === "sending") {
+    banner = {
+      text: `Enviando a unos ${BROADCAST_SENDS_PER_PASS} contactos por minuto, para cuidar tu número de WhatsApp. ${
+        waiting > 0 ? `Faltan ${formatNumber(waiting)}: terminará en ${describeBroadcastEta(waiting)}. ` : ""
+      }Esta pantalla se actualiza sola.`,
+      className: "border-yellow-200 bg-yellow-50 text-yellow-900 dark:border-yellow-900/50 dark:bg-yellow-900/10 dark:text-yellow-200",
+    };
+  } else if (broadcast.status === "paused") {
+    banner = {
+      text: `${pauseExplanation(broadcast.paused_reason, broadcast.pause_note)} ${
+        waiting > 0 ? `Faltan ${formatNumber(waiting)} por enviar.` : ""
+      }`.trim(),
+      className:
+        broadcast.paused_reason === "auto_failures"
+          ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-300"
+          : "border-orange-200 bg-orange-50 text-orange-900 dark:border-orange-900/50 dark:bg-orange-900/10 dark:text-orange-200",
+    };
+  } else if (broadcast.status === "cancelled") {
+    banner = {
+      text: `Difusión cancelada: ${formatNumber(p.sent)} ${p.sent === 1 ? "contacto la recibió" : "contactos la recibieron"} y ${formatNumber(p.cancelled)} no ${p.cancelled === 1 ? "la recibirá" : "la recibirán"}.`,
+      className: "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-900/10 dark:text-red-300",
+    };
+  } else if (broadcast.status === "completed") {
+    banner = {
+      text: `La difusión terminó: ${formatNumber(p.sent)} de ${formatNumber(p.total)} ${p.total === 1 ? "contacto recibió" : "contactos recibieron"} el mensaje.`,
+      className: "border-green-200 bg-green-50 text-green-800 dark:border-green-900/50 dark:bg-green-900/10 dark:text-green-300",
+    };
+  }
+
+  const cards: { label: string; value: number; className?: string; hide?: boolean }[] = [
+    { label: "Destinatarios", value: p.total },
+    { label: "Enviados", value: p.sent, className: "text-green-600 dark:text-green-400" },
+    { label: "Pendientes", value: waiting, className: "text-blue-600 dark:text-blue-400" },
+    { label: "Omitidos por baja o sin consentimiento", value: p.skipped, className: "text-amber-600 dark:text-amber-400" },
+    { label: "Fallidos", value: p.failed, className: "text-red-600 dark:text-red-400" },
+    { label: "Cancelados", value: p.cancelled, className: "text-muted-foreground", hide: p.cancelled === 0 },
+  ];
+
+  return (
+    <div className="space-y-3" aria-live="polite">
+      {banner && <div className={cn("rounded-lg border px-4 py-3 text-sm", banner.className)}>{banner.text}</div>}
+      <div>
+        <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+          <span>Avance</span>
+          <span>{percent}%</span>
+        </div>
+        <div
+          className="h-2 overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-valuenow={percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Avance de la difusión"
+        >
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {cards
+          .filter((c) => !c.hide)
+          .map((c) => (
+            <div key={c.label} className="rounded-lg border border-border bg-card p-3 text-center sm:p-4">
+              <p className={cn("text-xl font-bold sm:text-2xl", c.className)}>{formatNumber(c.value)}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{c.label}</p>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+type ControlAction = "pause" | "resume" | "cancel";
+/** Cada cuánto se actualiza sola la pantalla de una difusión que está enviando. */
+const PROGRESS_POLL_MS = 5_000;
+
 function BroadcastDetail({
   broadcast,
   workspaceId,
@@ -487,6 +599,15 @@ function BroadcastDetail({
   const [savingFilter, setSavingFilter] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const viewAs = useViewAs();
+  const [progress, setProgress] = useState<BroadcastProgress | null>(null);
+  const [acting, setActing] = useState<ControlAction | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  // Siempre la última versión, para que el avance automático no use datos viejos.
+  const latest = useRef({ broadcast, onUpdate });
+  useEffect(() => {
+    latest.current = { broadcast, onUpdate };
+  });
 
   const isDraft = broadcast.status === "draft" || broadcast.status === "scheduled";
   const status = statusConfig[broadcast.status];
@@ -539,6 +660,77 @@ function BroadcastDetail({
       cancelled = true;
     };
   }, [broadcast.id, broadcast.status, broadcast.sent, broadcast.failed, isDraft]);
+
+  const isLive = isBroadcastLive(broadcast.status);
+
+  // Avance real (por estado de cada destinatario). Se consulta solo mientras la difusión envía o está en pausa.
+  const refreshProgress = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/v1/broadcasts/${broadcast.id}/progress`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        progress: BroadcastProgress;
+        broadcast: Pick<Broadcast, "status" | "sent" | "delivered" | "failed" | "total_recipients" | "paused_reason" | "pause_note" | "paused_at">;
+      };
+      setProgress(data.progress);
+      const current = latest.current.broadcast;
+      const b = data.broadcast;
+      if (
+        b.status !== current.status ||
+        b.sent !== current.sent ||
+        b.failed !== current.failed ||
+        b.paused_reason !== current.paused_reason ||
+        b.pause_note !== current.pause_note
+      ) {
+        latest.current.onUpdate({ ...current, ...b });
+      }
+    } catch {
+      // Sin conexión un momento: la próxima consulta lo corrige.
+    }
+  }, [broadcast.id]);
+
+  useEffect(() => {
+    if (broadcast.status === "draft" || broadcast.status === "scheduled") return;
+    void refreshProgress();
+    if (!isLive) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void refreshProgress();
+    }, PROGRESS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [broadcast.id, broadcast.status, isLive, refreshProgress]);
+
+  async function runControl(action: ControlAction) {
+    setActing(action);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await fetch(`/api/v1/broadcasts/${broadcast.id}/${action}`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "No se pudo completar la operación. Inténtalo de nuevo.");
+      const next = data.progress as BroadcastProgress;
+      setProgress(next);
+      onUpdate({ ...broadcast, status: data.status });
+      const message =
+        action === "pause"
+          ? "Difusión en pausa. Dejará de enviar en menos de un minuto; lo ya enviado queda enviado."
+          : action === "resume"
+            ? "Difusión reanudada. Sigue con los pendientes, sin repetir a nadie."
+            : cancelledSummary(next);
+      setSuccess(message);
+      toast.success(message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo completar la operación. Inténtalo de nuevo.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setActing(null);
+    }
+  }
+
+  function askCancel() {
+    setConfirmCancel(true);
+    void refreshProgress(); // cifras al momento de confirmar
+  }
 
   function changeKind(next: ContentKind) {
     setKind(next);
@@ -685,17 +877,18 @@ function BroadcastDetail({
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="border-b border-border px-8 py-6">
-        <div className="flex items-center gap-4">
+      <div className="border-b border-border px-4 py-4 sm:px-8 sm:py-6">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <button
             onClick={onBack}
+            aria-label="Volver a las difusiones"
             className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <ArrowLeft className="h-5 w-5" />
           </button>
-          <div className="flex-1">
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold">{broadcast.name}</h1>
+          <div className="min-w-0 flex-1 basis-48">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="min-w-0 break-words text-xl font-bold sm:text-2xl">{broadcast.name}</h1>
               <span
                 className={cn(
                   "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
@@ -715,6 +908,58 @@ function BroadcastDetail({
               Creada el {formatDateTime(broadcast.created_at)}
             </p>
           </div>
+          {isLive && (
+            <div className="flex flex-wrap items-center gap-2">
+              {broadcast.status === "sending" && (
+                <button
+                  onClick={() => runControl("pause")}
+                  disabled={acting !== null || viewAs.active}
+                  title={viewAs.active ? (viewAs.blockedNotice ?? undefined) : "Deja de enviar; lo ya enviado queda enviado"}
+                  className="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {acting === "pause" ? <Spinner /> : <Pause className="h-4 w-4" />}
+                  {acting === "pause" ? "Pausando…" : "Pausar"}
+                </button>
+              )}
+              {broadcast.status === "paused" && (
+                <button
+                  onClick={() => runControl("resume")}
+                  disabled={acting !== null || viewAs.active}
+                  title={viewAs.active ? (viewAs.blockedNotice ?? undefined) : "Sigue con los pendientes, sin repetir a nadie"}
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {acting === "resume" ? <Spinner /> : <Play className="h-4 w-4" />}
+                  {acting === "resume" ? "Reanudando…" : "Reanudar"}
+                </button>
+              )}
+              <button
+                onClick={askCancel}
+                disabled={acting !== null || viewAs.active}
+                title={viewAs.active ? (viewAs.blockedNotice ?? undefined) : "Los que faltan no recibirán el mensaje"}
+                className="inline-flex items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                {acting === "cancel" ? <Spinner /> : <XCircle className="h-4 w-4" />}
+                {acting === "cancel" ? "Cancelando…" : "Cancelar difusión"}
+              </button>
+              <ConfirmDialog
+                open={confirmCancel}
+                title="Cancelar difusión"
+                message={
+                  progress
+                    ? cancelConfirmMessage(progress)
+                    : "Calculando cuántos contactos ya recibieron el mensaje…"
+                }
+                confirmLabel="Sí, cancelar difusión"
+                cancelLabel="Volver"
+                destructive
+                onConfirm={() => {
+                  setConfirmCancel(false);
+                  void runControl("cancel");
+                }}
+                onCancel={() => setConfirmCancel(false)}
+              />
+            </div>
+          )}
           {isDraft && (
             <>
               <button
@@ -743,28 +988,11 @@ function BroadcastDetail({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto px-8 py-6">
+      <div className="flex-1 overflow-auto px-4 py-4 sm:px-8 sm:py-6">
         <div className="mx-auto max-w-2xl space-y-6">
-          {/* Estadísticas de difusiones que no son borrador */}
-          {broadcast.total_recipients > 0 && (
-            <div className="grid grid-cols-4 gap-4">
-              <div className="rounded-lg border border-border bg-card p-4 text-center">
-                <p className="text-2xl font-bold">{formatNumber(broadcast.total_recipients)}</p>
-                <p className="text-xs text-muted-foreground">Destinatarios</p>
-              </div>
-              <div className="rounded-lg border border-border bg-card p-4 text-center">
-                <p className="text-2xl font-bold text-green-600">{formatNumber(broadcast.sent)}</p>
-                <p className="text-xs text-muted-foreground">Enviados</p>
-              </div>
-              <div className="rounded-lg border border-border bg-card p-4 text-center">
-                <p className="text-2xl font-bold text-blue-600">{formatNumber(broadcast.delivered)}</p>
-                <p className="text-xs text-muted-foreground">Entregados</p>
-              </div>
-              <div className="rounded-lg border border-border bg-card p-4 text-center">
-                <p className="text-2xl font-bold text-red-600">{formatNumber(broadcast.failed)}</p>
-                <p className="text-xs text-muted-foreground">Fallidos</p>
-              </div>
-            </div>
+          {/* Estado y avance real de una difusión que ya salió */}
+          {!isDraft && (broadcast.total_recipients > 0 || progress) && (
+            <BroadcastProgressPanel broadcast={broadcast} progress={progress} />
           )}
 
           {/* Envíos fallidos con su motivo */}
@@ -934,6 +1162,12 @@ function BroadcastDetail({
                   ? "Ningún contacto cumple el filtro."
                   : `Recibirán la difusión ${formatNumber(preview.willReceive)} ${preview.willReceive === 1 ? "contacto" : "contactos"}`}
               </p>
+              {preview.willReceive > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Se envía a unos {BROADCAST_SENDS_PER_PASS} contactos por minuto para cuidar tu número de WhatsApp: tardará{" "}
+                  {describeBroadcastEta(preview.willReceive)}. Puedes pausarla o cancelarla mientras tanto.
+                </p>
+              )}
               {preview.excludedTotal > 0 && (
                 <p className="text-sm text-amber-700 dark:text-amber-400">
                   Quedan fuera {formatNumber(preview.excludedTotal)}: {preview.excludedReasons.join("; ")}.

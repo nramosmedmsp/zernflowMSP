@@ -33,6 +33,11 @@ export type DeliveryResult =
       error: string;
       /** No es un fallo: el contacto ya no puede recibir publicidad (baja o sin consentimiento) y no se le envió nada. */
       skipped?: true;
+      /**
+       * El fallo no depende de este contacto (Zernio o WhatsApp rechazaron el envío, falta la clave, no se pudo
+       * consultar la base): si pasa muchas veces seguidas, la difusión se pausa sola.
+       */
+      general?: true;
     };
 
 export async function loadDeliveryContext(
@@ -92,7 +97,7 @@ export async function sendTextToContact(
     lateAccountId: ctx.channel.late_account_id,
     text: rendered.text,
   });
-  if (!sent.ok) return { ok: false, error: sent.error };
+  if (!sent.ok) return { ok: false, error: sent.error, general: true };
   await stampBotOutbound(db, { contactId: ctx.contactId });
   return { ok: true, messageId: sent.messageId, text: rendered.text };
 }
@@ -141,7 +146,7 @@ export async function sendTemplateToContact(
     language: template.language,
     params: built.params,
   });
-  if (!sent.ok) return { ok: false, error: sent.error };
+  if (!sent.ok) return { ok: false, error: sent.error, general: true };
 
   if (ctx.conversation) {
     const at = new Date().toISOString();

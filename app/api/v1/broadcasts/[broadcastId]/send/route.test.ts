@@ -50,11 +50,11 @@ describe("POST /api/v1/broadcasts/:id/send", () => {
     expect(fake.rows("scheduled_jobs")).toHaveLength(0);
   });
 
-  it("un administrador la envía: un destinatario y un trabajo por contacto", async () => {
+  it("un administrador la envía: un destinatario pendiente por contacto (el cron envía a su ritmo)", async () => {
     const res = await call();
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ broadcastId, totalRecipients: 1, status: "sending" });
-    expect(fake.rows("scheduled_jobs")).toHaveLength(1);
+    expect(fake.rows("broadcast_recipients")).toMatchObject([{ status: "pending" }]);
   });
 
   it("enviar otra vez la misma difusión no repite los envíos", async () => {
@@ -62,7 +62,6 @@ describe("POST /api/v1/broadcasts/:id/send", () => {
     const second = await call();
     expect(second.status).toBeGreaterThanOrEqual(400);
     expect(fake.rows("broadcast_recipients")).toHaveLength(1);
-    expect(fake.rows("scheduled_jobs")).toHaveLength(1);
   });
 
   it("una difusión que no existe responde 404", async () => {

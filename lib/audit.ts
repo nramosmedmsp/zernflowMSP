@@ -18,6 +18,10 @@ export type AuditAction =
   | "channel_deleted"
   | "channel_toggled"
   | "broadcast_launched"
+  | "broadcast_paused"
+  | "broadcast_resumed"
+  | "broadcast_cancelled"
+  | "broadcast_auto_paused"
   | "data_exported"
   | "workspace_settings_changed"
   | "flow_deleted"
@@ -27,7 +31,8 @@ export type AuditEntity = "team" | "secrets" | "channel" | "broadcast" | "export
 
 export interface AuditInput {
   workspaceId: string;
-  actorId: string;
+  /** Quién lo hizo; `null` cuando lo hace el sistema (por ejemplo, una pausa automática). */
+  actorId: string | null;
   action: AuditAction;
   entity: AuditEntity;
   fromValue?: string | null;
