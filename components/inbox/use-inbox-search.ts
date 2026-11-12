@@ -39,7 +39,8 @@ export function useInboxSearch({
     onResultsRef.current = onResults;
   }, [onResults]);
 
-  const query = text.trim();
+  // Espacios dobles o al borde: el nombre guardado lleva uno solo.
+  const query = text.replace(/\s+/g, " ").trim();
   const active = shouldSearchServer(query);
 
   useEffect(() => {

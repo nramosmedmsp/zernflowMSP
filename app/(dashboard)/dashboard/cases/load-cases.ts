@@ -106,7 +106,7 @@ async function filteredQuery<C extends string>(
   // tildes ni ñ ni formato, con índice y el mismo permiso que la tabla.
   const source = params.q
     ? (db
-        .rpc("search_cases", { p_workspace: workspaceId, p_q: params.q }, withCount ? { count: "exact" } : undefined)
+        .rpc("search_cases", { p_workspace: workspaceId, p_q: params.q.replace(/\s+/g, " ").trim() }, withCount ? { count: "exact" } : undefined)
         .select(columns) as unknown as typeof fromTable)
     : fromTable;
   let query = source.eq("workspace_id", workspaceId);

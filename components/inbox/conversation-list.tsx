@@ -285,7 +285,7 @@ export function ConversationList({
       )}
 
       {/* Estado: qué hay que hacer */}
-      <div className="flex gap-1 px-3 pt-2">
+      <div className="flex flex-wrap gap-1 px-3 pt-2">
         {INBOX_STATES.map((st) => {
           const count = st === "all" ? 0 : countByState.get(st)?.length ?? 0;
           const active = state === st;

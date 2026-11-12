@@ -135,6 +135,13 @@ describe("Gestiones por cliente: agrupación y conteos", () => {
     expect(res.groups.map((g) => g.contactName)).toEqual(["Patricia Salas"]);
   });
 
+  it("la búsqueda ignora espacios dobles y de los bordes (el nombre guardado lleva uno solo)", async () => {
+    openCase(contact("Patricia Salas"), venta);
+    openCase(contact("Jorge Cáceres"), venta);
+    const res = await byClient({ q: "  patricia   salas " });
+    expect(res.groups.map((g) => g.contactName)).toEqual(["Patricia Salas"]);
+  });
+
   it("en Abiertas, una programada del mismo cliente aparece como contexto, no resaltada", async () => {
     const c = contact("Rosa");
     openCase(c, venta);

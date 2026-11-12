@@ -196,11 +196,12 @@ function MessageBubble({
               Enviando…
             </span>
           ) : failed && outboxId ? (
-            <span role="alert" className="inline-flex items-center gap-1.5 text-destructive">
-              <AlertCircle className="h-3 w-3" />
+            <span role="alert" className="inline-flex items-start gap-1.5 text-destructive">
+              <AlertCircle className="mt-px h-3 w-3 flex-shrink-0" />
               {isSessionExpired(message.error) ? (
-                <>
-                  Tu sesión venció.
+                // Un solo bloque de texto corrido: como hijos sueltos del flex se partía en columnas.
+                <span className="max-w-[18rem] text-right leading-snug">
+                  Tu sesión venció.{" "}
                   <a
                     href={loginHref(typeof window === "undefined" ? "/dashboard/inbox" : `${window.location.pathname}${window.location.search}`)}
                     target="_blank"
@@ -208,9 +209,9 @@ function MessageBubble({
                     className="font-medium underline underline-offset-2 hover:no-underline"
                   >
                     Iniciar sesión (se abre en otra pestaña)
-                  </a>
+                  </a>{" "}
                   y luego
-                </>
+                </span>
               ) : (
                 "No se envió"
               )}
