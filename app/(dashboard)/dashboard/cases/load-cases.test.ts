@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { FakeDb } from "@/lib/cases/fake-db.test-helper";
 import { DEFAULT_CASE_PARAMS, CASES_PAGE_SIZE, type CaseListParams } from "@/components/cases/case-filters";
-import { loadCases, loadCasesByClient, type DeadlineInfo } from "./load-cases";
+import { BOARD_COLUMN_LIMIT } from "@/components/cases/board-model";
+import { loadBoard, loadCases, loadCasesByClient, type DeadlineInfo } from "./load-cases";
 
 const WS = randomUUID();
 const USER = randomUUID();
@@ -257,5 +258,163 @@ describe("Gestiones por cliente: paginación por cliente", () => {
     expect(res.totalClients).toBe(total);
     expect(res.totalCases).toBe(total * 2);
     expect(res.truncated).toBe(false);
+  });
+});
+
+// ── Vista "Tablero" ────────────────────────────────────────────────────────
+
+describe("Tablero: carga de las gestiones abiertas de un tipo", () => {
+  let stages: Record<string, string>;
+  const otherUser = randomUUID();
+
+  function board(extra: Partial<CaseListParams> = {}, over: { canSeeOthers?: boolean; userId?: string } = {}) {
+    return loadBoard(db.asDb() as never, {
+      workspaceId: WS,
+      userId: over.userId ?? USER,
+      canSeeOthers: over.canSeeOthers ?? true,
+      params: params({ view: "board", ...extra }),
+      now: NOW,
+      caseTypes: [
+        { id: venta, name: "Venta", color: null },
+        { id: postventa, name: "Postventa", color: null },
+        { id: consulta, name: "Consulta", color: null },
+      ],
+      solutionSchedules: null,
+    });
+  }
+
+  beforeEach(() => {
+    const rows = db.seed("case_stages", [
+      { case_type_id: venta, name: "Nuevo", kind: "open", position: 0 },
+      { case_type_id: venta, name: "Asesorando", kind: "open", position: 1 },
+      { case_type_id: venta, name: "Vieja", kind: "open", position: 2, archived_at: NOW.toISOString() },
+      { case_type_id: venta, name: "Pagado", kind: "won", position: 3 },
+      { case_type_id: venta, name: "No compró", kind: "lost", position: 4 },
+      { case_type_id: postventa, name: "Nueva", kind: "open", position: 0 },
+    ]);
+    stages = Object.fromEntries(rows.map((r) => [r.name as string, r.id as string]));
+  });
+
+  it("elige por defecto el primer tipo con gestiones y devuelve sus columnas en orden, sin etapas archivadas ni finales como columna", async () => {
+    openCase(contact("Ana"), postventa, { stage_id: stages["Nueva"] });
+    const res = await board();
+    expect(res.type?.id).toBe(postventa);
+    expect(res.chips.map((c) => [c.name, c.count])).toEqual([["Venta", 0], ["Postventa", 1], ["Consulta", 0]]);
+    expect(res.cards).toHaveLength(1);
+  });
+
+  it("respeta el tipo de la URL y agrupa/cuenta por etapa; lo sin etapa cae en la primera columna", async () => {
+    openCase(contact("Ana"), venta, { stage_id: stages["Nuevo"] });
+    openCase(contact("Beto"), venta, { stage_id: stages["Asesorando"] });
+    openCase(contact("Carla"), venta, { stage_id: stages["Asesorando"] });
+    openCase(contact("Dani"), venta, { stage_id: null });
+    openCase(contact("Eva"), postventa, { stage_id: stages["Nueva"] });
+    const res = await board({ type: venta });
+    expect(res.type?.name).toBe("Venta");
+    expect(res.total).toBe(4);
+    expect(res.columnTotals).toEqual({ [stages["Nuevo"]]: 2, [stages["Asesorando"]]: 2 });
+    expect(res.stages.map((s) => s.name)).toContain("Pagado");
+    expect(res.cards.map((c) => c.contactName).sort()).toEqual(["Ana", "Beto", "Carla", "Dani"]);
+  });
+
+  it("un tipo inválido o inexistente en la URL cae al de por defecto", async () => {
+    openCase(contact("Ana"), venta, { stage_id: stages["Nuevo"] });
+    expect((await board({ type: "none" })).type?.id).toBe(venta);
+    expect((await board({ type: randomUUID() })).type?.id).toBe(venta);
+  });
+
+  it("solo abiertas: las programadas y las cerradas no salen", async () => {
+    const a = contact("Ana");
+    openCase(a, venta, { stage_id: stages["Nuevo"] });
+    openCase(contact("Beto"), venta, { stage_id: stages["Nuevo"], status: "scheduled" });
+    openCase(contact("Cata"), venta, { stage_id: stages["Nuevo"], status: "won", closed_at: hoursAgo(1) });
+    const res = await board({ type: venta });
+    expect(res.cards.map((c) => c.contactName)).toEqual(["Ana"]);
+    expect(res.chips.find((c) => c.id === venta)?.count).toBe(1);
+  });
+
+  it("en Para hoy, solo las mías con próximo contacto vencido o de hoy (un asesor no ve las de otros)", async () => {
+    const mine = openCase(contact("Mía"), venta, { stage_id: stages["Nuevo"], assignee_id: USER, next_action_at: hoursAgo(2) });
+    openCase(contact("Futura"), venta, { stage_id: stages["Nuevo"], assignee_id: USER, next_action_at: new Date(NOW.getTime() + 5 * 86_400_000).toISOString() });
+    openCase(contact("Ajena"), venta, { stage_id: stages["Nuevo"], assignee_id: otherUser, next_action_at: hoursAgo(2) });
+    const res = await board({ type: venta, tab: "today" }, { canSeeOthers: false });
+    expect(res.cards.map((c) => c.id)).toEqual([mine]);
+  });
+
+  it("aplica los filtros de responsable, equipo y búsqueda como las otras vistas", async () => {
+    const team = randomUUID();
+    openCase(contact("Patricia Salas"), venta, { stage_id: stages["Nuevo"], assignee_id: USER, team_id: team });
+    openCase(contact("Jorge Cáceres"), venta, { stage_id: stages["Nuevo"], assignee_id: otherUser });
+    expect((await board({ type: venta, q: "salas" })).cards.map((c) => c.contactName)).toEqual(["Patricia Salas"]);
+    expect((await board({ type: venta, assignee: "me" })).cards.map((c) => c.contactName)).toEqual(["Patricia Salas"]);
+    expect((await board({ type: venta, team })).cards.map((c) => c.contactName)).toEqual(["Patricia Salas"]);
+    expect((await board({ type: venta, assignee: otherUser })).cards.map((c) => c.contactName)).toEqual(["Jorge Cáceres"]);
+  });
+
+  it("los conteos del tablero cuadran con la vista Por gestión (mismos filtros)", async () => {
+    openCase(contact("Ana"), venta, { stage_id: stages["Nuevo"] });
+    openCase(contact("Beto"), venta, { stage_id: stages["Asesorando"] });
+    openCase(contact("Cata"), postventa, { stage_id: stages["Nueva"] });
+    for (const filters of [{ type: venta }, { type: postventa }, { type: venta, q: "an" }]) {
+      const b = await board(filters);
+      const flat = await byCase(filters);
+      expect(b.total).toBe(flat.total);
+    }
+  });
+
+  it("trae cliente, canal, último mensaje, categoría y permisos mínimos de cada tarjeta", async () => {
+    const c = contact("Ana");
+    db.seed("conversations", [{ workspace_id: WS, contact_id: c, platform: "whatsapp", last_message_preview: "¿Tienen stock?", last_message_at: hoursAgo(1) }]);
+    const cat = randomUUID();
+    openCase(c, venta, { stage_id: stages["Nuevo"], category_id: cat, assignee_id: USER, next_action_note: "Llamar" });
+    const [card] = (await board({ type: venta })).cards;
+    expect(card).toMatchObject({
+      contactName: "Ana",
+      platform: "whatsapp",
+      preview: "¿Tienen stock?",
+      hasConversation: true,
+      categoryId: cat,
+      assigneeId: USER,
+      nextActionNote: "Llamar",
+      stageId: stages["Nuevo"],
+    });
+  });
+
+  it("limita las tarjetas por columna y dice cuántas hay en total", async () => {
+    for (let i = 0; i < BOARD_COLUMN_LIMIT + 5; i++) openCase(contact(`C${i}`), venta, { stage_id: stages["Nuevo"] });
+    openCase(contact("Otra"), venta, { stage_id: stages["Asesorando"] });
+    const res = await board({ type: venta });
+    expect(res.columnTotals[stages["Nuevo"]]).toBe(BOARD_COLUMN_LIMIT + 5);
+    expect(res.cards.filter((c) => c.stageId === stages["Nuevo"])).toHaveLength(BOARD_COLUMN_LIMIT);
+    expect(res.cards.filter((c) => c.stageId === stages["Asesorando"])).toHaveLength(1);
+    expect(res.total).toBe(BOARD_COLUMN_LIMIT + 6);
+  });
+
+  it("la columna se queda con las más urgentes (reclamo vencido antes que espera larga)", async () => {
+    const stage = stages["Nueva"];
+    const vencida = openCase(contact("Vencida"), postventa, { stage_id: stage, opened_at: hoursAgo(10), waiting_since: hoursAgo(1) });
+    const larga = openCase(contact("Larga"), postventa, { stage_id: stage, opened_at: hoursAgo(1), waiting_since: hoursAgo(30) });
+    const res = await loadBoard(db.asDb() as never, {
+      workspaceId: WS,
+      userId: USER,
+      canSeeOthers: true,
+      params: params({ view: "board", type: postventa }),
+      now: NOW,
+      caseTypes: [{ id: postventa, name: "Postventa", color: null }],
+      solutionSchedules: null,
+    });
+    // Postventa tiene plazo de 4 h: la vencida (abierta hace 10 h) va primero al recortar.
+    expect(res.cards.map((c) => c.id).sort()).toEqual([vencida, larga].sort());
+    expect(res.type?.solutionDeadlineHours).toBe(4);
+  });
+
+  it("sin tipos activos o sin etapas abiertas no falla", async () => {
+    const none = await loadBoard(db.asDb() as never, {
+      workspaceId: WS, userId: USER, canSeeOthers: true, params: params({ view: "board" }), now: NOW, caseTypes: [], solutionSchedules: null,
+    });
+    expect(none).toMatchObject({ type: null, cards: [], total: 0, chips: [] });
+    const noStages = await board({ type: consulta });
+    expect(noStages.type?.id).toBe(consulta);
+    expect(noStages.cards).toEqual([]);
   });
 });

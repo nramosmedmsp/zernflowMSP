@@ -20,6 +20,8 @@ import {
   type UrgencyCase,
 } from "@/lib/cases/client-groups";
 import { solutionScheduleFor, type SolutionSchedules } from "@/lib/cases/protection";
+import { BOARD_COLUMN_LIMIT, boardOpenStages, groupByStage, resolveBoardType, type BoardTypeChip } from "@/components/cases/board-model";
+import { loadGuideStages, type GuideStage } from "@/lib/cases/guide";
 import type { CaseOrigin, CaseStatus, Database } from "@/lib/types/database";
 
 export interface CaseListRow {
@@ -440,4 +442,237 @@ export async function loadCasesByClient(
   });
 
   return { groups, totalClients: paged.totalClients, totalCases: paged.totalCases, page: paged.page, truncated };
+}
+
+// ── Vista "Tablero" ────────────────────────────────────────────────────────
+//
+// Gestiones ABIERTAS de un solo tipo, una columna por etapa abierta. Mismo
+// cliente de supabase (la RLS decide qué ve cada quien) y mismos filtros que las
+// otras vistas (pestaña, responsable, equipo, búsqueda); el tipo lo elige el
+// tablero y la etapa no aplica. Como en "Por cliente", primero se leen en tandas
+// solo las columnas livianas (para contar y ordenar por urgencia) y únicamente de
+// las primeras BOARD_COLUMN_LIMIT de cada columna se leen el detalle, el nombre
+// del cliente, el canal y el último mensaje.
+
+export interface BoardCardRow {
+  id: string;
+  contactId: string;
+  contactName: string | null;
+  platform: ClientGroup["platform"];
+  /** Último mensaje de la conversación (texto corto). */
+  preview: string | null;
+  hasConversation: boolean;
+  stageId: string | null;
+  categoryId: string | null;
+  assigneeId: string | null;
+  teamId: string | null;
+  contactTeamId: string | null;
+  status: CaseStatus;
+  openedAt: string | null;
+  createdAt: string | null;
+  waitingSince: string | null;
+  nextActionAt: string | null;
+  nextActionNote: string | null;
+  scheduledFor: string | null;
+  closedAt: string | null;
+  solutionStatus: string | null;
+  solutionNote: string | null;
+  solutionClockAt: string | null;
+  hasCloseRequest: boolean;
+}
+
+export interface BoardTypeInfo {
+  id: string;
+  name: string;
+  color: string | null;
+  strictOrder: boolean;
+  isProtected: boolean;
+  hasCategories: boolean;
+  solutionDeadlineHours: number | null;
+}
+
+export interface BoardResult {
+  /** Tipos activos con sus gestiones abiertas (los chips). */
+  chips: BoardTypeChip[];
+  type: BoardTypeInfo | null;
+  /** Todas las etapas del tipo (con la guía): columnas y resultados de cierre. */
+  stages: GuideStage[];
+  /** Hasta BOARD_COLUMN_LIMIT por columna. */
+  cards: BoardCardRow[];
+  /** Total real por columna (id de etapa abierta). */
+  columnTotals: Record<string, number>;
+  total: number;
+}
+
+const BOARD_DETAIL_COLUMNS = `${FULL_COLUMNS}, category_id`;
+
+export async function loadBoard(
+  db: Db,
+  args: {
+    workspaceId: string;
+    userId: string;
+    canSeeOthers: boolean;
+    params: CaseListParams;
+    now: Date;
+    /** Tipos activos, en el orden de Configuración. */
+    caseTypes: { id: string; name: string; color: string | null }[];
+  } & Pick<DeadlineInfo, "solutionSchedules">,
+): Promise<BoardResult> {
+  const { workspaceId, userId, canSeeOthers, now } = args;
+  const base: CaseListParams = { ...args.params, stage: "", page: 1 };
+  const empty: BoardResult = { chips: [], type: null, stages: [], cards: [], columnTotals: {}, total: 0 };
+
+  // 1. Chips: cuántas gestiones abiertas ve la persona de cada tipo activo.
+  const counts = await Promise.all(
+    args.caseTypes.map(async (t) => {
+      const { query } = await filteredQuery(db, workspaceId, userId, canSeeOthers, { ...base, type: t.id }, now, "id, contacts!inner(id)", true);
+      const res = await query.range(0, 0);
+      if (res.error) console.error("[cases] board count", res.error.message);
+      return res.error ? 0 : (res.count ?? 0);
+    }),
+  );
+  const chips: BoardTypeChip[] = args.caseTypes.map((t, i) => ({ id: t.id, name: t.name, color: t.color, count: counts[i] }));
+  const selectedId = resolveBoardType(chips, base.type);
+  if (!selectedId) return empty;
+
+  // 2. El tipo, sus etapas y si tiene categorías.
+  const [typeRes, stages, categoriesRes] = await Promise.all([
+    db.from("case_types").select("*").eq("id", selectedId).eq("workspace_id", workspaceId).maybeSingle(),
+    loadGuideStages(db, selectedId),
+    db.from("case_categories").select("id").eq("case_type_id", selectedId).is("archived_at", null).limit(1),
+  ]);
+  const t = typeRes.data;
+  if (!t) return { ...empty, chips };
+  const type: BoardTypeInfo = {
+    id: t.id,
+    name: t.name,
+    color: t.color,
+    strictOrder: t.strict_order ?? false,
+    isProtected: t.protected ?? false,
+    hasCategories: (categoriesRes.data ?? []).length > 0,
+    solutionDeadlineHours: t.solution_deadline_hours ?? null,
+  };
+  const columns = boardOpenStages(stages);
+  const columnIds = columns.map((c) => c.id);
+  const result = (cards: BoardCardRow[], columnTotals: Record<string, number>, total: number): BoardResult => ({
+    chips,
+    type,
+    stages,
+    cards,
+    columnTotals,
+    total,
+  });
+  if (columnIds.length === 0) return result([], {}, 0);
+
+  // 3. Gestiones abiertas del tipo (columnas livianas, en tandas) y orden por urgencia.
+  const tab = args.params.tab;
+  const light: (LightRow & { stage_id: string | null })[] = [];
+  for (let from = 0; from < MAX_GROUPED_CASES; from += READ_CHUNK) {
+    const { query } = await filteredQuery(
+      db,
+      workspaceId,
+      userId,
+      canSeeOthers,
+      { ...base, type: selectedId },
+      now,
+      `${LIGHT_COLUMNS}, stage_id`,
+      false,
+    );
+    const res = await query
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .range(from, from + READ_CHUNK - 1);
+    if (res.error) {
+      console.error("[cases] board list", res.error.message);
+      return result([], {}, 0);
+    }
+    const part = (res.data ?? []) as unknown as (LightRow & { stage_id: string | null })[];
+    light.push(...part);
+    if (part.length < READ_CHUNK) break;
+  }
+  const urgent = light.map((r) => ({
+    id: r.id,
+    contactId: r.contact_id,
+    stageId: r.stage_id,
+    status: r.status,
+    openedAt: r.opened_at,
+    waitingSince: r.waiting_since,
+    nextActionAt: r.next_action_at,
+    scheduledFor: r.scheduled_for,
+    closedAt: r.closed_at,
+    createdAt: r.created_at,
+    solutionStatus: r.solution_status,
+    solutionNote: r.solution_note,
+    solutionClockAt: r.solution_clock_at,
+    deadlineHours: type.solutionDeadlineHours,
+    schedule: solutionScheduleFor(args.solutionSchedules, r.team_id),
+  }));
+  const grouped = groupByStage(urgent, columnIds, tab, now);
+  const columnTotals: Record<string, number> = {};
+  const keep: string[] = [];
+  for (const [id, list] of grouped) {
+    columnTotals[id] = list.length;
+    keep.push(...list.slice(0, BOARD_COLUMN_LIMIT).map((c) => c.id));
+  }
+  if (keep.length === 0) return result([], columnTotals, light.length);
+
+  // 4. Detalle de las que se muestran, nombre, canal y último mensaje.
+  const full: FullRow[] = [];
+  for (const ids of chunk(keep, ID_CHUNK)) {
+    const res = await db.from("cases").select(BOARD_DETAIL_COLUMNS).eq("workspace_id", workspaceId).in("id", ids);
+    if (res.error) {
+      console.error("[cases] board detail", res.error.message);
+      return result([], columnTotals, light.length);
+    }
+    full.push(...((res.data ?? []) as unknown as FullRow[]));
+  }
+  const contactIds = [...new Set(full.map((r) => r.contact_id))];
+  const contactById = new Map<string, { display_name: string | null; team_id: string | null }>();
+  const convByContact = new Map<string, { platform: ClientGroup["platform"]; last_message_preview: string | null }>();
+  for (const ids of chunk(contactIds, ID_CHUNK)) {
+    const [contactsRes, convRes] = await Promise.all([
+      db.from("contacts").select("id, display_name, team_id").in("id", ids),
+      db
+        .from("conversations")
+        .select("contact_id, platform, last_message_preview, last_message_at")
+        .in("contact_id", ids)
+        .order("last_message_at", { ascending: false, nullsFirst: false }),
+    ]);
+    for (const c of contactsRes.data ?? []) contactById.set(c.id, c);
+    for (const c of convRes.data ?? []) if (!convByContact.has(c.contact_id)) convByContact.set(c.contact_id, c);
+  }
+  const byId = new Map(full.map((r) => [r.id, r]));
+  const cards: BoardCardRow[] = [];
+  for (const id of keep) {
+    const r = byId.get(id) as (FullRow & { category_id?: string | null }) | undefined;
+    if (!r) continue;
+    const contact = contactById.get(r.contact_id);
+    const conv = convByContact.get(r.contact_id);
+    cards.push({
+      id: r.id,
+      contactId: r.contact_id,
+      contactName: contact?.display_name ?? null,
+      platform: conv?.platform ?? null,
+      preview: conv?.last_message_preview ?? null,
+      hasConversation: !!conv,
+      stageId: r.stage_id,
+      categoryId: r.category_id ?? null,
+      assigneeId: r.assignee_id,
+      teamId: r.team_id,
+      contactTeamId: contact?.team_id ?? null,
+      status: r.status,
+      openedAt: r.opened_at,
+      createdAt: r.created_at,
+      waitingSince: r.waiting_since,
+      nextActionAt: r.next_action_at,
+      nextActionNote: r.next_action_note,
+      scheduledFor: r.scheduled_for,
+      closedAt: r.closed_at,
+      solutionStatus: r.solution_status,
+      solutionNote: r.solution_note,
+      solutionClockAt: r.solution_clock_at,
+      hasCloseRequest: r.close_request !== null && r.close_request !== undefined,
+    });
+  }
+  return result(cards, columnTotals, light.length);
 }

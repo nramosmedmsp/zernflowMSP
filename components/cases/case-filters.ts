@@ -43,16 +43,20 @@ export function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_RE.test(value);
 }
 
-/** Vista de la lista: una fila por cliente (por defecto) o una por gestión. */
-export type CaseView = "client" | "case";
+/** Vista de la lista: una fila por cliente (por defecto), una por gestión o el tablero por etapas. */
+export type CaseView = "client" | "case" | "board";
 export const CASE_VIEWS: readonly { key: CaseView; label: string }[] = [
   { key: "client", label: "Por cliente" },
   { key: "case", label: "Por gestión" },
+  { key: "board", label: "Tablero" },
 ];
 
 export interface CaseListParams {
   tab: CaseTab;
-  /** Parámetro de URL `view`: "case" = Por gestión; ausente o inválido = Por cliente. */
+  /**
+   * Parámetro de URL `view`: "case" = Por gestión; "board" = Tablero (solo gestiones
+   * abiertas: en Programadas y Cerradas vuelve a Por cliente); ausente o inválido = Por cliente.
+   */
   view: CaseView;
   /** Id del tipo de gestión, "none" (sin clasificar) o "". */
   type: string;
@@ -96,9 +100,11 @@ export function parseCaseListParams(raw: RawParams): CaseListParams {
   const assignee = first(raw.assignee);
   const page = Number.parseInt(first(raw.page), 10);
   const period = first(raw.period);
+  const tab = parseCaseTab(first(raw.tab));
+  const rawView = first(raw.view);
   return {
-    tab: parseCaseTab(first(raw.tab)),
-    view: first(raw.view) === "case" ? "case" : "client",
+    tab,
+    view: rawView === "case" ? "case" : rawView === "board" && (tab === "open" || tab === "today") ? "board" : "client",
     type: idOrNone(first(raw.type)),
     stage: isUuid(first(raw.stage)) ? first(raw.stage) : "",
     assignee:

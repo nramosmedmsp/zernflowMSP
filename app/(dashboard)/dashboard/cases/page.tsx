@@ -6,7 +6,7 @@ import { isAdminRole } from "@/lib/permissions";
 import { parseCaseListParams } from "@/components/cases/case-filters";
 import { CasesView } from "@/components/cases/cases-view";
 import { withoutSample } from "@/lib/view-as/ui-rules";
-import { loadCases, loadCasesByClient } from "./load-cases";
+import { loadBoard, loadCases, loadCasesByClient } from "./load-cases";
 
 export default async function CasesPage({
   searchParams,
@@ -63,7 +63,15 @@ export default async function CasesPage({
           solutionSchedules,
         })
       : null;
-  const result = clientResult ? null : await loadCases(supabase, listArgs);
+  const boardResult =
+    params.view === "board"
+      ? await loadBoard(supabase, {
+          ...listArgs,
+          caseTypes: caseTypes.filter((t) => t.archived_at === null).map((t) => ({ id: t.id, name: t.name, color: t.color })),
+          solutionSchedules,
+        })
+      : null;
+  const result = clientResult || boardResult ? null : await loadCases(supabase, listArgs);
 
   // A quién puede asignar al crear una gestión: administrador, a cualquiera;
   // supervisor, a su equipo; asesor, solo a sí mismo.
@@ -79,7 +87,8 @@ export default async function CasesPage({
       clientGroups={clientResult?.groups ?? []}
       clientTotals={clientResult ? { clients: clientResult.totalClients, cases: clientResult.totalCases, truncated: clientResult.truncated } : null}
       contactTypes={(contactTypesRes.data ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color }))}
-      total={clientResult ? clientResult.totalClients : (result?.total ?? 0)}
+      board={boardResult}
+      total={clientResult ? clientResult.totalClients : boardResult ? boardResult.total : (result?.total ?? 0)}
       page={clientResult?.page ?? result?.page ?? 1}
       params={{ ...params, page: clientResult?.page ?? result?.page ?? 1 }}
       nowIso={now.toISOString()}
@@ -100,7 +109,7 @@ export default async function CasesPage({
       teams={teams}
       members={members.map((m) => ({ userId: m.userId, name: m.name }))}
       assignableMembers={assignable.map((m) => ({ userId: m.userId, name: m.name }))}
-      me={{ userId: user.id, canSeeOthers }}
+      me={{ userId: user.id, canSeeOthers, isAdmin, supervisedTeamIds }}
     />
   );
 }
