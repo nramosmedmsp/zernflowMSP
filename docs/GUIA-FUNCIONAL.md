@@ -547,8 +547,9 @@ días en la misma etapa (los días se fijan en Atención).
 ### 7.5 Inactividad automática
 
 Una vez al día, los contactos cuya **última venta ganada** fue hace más de N días pasan al tipo «Inactivo»
-(por defecto 90 días; se cambia en Configuración -> Tipos de contacto). No se toca a quien nunca compró, ni a
-quien una persona corrigió a mano dentro del plazo. Si vuelve a comprar, las reglas de venta lo devuelven a
+(por defecto 90 días; se cambia en Configuración -> Tipos de contacto). No se toca a quien nunca compró, a quien
+tiene una gestión abierta o programada (cuando se cierra, pasa en la siguiente revisión si sigue cumpliendo los
+días), ni a quien una persona corrigió a mano dentro del plazo. Si vuelve a comprar, las reglas de venta lo devuelven a
 Cliente o Cliente frecuente.
 
 ### 7.6 Pausa y reanudación del bot

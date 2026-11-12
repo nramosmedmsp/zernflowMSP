@@ -310,6 +310,44 @@ describe("inactividad automática (cron diario)", () => {
     expect(isChatLineChange(view)).toBe(true);
   });
 
+  describe("con gestión activa", () => {
+    const open = (contactId: string, status: string) =>
+      fake.seed("cases", [{ workspace_id: WS, contact_id: contactId, status, closed_at: null }])[0];
+
+    it("con una gestión abierta no pasa a inactivo; las demás reglas siguen igual", async () => {
+      open(viejo, "open");
+      const stats = await runContactInactivity(db(), { deadline: deadline(), now: NOW });
+      expect(stats).toMatchObject({ moved: 0, workspaces: 1 });
+      expect(contactRow(viejo).contact_type_id).toBe(typeId("Cliente"));
+      expect(typeChanges()).toHaveLength(0);
+    });
+
+    it("con una gestión programada (p. ej. Recompra programada) tampoco pasa", async () => {
+      open(viejo, "scheduled");
+      expect(await runContactInactivity(db(), { deadline: deadline(), now: NOW })).toMatchObject({ moved: 0 });
+      expect(contactRow(viejo).contact_type_id).toBe(typeId("Cliente"));
+    });
+
+    it("una gestión de otro contacto no protege a este, y las cerradas no cuentan", async () => {
+      open(reciente, "open");
+      for (const status of ["lost", "cancelled"]) open(viejo, status);
+      expect(await runContactInactivity(db(), { deadline: deadline(), now: NOW })).toMatchObject({ moved: 1 });
+      expect(contactRow(viejo).contact_type_id).toBe(inactivo);
+    });
+
+    it("al cerrarse la gestión, pasa en la siguiente pasada (90 días desde la última venta ganada)", async () => {
+      const c = open(viejo, "open");
+      await runContactInactivity(db(), { deadline: deadline(), now: NOW });
+      expect(contactRow(viejo).contact_type_id).toBe(typeId("Cliente"));
+      c.status = "lost";
+      c.closed_at = "2026-10-18T18:00:00.000Z";
+      const next = await runContactInactivity(db(), { deadline: deadline(), now: new Date("2026-10-19T17:00:00.000Z") });
+      expect(next).toMatchObject({ moved: 1 });
+      expect(contactRow(viejo).contact_type_id).toBe(inactivo);
+      expect(typeChanges(viejo)[0].meta).toMatchObject({ source: "inactividad", reason_text: "sin compras hace 171 días" });
+    });
+  });
+
   it("es idempotente: repetirlo el mismo día, o al día siguiente, no vuelve a cambiar nada", async () => {
     await runContactInactivity(db(), { deadline: deadline(), now: NOW });
     const again = await runContactInactivity(db(), { deadline: deadline(), now: new Date("2026-10-18T20:00:00.000Z") });

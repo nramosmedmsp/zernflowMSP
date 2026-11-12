@@ -199,7 +199,7 @@ function InactivityForm({
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
       <p className="text-xs text-muted-foreground">
-        Se revisa una vez al día. Cuenta desde la última venta ganada: quien nunca compró no cambia, y a quien una persona
+        Se revisa una vez al día. Cuenta desde la última venta ganada: quien nunca compró no cambia, tampoco quien tiene una gestión abierta o programada (se revisa de nuevo cuando se cierra), y a quien una persona
         corrigió a mano no se le revierte el tipo antes de que pasen esos días. Si vuelve a comprar, las reglas de venta lo
         devuelven a Cliente o Cliente frecuente.
       </p>
