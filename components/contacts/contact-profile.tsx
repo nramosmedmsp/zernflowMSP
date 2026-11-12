@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Loader2, Plus, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   addContactTag,
   removeContactTag,
@@ -16,6 +17,8 @@ import {
 import { normalizePhone } from "@/components/contacts/contact-labels";
 import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
 import type { ContactTypeInfo, ContactTypeOption } from "@/lib/cases/contact-type-model";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 
 interface TagItem {
   id: string;
@@ -83,6 +86,9 @@ function Row({
 
 export function ContactProfile(props: ContactProfileProps) {
   const router = useRouter();
+  // «Ver como»: todo es de solo lectura; los controles se apagan con una sola nota al final.
+  const viewing = useViewAs().active;
+  const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
   const [typeId, setTypeId] = useState(props.contactTypeId ?? "");
   const [ownerId, setOwnerId] = useState(props.ownerId ?? "");
   const [teamId, setTeamId] = useState(props.teamId ?? "");
@@ -217,6 +223,8 @@ export function ContactProfile(props: ContactProfileProps) {
           info={props.typeInfo}
           personName={memberName}
           busy={states.type?.status === "saving"}
+          disabled={viewing}
+          disabledTitle={viewTitle}
           onSelect={(value) => onType(value)}
         />
       </Row>
@@ -227,8 +235,9 @@ export function ContactProfile(props: ContactProfileProps) {
             aria-label="Responsable"
             value={ownerId}
             onChange={(e) => onOwner(e.target.value)}
-            disabled={states.owner?.status === "saving"}
-            className={FIELD_CLASS}
+            disabled={viewing || states.owner?.status === "saving"}
+            title={viewTitle}
+            className={cn(FIELD_CLASS, viewing && "cursor-not-allowed")}
           >
             <option value="">Sin responsable</option>
             {props.members.map((m) => (
@@ -248,8 +257,9 @@ export function ContactProfile(props: ContactProfileProps) {
             aria-label="Equipo"
             value={teamId}
             onChange={(e) => onTeam(e.target.value)}
-            disabled={states.team?.status === "saving"}
-            className={FIELD_CLASS}
+            disabled={viewing || states.team?.status === "saving"}
+            title={viewTitle}
+            className={cn(FIELD_CLASS, viewing && "cursor-not-allowed")}
           >
             <option value="">Sin equipo</option>
             {props.teams.map((t) => (
@@ -274,8 +284,9 @@ export function ContactProfile(props: ContactProfileProps) {
           aria-label={props.keyDateLabel}
           value={keyDate}
           onChange={(e) => onKeyDate(e.target.value)}
-          disabled={states.keyDate?.status === "saving"}
-          className={FIELD_CLASS}
+          disabled={viewing || states.keyDate?.status === "saving"}
+          title={viewTitle}
+          className={cn(FIELD_CLASS, viewing && "cursor-not-allowed")}
         />
       </Row>
 
@@ -293,7 +304,9 @@ export function ContactProfile(props: ContactProfileProps) {
             if (e.key === "Enter") e.currentTarget.blur();
           }}
           placeholder="+51 999 999 999"
-          className={FIELD_CLASS}
+          disabled={viewing}
+          title={viewTitle}
+          className={cn(FIELD_CLASS, viewing && "cursor-not-allowed")}
         />
       </Row>
 
@@ -319,8 +332,13 @@ export function ContactProfile(props: ContactProfileProps) {
               {tag.name}
               <button
                 onClick={() => onRemoveTag(tag)}
+                disabled={viewing}
+                title={viewTitle}
                 aria-label={`Quitar la etiqueta ${tag.name}`}
-                className="rounded-full opacity-60 transition-opacity hover:opacity-100"
+                className={cn(
+                  "rounded-full opacity-60 transition-opacity hover:opacity-100",
+                  viewing && "cursor-not-allowed hover:opacity-60",
+                )}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -334,7 +352,12 @@ export function ContactProfile(props: ContactProfileProps) {
               aria-label="Agregar etiqueta"
               value=""
               onChange={(e) => e.target.value && onAddTag(e.target.value)}
-              className="rounded-lg border border-input bg-background py-1 pl-7 pr-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              disabled={viewing}
+              title={viewTitle}
+              className={cn(
+                "rounded-lg border border-input bg-background py-1 pl-7 pr-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60",
+                viewing && "cursor-not-allowed",
+              )}
             >
               <option value="">Agregar etiqueta...</option>
               {availableTags.map((t) => (
@@ -346,6 +369,12 @@ export function ContactProfile(props: ContactProfileProps) {
           </div>
         )}
       </Row>
+
+      {viewing && (
+        <p data-testid="view-as-unavailable-note" className="text-xs text-muted-foreground">
+          {VIEW_AS_UNAVAILABLE_NOTE}
+        </p>
+      )}
     </div>
   );
 }

@@ -80,6 +80,7 @@ export function ContactTypePicker({
   options,
   busy = false,
   disabled = false,
+  disabledTitle,
   onSelect,
   align = "left",
 }: {
@@ -88,6 +89,8 @@ export function ContactTypePicker({
   options: readonly ContactTypeOption[];
   busy?: boolean;
   disabled?: boolean;
+  /** Texto del `title` cuando está apagado (p. ej. la nota de «Ver como»). */
+  disabledTitle?: string;
   onSelect: (typeId: string) => void | Promise<void>;
   align?: "left" | "right";
 }) {
@@ -105,8 +108,11 @@ export function ContactTypePicker({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Tipo de contacto: ${current?.name ?? "sin tipo"}. Cambiar`}
-        title={current?.description ?? "Cambiar el tipo de contacto"}
-        className="inline-flex items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
+        title={disabled && disabledTitle ? disabledTitle : (current?.description ?? "Cambiar el tipo de contacto")}
+        className={cn(
+          "inline-flex items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70",
+          disabled && "cursor-not-allowed",
+        )}
       >
         <ContactTypeChip type={current} caret={!busy} open={open} />
         {busy && <Loader2 className="ml-1 h-3 w-3 animate-spin text-muted-foreground" />}
@@ -167,12 +173,17 @@ export function ContactTypeQuestion({
   contactName,
   options,
   busy,
+  disabled = false,
+  disabledNote,
   onAnswer,
   onSnooze,
 }: {
   contactName: string | null;
   options: readonly ContactTypeOption[];
   busy: boolean;
+  /** Apagada (p. ej. «Ver como»): botones en gris y con `disabledNote` como título y nota. */
+  disabled?: boolean;
+  disabledNote?: string;
   onAnswer: (typeId: string) => void | Promise<void>;
   onSnooze: () => void | Promise<void>;
 }) {
@@ -195,16 +206,21 @@ export function ContactTypeQuestion({
           <p className="text-[11px] text-sky-900/80 dark:text-sky-200/80">
             Así sabemos cómo atender a {first}. Se guarda en su ficha y se pregunta una sola vez.
           </p>
+          {disabled && disabledNote && (
+            <p data-testid="view-as-unavailable-note" className="mt-0.5 text-[11px] text-sky-900/80 dark:text-sky-200/80">
+              {disabledNote}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {buttons.map((t) => (
             <button
               key={t.id}
               type="button"
-              disabled={busy}
-              title={t.description ?? undefined}
+              disabled={busy || disabled}
+              title={disabled ? disabledNote : (t.description ?? undefined)}
               onClick={() => void onAnswer(t.id)}
-              className={questionButtonClass}
+              className={cn(questionButtonClass, disabled && "cursor-not-allowed")}
             >
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: hex(t.color) }} />
               {t.label}
@@ -214,11 +230,12 @@ export function ContactTypeQuestion({
             <div ref={moreRef} className="relative">
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || disabled}
+                title={disabled ? disabledNote : undefined}
                 aria-haspopup="menu"
                 aria-expanded={moreOpen}
                 onClick={() => setMoreOpen((o) => !o)}
-                className={questionButtonClass}
+                className={cn(questionButtonClass, disabled && "cursor-not-allowed")}
               >
                 Otro <ChevronDown className="h-3 w-3" />
               </button>
@@ -248,9 +265,13 @@ export function ContactTypeQuestion({
           )}
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || disabled}
+            title={disabled ? disabledNote : undefined}
             onClick={() => void onSnooze()}
-            className="ml-1 text-[11px] text-sky-900/80 underline hover:text-sky-950 disabled:opacity-50 dark:text-sky-200/80 dark:hover:text-sky-100"
+            className={cn(
+              "ml-1 text-[11px] text-sky-900/80 underline hover:text-sky-950 disabled:opacity-50 dark:text-sky-200/80 dark:hover:text-sky-100",
+              disabled && "cursor-not-allowed",
+            )}
           >
             Preguntar después
           </button>
@@ -272,6 +293,8 @@ export function ContactTypeBlock({
   busy,
   onSelect,
   readOnly = false,
+  disabled = false,
+  disabledTitle,
   action,
   className,
 }: {
@@ -282,6 +305,9 @@ export function ContactTypeBlock({
   busy?: boolean;
   onSelect?: (typeId: string) => void | Promise<void>;
   readOnly?: boolean;
+  /** Apagado (p. ej. «Ver como»): el chip se ve pero no abre el menú. */
+  disabled?: boolean;
+  disabledTitle?: string;
   /** Algo extra junto al título (p. ej. un indicador de guardado). */
   action?: ReactNode;
   className?: string;
@@ -299,7 +325,14 @@ export function ContactTypeBlock({
         {readOnly || !onSelect ? (
           <ContactTypeChip type={current} />
         ) : (
-          <ContactTypePicker current={current} options={options} busy={busy} onSelect={onSelect} />
+          <ContactTypePicker
+            current={current}
+            options={options}
+            busy={busy}
+            disabled={disabled}
+            disabledTitle={disabledTitle}
+            onSelect={onSelect}
+          />
         )}
         {info && <p className="text-[11px] text-muted-foreground">{typeStatusText(info, personName, now)}</p>}
       </div>

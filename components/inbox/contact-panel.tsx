@@ -44,6 +44,8 @@ import { MarketingConsentBlock } from "@/components/contacts/marketing-consent";
 import { ErasedNotice } from "@/components/contacts/erased-notice";
 import { displayNameFor, isContactErased } from "@/lib/contact-erased";
 import { useToast } from "@/components/ui/toast";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 
 type Contact = Database["public"]["Tables"]["contacts"]["Row"];
 type TagRow = Database["public"]["Tables"]["tags"]["Row"];
@@ -130,10 +132,13 @@ function PhoneRow({
   saving,
   onSave,
   readOnly = false,
+  viewing = false,
 }: {
   phone: string | null;
   /** Cliente eliminado: sin edición. */
   readOnly?: boolean;
+  /** «Ver como»: el lápiz de editar se apaga (Copiar sigue activo). */
+  viewing?: boolean;
   /** Número de WhatsApp del chat, si el contacto no tiene teléfono guardado. */
   fallback: string | null;
   saving: boolean;
@@ -206,9 +211,13 @@ function PhoneRow({
                 setValue(phone ?? (formatPhoneDisplay(fallback) ? shown : ""));
                 setEditing(true);
               }}
-              title="Editar teléfono"
+              disabled={viewing}
+              title={viewing ? VIEW_AS_UNAVAILABLE_NOTE : "Editar teléfono"}
               aria-label="Editar teléfono"
-              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className={cn(
+                "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground",
+                viewing && "cursor-not-allowed opacity-50 hover:bg-transparent hover:text-muted-foreground",
+              )}
             >
               <Pencil className="h-3 w-3" />
             </button>
@@ -244,6 +253,8 @@ export function ContactPanel({
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
+  const viewing = useViewAs().active;
+  const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
   const [loadedMembers, setLoadedMembers] = useState<MemberOption[]>([]);
 
   // Sin datos de la bandeja, el panel los pide por su cuenta.
@@ -449,6 +460,8 @@ export function ContactPanel({
                 info={cases.contact.typeInfo}
                 personName={personName}
                 busy={saving === "type"}
+                disabled={viewing}
+                disabledTitle={viewTitle}
                 onSelect={(typeId) => void updateContact("type", (id) => updateContactType(id, typeId))}
               />
             ) : (
@@ -481,12 +494,18 @@ export function ContactPanel({
           {/* Details */}
           <div className="space-y-4 p-4">
             {error && <p className="text-xs text-destructive">{error}</p>}
+            {viewing && !erased && (
+              <p data-testid="view-as-unavailable-note" className="text-xs text-muted-foreground">
+                {VIEW_AS_UNAVAILABLE_NOTE}
+              </p>
+            )}
 
             <PhoneRow
               phone={contact.phone}
               fallback={details.channels.find((ch) => ch.platform === "whatsapp")?.platform_sender_id ?? null}
               saving={saving === "phone"}
               readOnly={erased}
+              viewing={viewing}
               onSave={(phone) => updateContact("phone", (id) => updateContactPhone(id, phone))}
             />
 
@@ -500,9 +519,10 @@ export function ContactPanel({
               {isAdmin && !erased ? (
                 <select
                   value={ownerId ?? ""}
-                  disabled={saving !== null}
+                  disabled={viewing || saving !== null}
+                  title={viewTitle}
                   onChange={(e) => void updateContact("owner", (id) => setContactOwner(id, e.target.value || null))}
-                  className={cn(selectClass, "mt-1 w-full text-sm")}
+                  className={cn(selectClass, "mt-1 w-full text-sm", viewing && "cursor-not-allowed")}
                   aria-label="Responsable del contacto"
                 >
                   <option value="">Sin responsable</option>
@@ -531,9 +551,10 @@ export function ContactPanel({
                 {isAdmin && !erased ? (
                   <select
                     value={teamId ?? ""}
-                    disabled={saving !== null}
+                    disabled={viewing || saving !== null}
+                    title={viewTitle}
                     onChange={(e) => void updateContact("team", (id) => setContactTeam(id, e.target.value || null))}
-                    className={cn(selectClass, "mt-1 w-full text-sm")}
+                    className={cn(selectClass, "mt-1 w-full text-sm", viewing && "cursor-not-allowed")}
                     aria-label="Equipo del contacto"
                   >
                     <option value="">Sin equipo</option>
@@ -640,8 +661,12 @@ export function ContactPanel({
                 {availableTags.length > 0 && !addingTag && !erased && (
                   <button
                     onClick={() => setAddingTag(true)}
-                    disabled={saving !== null}
-                    className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                    disabled={viewing || saving !== null}
+                    title={viewTitle}
+                    className={cn(
+                      "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground",
+                      viewing && "cursor-not-allowed opacity-50 hover:bg-transparent hover:text-muted-foreground",
+                    )}
                   >
                     <Plus className="h-3 w-3" />
                     Agregar
@@ -687,9 +712,13 @@ export function ContactPanel({
                       {!erased && (
                       <button
                         onClick={() => void removeTag(tag.id)}
-                        disabled={saving !== null}
+                        disabled={viewing || saving !== null}
+                        title={viewTitle}
                         aria-label={`Quitar la etiqueta ${tag.name}`}
-                        className="rounded-full opacity-60 hover:opacity-100 disabled:opacity-30"
+                        className={cn(
+                          "rounded-full opacity-60 hover:opacity-100 disabled:opacity-30",
+                          viewing && "cursor-not-allowed hover:opacity-30",
+                        )}
                       >
                         <X className="h-3 w-3" />
                       </button>

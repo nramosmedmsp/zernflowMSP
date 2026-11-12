@@ -27,6 +27,8 @@ import { MessageMedia } from "./message-media";
 import { MediaLightbox, type LightboxImage } from "./media-lightbox";
 import { ContactTypePicker, ContactTypeQuestion } from "@/components/contacts/contact-type-ui";
 import type { ContactTypeOption } from "@/lib/cases/contact-type-model";
+import { useViewAs } from "@/components/view-as/view-as-context";
+import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 
 /** Línea de sistema en el chat (p. ej. el cambio automático del tipo de contacto). */
 export interface ThreadSystemEvent {
@@ -375,6 +377,7 @@ export function MessageThread({
   emptyNote?: ReactNode;
 }) {
   const toast = useToast();
+  const viewing = useViewAs().active;
   const [simulateOpen, setSimulateOpen] = useState(false);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
   const closeLightbox = useCallback(() => setLightbox(null), []);
@@ -600,6 +603,8 @@ export function MessageThread({
                   current={contactType.current}
                   options={contactType.options}
                   busy={contactType.busy}
+                  disabled={viewing}
+                  disabledTitle={VIEW_AS_UNAVAILABLE_NOTE}
                   onSelect={contactType.onChange}
                 />
               )}
@@ -661,6 +666,8 @@ export function MessageThread({
           contactName={conversation.contacts?.display_name ?? null}
           options={contactType.options}
           busy={contactType.busy}
+          disabled={viewing}
+          disabledNote={VIEW_AS_UNAVAILABLE_NOTE}
           onAnswer={contactType.onChange}
           onSnooze={contactType.onSnooze}
         />
