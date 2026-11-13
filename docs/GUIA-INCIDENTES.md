@@ -5,7 +5,7 @@ Para el Dueño y una segunda persona de confianza. Sin jerga: sigue los pasos en
 
 ## 1. Cómo saber que algo anda mal
 
-- **Aviso del monitor externo** (si está configurado): la dirección `https://crm-muscleshop.vercel.app/api/health` debe revisarse cada 1 a 5 minutos y avisar tras 2 fallos seguidos.
+- **Aviso del monitor externo** (si está configurado): la dirección `https://crm.muscleshopperu.com/api/health` debe revisarse cada 1 a 5 minutos y avisar tras 2 fallos seguidos.
   - Todo bien: la página muestra `{"ok":true}`.
   - Problema: responde error 503 con una razón: `base` (la app no llega a la base de datos), `cron_jobs` o `cron_secuencias` (una tarea automática lleva más de 5 minutos sin terminar bien).
 - **Tarjeta «Estado del sistema»** en Configuración (solo Dueño y Administrador): muestra la última vez que cada tarea automática corrió bien (en rojo si falló) y los mensajes de clientes que no se pudieron procesar.
