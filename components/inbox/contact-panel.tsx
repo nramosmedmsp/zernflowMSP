@@ -42,6 +42,7 @@ import { inputClass, selectClass } from "./ui";
 import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
 import { MarketingConsentBlock } from "@/components/contacts/marketing-consent";
 import { ErasedNotice } from "@/components/contacts/erased-notice";
+import { NO_TAGS_HINT } from "@/components/contacts/contact-labels";
 import { displayNameFor, isContactErased } from "@/lib/contact-erased";
 import { useToast } from "@/components/ui/toast";
 import { useViewAs } from "@/components/view-as/view-as-context";
@@ -292,7 +293,8 @@ export function ContactPanel({
     };
   }, [contactId, workspaceId]);
 
-  // Etiquetas existentes del espacio (crearlas es de administradores, en Configuración).
+  // Etiquetas existentes del espacio. No se crean aquí: nacen al importar contactos o desde
+  // un flujo; en este panel solo se ponen y se quitan.
   useEffect(() => {
     let cancelled = false;
     void createClient()
@@ -727,7 +729,14 @@ export function ContactPanel({
                   ))}
                 </div>
               ) : (
-                !addingTag && <p className="mt-1 text-xs text-muted-foreground">Sin etiquetas</p>
+                !addingTag && (
+                  <>
+                    <p className="mt-1 text-xs text-muted-foreground">Sin etiquetas</p>
+                    {workspaceTags.length === 0 && !erased && !viewing && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">{NO_TAGS_HINT}</p>
+                    )}
+                  </>
+                )
               )}
             </div>
 

@@ -2,6 +2,7 @@ import { getWorkspace } from "@/lib/workspace";
 import { notFound } from "next/navigation";
 import { SequenceEditor } from "@/components/sequences/sequence-editor";
 import { EnrollmentList } from "@/components/sequences/enrollment-list";
+import { isAdminRole } from "@/lib/permissions";
 import type { SequenceStep } from "@/lib/types/database";
 
 export default async function SequenceDetailPage({
@@ -10,7 +11,7 @@ export default async function SequenceDetailPage({
   params: Promise<{ sequenceId: string }>;
 }) {
   const { sequenceId } = await params;
-  const { workspace, supabase } = await getWorkspace();
+  const { workspace, supabase, role } = await getWorkspace();
 
   const { data: sequence } = await supabase
     .from("sequences")
@@ -65,6 +66,13 @@ export default async function SequenceDetailPage({
       />
       <div className="shrink-0 border-t border-border">
         <EnrollmentList
+          canEnroll={isAdminRole(role)}
+          sequence={{
+            id: sequence.id,
+            name: sequence.name,
+            status: sequence.status,
+            stepCount: ((sequence.steps as unknown as SequenceStep[]) || []).length,
+          }}
           enrollments={
             (enrollments ?? []).map((e) => ({
               id: e.id,

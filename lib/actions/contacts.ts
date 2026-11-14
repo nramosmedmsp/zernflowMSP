@@ -54,6 +54,10 @@ export interface ContactSearchResult {
   displayName: string | null;
   phone: string | null;
   email: string | null;
+  /** Solo en la búsqueda: permiso de publicidad y canales (para inscribir en una secuencia). */
+  marketingStatus?: string | null;
+  isSubscribed?: boolean | null;
+  channels?: { id: string; platform: string; label: string }[];
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -169,7 +173,7 @@ export async function searchContacts(
   const clean = text.replace(/[,()"*]/g, " ").trim().slice(0, 80);
   let query = supabase
     .from("contacts")
-    .select("id, display_name, phone, email")
+    .select("id, display_name, phone, email, marketing_status, is_subscribed, contact_channels(channel_id, channels(platform, display_name, username))")
     .eq("workspace_id", workspace.id)
     // Un cliente eliminado no se elige para una gestión nueva (su ficha es solo de lectura).
     .is("erased_at", null)
@@ -188,6 +192,12 @@ export async function searchContacts(
       displayName: c.display_name,
       phone: c.phone,
       email: c.email,
+      marketingStatus: c.marketing_status,
+      isSubscribed: c.is_subscribed,
+      channels: (c.contact_channels ?? []).map((cc) => {
+        const ch = cc.channels as { platform?: string; display_name?: string | null; username?: string | null } | null;
+        return { id: cc.channel_id, platform: ch?.platform ?? "", label: ch?.display_name || ch?.username || ch?.platform || "Canal" };
+      }),
     })),
   };
 }

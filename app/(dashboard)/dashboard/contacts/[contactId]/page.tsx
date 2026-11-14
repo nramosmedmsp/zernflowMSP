@@ -24,6 +24,7 @@ import { buildTimeline, type TimelineLookups } from "@/components/contacts/timel
 import { formatDateTime } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
 import { loadContactTypeInfo } from "@/lib/cases/contact-type";
+import { EnrollInSequence, type EnrollSequenceOption, type ContactEnrollment } from "@/components/contacts/enroll-in-sequence";
 import { ErasedNotice } from "@/components/contacts/erased-notice";
 import { displayNameFor } from "@/lib/contact-erased";
 
@@ -189,6 +190,33 @@ export default async function ContactDetailPage({
   }
   const typeInfo = await loadContactTypeInfo(supabase, contact.id, contact);
 
+  // Secuencias (solo Dueño y Administrador; no en un cliente eliminado): las activas con pasos
+  // para inscribirlo y las que ya tiene (solo lectura).
+  let enrollSequences: EnrollSequenceOption[] = [];
+  let contactEnrollments: ContactEnrollment[] = [];
+  if (isAdmin && !erased) {
+    const [seqRes, enrRes] = await Promise.all([
+      supabase.from("sequences").select("id, name, steps").eq("workspace_id", workspace.id).eq("status", "active").order("name"),
+      supabase
+        .from("sequence_enrollments")
+        .select("id, sequence_id, status, enrolled_at, sequences!inner(name, workspace_id)")
+        .eq("contact_id", contact.id)
+        .eq("sequences.workspace_id", workspace.id)
+        .order("enrolled_at", { ascending: false }),
+    ]);
+    const enrolled = enrRes.data ?? [];
+    const activeIds = new Set(enrolled.filter((e) => e.status === "active").map((e) => e.sequence_id));
+    enrollSequences = (seqRes.data ?? [])
+      .filter((s) => Array.isArray(s.steps) && s.steps.length > 0)
+      .map((s) => ({ id: s.id, name: s.name, alreadyActive: activeIds.has(s.id) }));
+    contactEnrollments = enrolled.map((e) => ({
+      id: e.id,
+      sequenceName: (e.sequences as unknown as { name: string } | null)?.name ?? "Secuencia",
+      status: e.status as ContactEnrollment["status"],
+      enrolledAt: e.enrolled_at,
+    }));
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -312,6 +340,25 @@ export default async function ContactDetailPage({
                 />
               </div>
             </div>
+
+            {/* Secuencias (Dueño y Administrador) */}
+            {isAdmin && !erased && (
+              <div>
+                <h2 className="mb-3 text-sm font-semibold uppercase text-muted-foreground">
+                  Secuencias
+                </h2>
+                <EnrollInSequence
+                  contactId={contact.id}
+                  contact={{ marketing_status: contact.marketing_status, is_subscribed: contact.is_subscribed, erased_at: contact.erased_at }}
+                  channels={channels.map((cc) => {
+                    const ch = cc.channels as { platform?: string; display_name?: string | null; username?: string | null } | null;
+                    return { id: cc.channel_id, platform: ch?.platform ?? "", label: ch?.display_name || ch?.username || ch?.platform || "Canal" };
+                  })}
+                  sequences={enrollSequences}
+                  enrollments={contactEnrollments}
+                />
+              </div>
+            )}
 
             {/* Datos personales: corregir, descargar y eliminar (Dueño y Administrador) */}
             {isAdmin && (

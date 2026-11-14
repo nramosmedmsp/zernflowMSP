@@ -20,6 +20,15 @@ export const ERASED_DISPLAY_NAME = "Cliente eliminado";
 export const ERASED_CHAT_MESSAGE =
   "Los datos de este cliente se eliminaron. No se pueden enviar mensajes ni escribir notas en este chat.";
 
+/** Lugar de los campos de nota de una gestión de un cliente eliminado (el servidor rechaza esas notas). */
+export const ERASED_NO_NOTES_MESSAGE = "Cliente eliminado: no se pueden escribir notas.";
+export const ERASED_SUPERVISOR_ADVANCE_MESSAGE = "Un supervisor puede pasar la gestión de etapa.";
+
+/** Aviso en la guía de la gestión; la segunda frase solo si el requisito de nota está frenando el avance. */
+export function erasedNoNotesNotice(noteBlocksAdvance: boolean): string {
+  return noteBlocksAdvance ? `${ERASED_NO_NOTES_MESSAGE} ${ERASED_SUPERVISOR_ADVANCE_MESSAGE}` : ERASED_NO_NOTES_MESSAGE;
+}
+
 export interface ErasableContact {
   erased_at?: string | null;
 }

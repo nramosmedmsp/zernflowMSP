@@ -133,19 +133,111 @@ describe("secuencias", () => {
     await updateSequence(id, { steps: [{ type: "message", content: "Hola" }] });
     expect(audits().length).toBe(before);
   });
+});
 
-  it("no inscribe a un contacto dado de baja", async () => {
-    const id = await newSequence([{ type: "message", content: "Hola" }], "active");
+describe("enrollContact (inscribir a mano)", () => {
+  const step = [{ type: "message", content: "Hola" }];
+
+  beforeEach(() => {
+    fake.seed("sequences", [
+      { id: "s-act", workspace_id: "ws-1", name: "Seguimiento", status: "active", steps: step },
+      { id: "s-draft", workspace_id: "ws-1", name: "Borrador", status: "draft", steps: step },
+      { id: "s-vacia", workspace_id: "ws-1", name: "Vacía", status: "active", steps: [] },
+      { id: "s-otro", workspace_id: "ws-2", name: "Ajena", status: "active", steps: step },
+    ]);
     fake.seed("contacts", [
+      { id: "c-ok", workspace_id: "ws-1", is_subscribed: true, marketing_status: "accepted" },
+      { id: "c-ok2", workspace_id: "ws-1", is_subscribed: true, marketing_status: "accepted" },
       { id: "c-baja", workspace_id: "ws-1", is_subscribed: false, marketing_status: "opted_out" },
       { id: "c-sin", workspace_id: "ws-1", is_subscribed: true, marketing_status: "unknown" },
-      { id: "c-ok", workspace_id: "ws-1", is_subscribed: true, marketing_status: "accepted" },
+      { id: "c-borrado", workspace_id: "ws-1", is_subscribed: false, marketing_status: "opted_out", erased_at: "2026-11-01T00:00:00Z" },
+      { id: "c-otro", workspace_id: "ws-2", is_subscribed: true, marketing_status: "accepted" },
     ]);
-    fake.seed("channels", [{ id: "ch-1", workspace_id: "ws-1" }]);
-    expect(await enrollContact(id, "c-baja", "ch-1")).toEqual({
-      error: "El contacto se dio de baja de la publicidad y no puede recibir la secuencia",
-    });
-    expect(await enrollContact(id, "c-sin", "ch-1")).toMatchObject({ error: expect.stringContaining("aún no aceptó recibir publicidad") });
-    expect(await enrollContact(id, "c-ok", "ch-1")).toMatchObject({ ok: true });
+    fake.seed("channels", [
+      { id: "ch-1", workspace_id: "ws-1" },
+      { id: "ch-2", workspace_id: "ws-1" },
+      { id: "ch-x", workspace_id: "ws-2" },
+    ]);
+    fake.seed("contact_channels", [
+      { id: "cc-1", contact_id: "c-ok", channel_id: "ch-1" },
+      { id: "cc-2", contact_id: "c-ok2", channel_id: "ch-2" },
+      { id: "cc-3", contact_id: "c-baja", channel_id: "ch-1" },
+      { id: "cc-4", contact_id: "c-sin", channel_id: "ch-1" },
+      { id: "cc-5", contact_id: "c-borrado", channel_id: "ch-1" },
+    ]);
+  });
+
+  const enrollments = () => fake.rows("sequence_enrollments");
+  const audits = () =>
+    fake.rows("activity").filter((a) => (a.meta as { action?: string }).action === "sequence_contact_enrolled");
+
+  it("inscribe a quien aceptó publicidad y lo anota en el registro de cambios", async () => {
+    expect(await enrollContact("s-act", "c-ok", "ch-1")).toEqual({ ok: true, reactivated: false });
+    expect(enrollments()).toHaveLength(1);
+    expect(enrollments()[0]).toMatchObject({ sequence_id: "s-act", contact_id: "c-ok", channel_id: "ch-1", status: "active" });
+    const rows = audits();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ type: "config_changed", actor_id: "u1", to_value: "Seguimiento" });
+    expect(rows[0].meta).toMatchObject({ entity: "sequence", name: "Seguimiento", reactivated: false });
+    expect(JSON.stringify(rows[0])).not.toContain("c-ok");
+  });
+
+  it("rechaza a quien no es administrador, sin inscribir ni anotar nada", async () => {
+    state.role = "member";
+    expect(await enrollContact("s-act", "c-ok", "ch-1")).toHaveProperty("error");
+    state.role = "agent";
+    expect(await enrollContact("s-act", "c-ok", "ch-1")).toHaveProperty("error");
+    expect(enrollments()).toHaveLength(0);
+    expect(audits()).toHaveLength(0);
+  });
+
+  it("rechaza una secuencia inactiva, sin pasos o de otro espacio", async () => {
+    expect(await enrollContact("s-draft", "c-ok", "ch-1")).toEqual({ error: "La secuencia no está activa" });
+    expect(await enrollContact("s-vacia", "c-ok", "ch-1")).toEqual({ error: "La secuencia no tiene pasos" });
+    expect(await enrollContact("s-otro", "c-ok", "ch-1")).toEqual({ error: "No se encontró la secuencia" });
+    expect(enrollments()).toHaveLength(0);
+  });
+
+  it("rechaza al que no aceptó publicidad (sin registrar o de baja)", async () => {
+    expect(await enrollContact("s-act", "c-sin", "ch-1")).toMatchObject({ error: expect.stringContaining("aún no aceptó recibir publicidad") });
+    expect(await enrollContact("s-act", "c-baja", "ch-1")).toMatchObject({ error: expect.stringContaining("se dio de baja de la publicidad") });
+    expect(enrollments()).toHaveLength(0);
+    expect(audits()).toHaveLength(0);
+  });
+
+  it("a un cliente eliminado le dice que sus datos se eliminaron, no que se dio de baja", async () => {
+    const res = await enrollContact("s-act", "c-borrado", "ch-1");
+    expect(res).toMatchObject({ error: expect.stringContaining("se eliminaron") });
+    expect((res as { error: string }).error).not.toContain("baja");
+    expect(enrollments()).toHaveLength(0);
+  });
+
+  it("rechaza un contacto de otro espacio", async () => {
+    expect(await enrollContact("s-act", "c-otro", "ch-1")).toEqual({ error: "No se encontró el contacto" });
+  });
+
+  it("rechaza un canal ajeno: de otro espacio o de otro contacto", async () => {
+    expect(await enrollContact("s-act", "c-ok", "ch-x")).toEqual({ error: "No se encontró el canal" });
+    expect(await enrollContact("s-act", "c-ok", "ch-2")).toEqual({ error: "Ese canal no pertenece a este contacto." });
+    expect(await enrollContact("s-act", "c-ok", "no-existe")).toEqual({ error: "No se encontró el canal" });
+    expect(enrollments()).toHaveLength(0);
+    expect(audits()).toHaveLength(0);
+  });
+
+  it("si ya está inscrito responde «ya está inscrito» y no anota otra vez", async () => {
+    await enrollContact("s-act", "c-ok", "ch-1");
+    expect(await enrollContact("s-act", "c-ok", "ch-1")).toEqual({ error: "El contacto ya está inscrito en esta secuencia" });
+    expect(enrollments()).toHaveLength(1);
+    expect(audits()).toHaveLength(1);
+  });
+
+  it("tras cancelar o terminar, reactiva la misma fila", async () => {
+    await enrollContact("s-act", "c-ok", "ch-1");
+    const id = enrollments()[0].id;
+    enrollments()[0].status = "cancelled";
+    expect(await enrollContact("s-act", "c-ok", "ch-1")).toEqual({ ok: true, reactivated: true });
+    expect(enrollments()).toHaveLength(1);
+    expect(enrollments()[0]).toMatchObject({ id, status: "active", current_step_index: 0 });
+    expect(audits().map((a) => (a.meta as { reactivated: boolean }).reactivated)).toEqual([false, true]);
   });
 });

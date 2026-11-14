@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ERASED_DISPLAY_NAME, displayNameFor, erasedNotice, isContactErased } from "./contact-erased";
+import { ERASED_DISPLAY_NAME, displayNameFor, erasedNoNotesNotice, erasedNotice, isContactErased } from "./contact-erased";
 
 describe("isContactErased", () => {
   it("usa erased_at", () => {
@@ -35,5 +35,16 @@ describe("displayNameFor", () => {
   it("contacto normal sin nombre", () => {
     expect(displayNameFor({ display_name: null }, "Desconocido")).toBe("Desconocido");
     expect(displayNameFor({ display_name: "Ana" }, "Desconocido")).toBe("Ana");
+  });
+});
+
+describe("erasedNoNotesNotice", () => {
+  it("sin requisito de nota solo avisa que no hay notas", () => {
+    expect(erasedNoNotesNotice(false)).toBe("Cliente eliminado: no se pueden escribir notas.");
+  });
+  it("con la nota frenando el avance añade qué hacer", () => {
+    expect(erasedNoNotesNotice(true)).toBe(
+      "Cliente eliminado: no se pueden escribir notas. Un supervisor puede pasar la gestión de etapa.",
+    );
   });
 });

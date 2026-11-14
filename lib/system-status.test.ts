@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { FakeDb } from "@/lib/cases/fake-db.test-helper";
-import { loadSystemStatus } from "./system-status";
+import { isDailyCron, loadSystemStatus } from "./system-status";
 
 let db: FakeDb;
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
@@ -41,5 +41,14 @@ describe("loadSystemStatus", () => {
     expect(status.failedTotal).toBe(1);
     expect(status.failedEvents).toEqual([expect.objectContaining({ eventId: "f1", attempts: 3, lastError: "no abre" })]);
     expect(status.pendingEvents).toBe(1);
+  });
+});
+
+describe("isDailyCron", () => {
+  it("solo las dos limpiezas son diarias", () => {
+    expect(["jobs", "sequences", "media_cleanup", "retention"].filter((n) => isDailyCron(n as never))).toEqual([
+      "media_cleanup",
+      "retention",
+    ]);
   });
 });

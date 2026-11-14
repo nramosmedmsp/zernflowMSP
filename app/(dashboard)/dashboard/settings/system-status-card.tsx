@@ -1,10 +1,10 @@
 import { CheckCircle2, AlertTriangle } from "lucide-react";
 import { formatDateTime } from "@/lib/format";
-import type { SystemStatus } from "@/lib/system-status";
+import { isDailyCron, type SystemStatus } from "@/lib/system-status";
 
 /** Estado del sistema: última ejecución de cada tarea automática y mensajes que no se pudieron procesar. */
 export function SystemStatusCard({ status }: { status: SystemStatus }) {
-  const allFresh = status.crons.filter((c) => c.name !== "media_cleanup").every((c) => c.fresh);
+  const allFresh = status.crons.filter((c) => !isDailyCron(c.name)).every((c) => c.fresh);
   return (
     <section className="rounded-lg border border-border p-4" aria-labelledby="system-status-title">
       <div className="flex items-center gap-2">
@@ -18,15 +18,18 @@ export function SystemStatusCard({ status }: { status: SystemStatus }) {
         </h2>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        Las tareas automáticas corren cada minuto. Si una no termina bien durante 5 minutos, aparece en rojo.
+        Dos tareas corren cada minuto y dos limpiezas una vez al día. Si una no termina bien a tiempo (5 minutos las de cada minuto, 36 horas las diarias), aparece en rojo.
       </p>
 
       <ul className="mt-3 space-y-2 text-sm">
         {status.crons.map((c) => (
           <li key={c.name} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-            <span>{c.label}</span>
-            {/* La limpieza diaria que aún no corrió no es un problema; las demás sí lo son. */}
-            <span className={c.fresh || (c.name === "media_cleanup" && !c.lastOkAt) ? "text-muted-foreground" : "font-medium text-red-600"}>
+            <div>
+              <p>{c.label}</p>
+              <p className="text-xs text-muted-foreground">{c.detail}</p>
+            </div>
+            {/* Las limpiezas diarias que aún no corrieron no son un problema; las demás sí lo son. */}
+            <span className={`ml-auto text-right ${c.fresh || (isDailyCron(c.name) && !c.lastOkAt) ? "text-muted-foreground" : "font-medium text-red-600"}`}>
               {c.lastOkAt ? `Última vez bien: ${formatDateTime(c.lastOkAt)}` : "Aún no se ha ejecutado"}
               {!c.fresh && c.lastError ? ` · Último error: ${c.lastError}` : ""}
             </span>

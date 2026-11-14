@@ -36,6 +36,7 @@ import {
   type ContactCasesView,
 } from "@/lib/actions/cases";
 import { UNDO_WINDOW_MS, undoneMessage } from "@/lib/cases/undo";
+import { erasedNoNotesNotice, isContactErased } from "@/lib/contact-erased";
 import { cn } from "@/lib/utils";
 import { VIEW_AS_UNAVAILABLE_NOTE } from "@/lib/view-as/ui-rules";
 import { useViewAs } from "@/components/view-as/view-as-context";
@@ -194,6 +195,8 @@ export function CaseGuidePanel({
   const viewAs = useViewAs();
   const viewing = viewAs.active;
   const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
+  // Cliente eliminado: las notas de etapa las rechaza el servidor; lo demás sigue funcionando.
+  const erased = isContactErased({ erased_at: data.contact.erasedAt });
   const [panel, setPanel] = useState<Panel>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [undo, setUndo] = useState<UndoNotice | null>(null);
@@ -541,7 +544,10 @@ export function CaseGuidePanel({
                     )}
                     <span className={cn(req.done && "font-medium")}>{req.done ? "Nota guardada" : req.label}</span>
                   </p>
-                  {!req.done && perms.canEdit && (
+                  {!req.done && perms.canEdit && erased && (
+                    <p className="pl-6 text-xs text-muted-foreground">{erasedNoNotesNotice(req.blocking)}</p>
+                  )}
+                  {!req.done && perms.canEdit && !erased && (
                     <div className="space-y-1.5 pl-6">
                       <textarea
                         value={noteText}

@@ -11,15 +11,29 @@ import type { Database } from "@/lib/types/database";
 type Db = SupabaseClient<Database>;
 
 export const CRON_LABELS: Record<CronName, string> = {
-  jobs: "Trabajos programados (esperas de flujos, difusiones, gestiones)",
+  jobs: "Trabajos programados",
   sequences: "Secuencias",
   media_cleanup: "Limpieza de archivos vencidos",
-  retention: "Limpieza de avisos leídos y registros técnicos viejos",
+  retention: "Limpieza de avisos y registros",
 };
+
+/** Detalle de cada tarea, en gris debajo del nombre. */
+export const CRON_DETAILS: Record<CronName, string> = {
+  jobs: "Esperas de flujos, difusiones y gestiones",
+  sequences: "Pasos de las secuencias",
+  media_cleanup: "Archivos vencidos de las conversaciones",
+  retention: "Avisos leídos y registros técnicos viejos",
+};
+
+/** Las dos limpiezas corren una vez al día: que aún no hayan corrido no es un problema. */
+export function isDailyCron(name: CronName): boolean {
+  return name === "media_cleanup" || name === "retention";
+}
 
 export interface CronStatus {
   name: CronName;
   label: string;
+  detail: string;
   lastOkAt: string | null;
   lastErrorAt: string | null;
   lastError: string | null;
@@ -51,6 +65,7 @@ export async function loadSystemStatus(db: Db, workspaceId: string, now: number 
     return {
       name,
       label: CRON_LABELS[name],
+      detail: CRON_DETAILS[name],
       lastOkAt: row?.last_ok_at ?? null,
       lastErrorAt: row?.last_error_at ?? null,
       lastError: row?.last_error ?? null,
