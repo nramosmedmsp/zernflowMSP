@@ -1,11 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Users, XCircle, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Users, XCircle, Loader2, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDateTime } from "@/lib/format";
 import { cancelEnrollment } from "@/lib/actions/sequences";
 import { useToast } from "@/components/ui/toast";
+import { sequenceEnrollGate } from "@/lib/sequences/enroll-gate";
+import { EnrollContactDialog } from "@/components/sequences/enroll-contact-dialog";
+import { secondaryButtonClass } from "@/components/inbox/ui";
 
 interface Enrollment {
   id: string;
@@ -36,10 +40,25 @@ const statusConfig = {
 
 export function EnrollmentList({
   enrollments: initial,
+  sequence,
+  canEnroll = false,
 }: {
   enrollments: Enrollment[];
+  /** La secuencia (estado guardado y número de pasos) para decidir si se puede inscribir. */
+  sequence?: { id: string; name: string; status: string; stepCount: number };
+  /** Solo Dueño y Administrador inscriben a mano. */
+  canEnroll?: boolean;
 }) {
+  const router = useRouter();
   const [enrollments, setEnrollments] = useState(initial);
+  // Tras inscribir se recarga la página: la lista nueva reemplaza a la que se veía.
+  const [seen, setSeen] = useState(initial);
+  if (initial !== seen) {
+    setSeen(initial);
+    setEnrollments(initial);
+  }
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const enrollGate = sequence ? sequenceEnrollGate({ status: sequence.status, stepCount: sequence.stepCount }) : null;
   const [cancelling, setCancelling] = useState<string | null>(null);
   const toast = useToast();
 
@@ -66,15 +85,48 @@ export function EnrollmentList({
   return (
     <div className="px-8 py-6" data-testid="enrollment-list">
       <div className="mx-auto max-w-2xl">
-        <h2 className="text-lg font-semibold">
-          Inscripciones
-          {enrollments.length > 0 && (
-            <span className="ml-2 text-sm font-normal text-muted-foreground">({enrollments.length})</span>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">
+              Inscripciones
+              {enrollments.length > 0 && (
+                <span className="ml-2 text-sm font-normal text-muted-foreground">({enrollments.length})</span>
+              )}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Contactos que están en esta secuencia
+            </p>
+          </div>
+          {canEnroll && sequence && enrollGate && (
+            <div className="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                onClick={() => setEnrollOpen(true)}
+                disabled={!enrollGate.ok}
+                title={enrollGate.ok ? undefined : enrollGate.message}
+                className={cn(secondaryButtonClass, !enrollGate.ok && "cursor-not-allowed")}
+                data-testid="enroll-contact-button"
+              >
+                <UserPlus className="h-4 w-4" />
+                Inscribir contacto
+              </button>
+              {!enrollGate.ok && (
+                <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="enroll-disabled-reason">
+                  {enrollGate.message}
+                </p>
+              )}
+            </div>
           )}
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Contactos que están en esta secuencia
-        </p>
+        </div>
+        {canEnroll && sequence && (
+          <EnrollContactDialog
+            open={enrollOpen}
+            sequenceId={sequence.id}
+            sequenceName={sequence.name}
+            onClose={() => setEnrollOpen(false)}
+            onEnrolled={() => router.refresh()}
+          />
+        )}
 
         {enrollments.length === 0 ? (
           <div className="mt-6 rounded-lg border border-dashed border-border p-8 text-center">
@@ -83,7 +135,7 @@ export function EnrollmentList({
               Aún no hay contactos inscritos
             </p>
             <p className="mt-1 text-xs text-muted-foreground/70">
-              Los contactos se inscriben desde los flujos
+              {canEnroll ? "Se inscriben desde los flujos o con el botón «Inscribir contacto»" : "Los contactos se inscriben desde los flujos"}
             </p>
           </div>
         ) : (

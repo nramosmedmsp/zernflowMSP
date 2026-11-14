@@ -41,6 +41,7 @@ import {
 } from "@/lib/actions/cases";
 import { limaDateOf } from "@/lib/cases/dates";
 import { formatDate, formatTime } from "@/lib/format";
+import { isContactErased } from "@/lib/contact-erased";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useViewAs } from "@/components/view-as/view-as-context";
@@ -101,6 +102,8 @@ export function CaseCard({
   // «Ver como»: solo lectura. Los controles que escriben quedan apagados y con una sola nota.
   const viewing = useViewAs().active;
   const viewTitle = viewing ? VIEW_AS_UNAVAILABLE_NOTE : undefined;
+  // Cliente eliminado: no se escriben notas libres (el servidor las rechaza); fechas, etapas y cierre siguen.
+  const erased = isContactErased({ erased_at: data.contact.erasedAt });
   const [creating, setCreating] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
@@ -616,6 +619,7 @@ export function CaseCard({
               ) : nextCustom ? (
                 <NextActionForm
                   caseView={active}
+                  erased={erased}
                   saving={busy === "next"}
                   onSave={async (at, note) => {
                     const ok = await run("next", () => setNextAction(active.id, at, note), at ? "Próximo contacto guardado." : "Próximo contacto quitado.");
@@ -632,7 +636,7 @@ export function CaseCard({
                     </button>
                   ))}
                   <button className={menuItem} onClick={() => setNextCustom(true)}>
-                    Elegir fecha y nota…
+                    {erased ? "Elegir fecha…" : "Elegir fecha y nota…"}
                   </button>
                   {active.nextActionAt && (
                     <div className="border-t border-border pt-0.5">
@@ -786,21 +790,25 @@ export function CaseCard({
                 }
               >
                 <div className="space-y-2 p-1 text-foreground">
-                  <label htmlFor="reject-comment" className="text-xs font-medium">
-                    ¿Qué debe hacer antes de cerrarla? (opcional)
-                  </label>
-                  <textarea
-                    id="reject-comment"
-                    value={rejectComment}
-                    onChange={(e) => setRejectComment(e.target.value)}
-                    rows={2}
-                    maxLength={500}
-                    className={cn(inputClass, "resize-none py-1 text-xs")}
-                  />
+                  {!erased && (
+                    <>
+                      <label htmlFor="reject-comment" className="text-xs font-medium">
+                        ¿Qué debe hacer antes de cerrarla? (opcional)
+                      </label>
+                      <textarea
+                        id="reject-comment"
+                        value={rejectComment}
+                        onChange={(e) => setRejectComment(e.target.value)}
+                        rows={2}
+                        maxLength={500}
+                        className={cn(inputClass, "resize-none py-1 text-xs")}
+                      />
+                    </>
+                  )}
                   <div className="flex justify-end">
                     <button
                       onClick={async () => {
-                        const ok = await run("reject", () => rejectCloseRequest(active.id, rejectComment.trim() || null), "Pedido rechazado: la gestión sigue abierta.");
+                        const ok = await run("reject", () => rejectCloseRequest(active.id, erased ? null : rejectComment.trim() || null), "Pedido rechazado: la gestión sigue abierta.");
                         if (ok) {
                           setRejectOpen(false);
                           setRejectComment("");
@@ -830,10 +838,13 @@ export function CaseCard({
 
 function NextActionForm({
   caseView,
+  erased,
   saving,
   onSave,
 }: {
   caseView: CaseView;
+  /** Cliente eliminado: sin campo de nota, y se guarda con nota nula. */
+  erased: boolean;
   saving: boolean;
   onSave: (at: string | null, note: string | null) => void;
 }) {
@@ -849,12 +860,12 @@ function NextActionForm({
     if (!date) return;
     // Hora de Lima (UTC-5, sin horario de verano); sin hora, el servidor usa las 09:00.
     const at = time ? `${date}T${time}:00-05:00` : date;
-    onSave(at, note.trim() || null);
+    onSave(at, erased ? null : note.trim() || null);
   }
 
   return (
     <div className="space-y-2 p-1">
-      <p className="text-xs font-medium">Elegir fecha y nota</p>
+      <p className="text-xs font-medium">{erased ? "Elegir fecha" : "Elegir fecha y nota"}</p>
       <div className="flex gap-2">
         <input
           type="date"
@@ -872,13 +883,15 @@ function NextActionForm({
           aria-label="Hora"
         />
       </div>
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        rows={2}
-        placeholder="Nota (opcional)"
-        className={cn(inputClass, "resize-none py-1 text-xs")}
-      />
+      {!erased && (
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          placeholder="Nota (opcional)"
+          className={cn(inputClass, "resize-none py-1 text-xs")}
+        />
+      )}
       <div className="flex justify-end gap-2">
         {current && (
           <button onClick={() => onSave(null, null)} disabled={saving} className={cn(secondaryButtonClass, "py-1 text-xs")}>

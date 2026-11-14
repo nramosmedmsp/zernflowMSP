@@ -14,7 +14,7 @@ import {
   updateContactType,
   type ContactActionResult,
 } from "@/lib/actions/contacts";
-import { normalizePhone } from "@/components/contacts/contact-labels";
+import { NO_TAGS_HINT, normalizePhone } from "@/components/contacts/contact-labels";
 import { ContactTypeBlock } from "@/components/contacts/contact-type-ui";
 import type { ContactTypeInfo, ContactTypeOption } from "@/lib/cases/contact-type-model";
 import { useViewAs } from "@/components/view-as/view-as-context";
@@ -345,6 +345,9 @@ export function ContactProfile(props: ContactProfileProps) {
             </span>
           ))}
         </div>
+        {props.allTags.length === 0 && !viewing && (
+          <p className="mt-1 text-xs text-muted-foreground">{NO_TAGS_HINT}</p>
+        )}
         {availableTags.length > 0 && (
           <div className="relative mt-2 inline-flex items-center">
             <Plus className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-muted-foreground" />

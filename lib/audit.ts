@@ -54,7 +54,8 @@ export type AuditAction =
   | "sequence_activated"
   | "sequence_paused"
   | "sequence_edited"
-  | "sequence_deleted";
+  | "sequence_deleted"
+  | "sequence_contact_enrolled";
 
 export type AuditEntity =
   | "team"

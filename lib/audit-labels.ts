@@ -136,6 +136,7 @@ export const AUDIT_ACTIONS: Record<string, { entity: string; category: AuditCate
   sequence_paused: { entity: "sequence", category: "broadcasts" },
   sequence_edited: { entity: "sequence", category: "broadcasts" },
   sequence_deleted: { entity: "sequence", category: "broadcasts" },
+  sequence_contact_enrolled: { entity: "sequence", category: "broadcasts" },
   // Flujos
   flow_published: { entity: "flow", category: "flows" },
   flow_deleted: { entity: "flow", category: "flows" },
@@ -692,6 +693,11 @@ function describeConfig(
       const ref = name ? ` ${quote(name)}` : "";
       const verb = { sequence_created: "Creó", sequence_activated: "Activó", sequence_paused: "Pausó", sequence_deleted: "Eliminó" }[action];
       return { title: `${verb} la secuencia${ref}`, details };
+    }
+    case "sequence_contact_enrolled": {
+      // Inscripción hecha a mano. No se nombra al cliente: queda en su propio historial.
+      if (m.reactivated === true) details.push("Volvió a entrar: su inscripción anterior estaba terminada o cancelada");
+      return { title: `Inscribió a un contacto en la secuencia${name ? ` ${quote(name)}` : ""}`, details };
     }
     case "sequence_edited": {
       if (from && to) details.push(`Nombre: ${from} → ${to}`);

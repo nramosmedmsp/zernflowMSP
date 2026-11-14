@@ -5,6 +5,9 @@
 export const MAX_PHONE_LENGTH = 30;
 export const DEFAULT_KEY_DATE_LABEL = "Fecha clave";
 
+/** Nota cuando el espacio no tiene ninguna etiqueta que agregar. */
+export const NO_TAGS_HINT = "Las etiquetas se crean al importar contactos o desde un flujo.";
+
 export type PhoneResult = { ok: true; value: string | null } | { ok: false; error: string };
 
 /**

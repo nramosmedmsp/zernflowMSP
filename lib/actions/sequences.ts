@@ -7,9 +7,9 @@ import { getWorkspace } from "@/lib/workspace";
 import { auditAction } from "@/lib/audit-server";
 import { revalidatePath } from "next/cache";
 import { ADMIN_ONLY_MESSAGE, isAdminRole } from "@/lib/permissions";
-import { marketingDecision } from "@/lib/consent";
 import { validateSequenceSteps } from "@/lib/broadcasts/sequence-step";
 import { enrollInSequence } from "@/lib/sequences/enroll";
+import { ENROLL_CHANNEL_NOT_CONTACT_MESSAGE, contactEnrollGate, sequenceEnrollGate } from "@/lib/sequences/enroll-gate";
 import { ensureStepIds } from "@/lib/sequences/steps";
 import type { SequenceStep } from "@/lib/types/database";
 
@@ -147,19 +147,23 @@ export async function enrollContact(
   contactId: string,
   channelId: string
 ) {
-  const { workspace, supabase, role } = await getWorkspace();
+  const { workspace, supabase, role, user } = await getWorkspace();
   if (!isAdminRole(role)) return { error: ADMIN_ONLY_MESSAGE };
 
   // Verificar que la secuencia pertenece al espacio de trabajo
   const { data: sequence } = await supabase
     .from("sequences")
-    .select("id, steps, status")
+    .select("id, name, steps, status")
     .eq("id", sequenceId)
     .eq("workspace_id", workspace.id)
     .single();
 
   if (!sequence) return { error: "No se encontró la secuencia" };
-  if (sequence.status !== "active") return { error: "La secuencia no está activa" };
+  const steps = (sequence.steps as unknown as SequenceStep[]) || [];
+  const sequenceGate = sequenceEnrollGate({ status: sequence.status, stepCount: steps.length });
+  if (!sequenceGate.ok) {
+    return { error: sequenceGate.reason === "not_active" ? "La secuencia no está activa" : "La secuencia no tiene pasos" };
+  }
 
   // El contacto y el canal tienen que ser de este espacio de trabajo.
   const [{ data: contact }, { data: channel }] = await Promise.all([
@@ -167,15 +171,19 @@ export async function enrollContact(
     supabase.from("channels").select("id").eq("id", channelId).eq("workspace_id", workspace.id).maybeSingle(),
   ]);
   if (!contact) return { error: "No se encontró el contacto" };
-  if (contact.is_subscribed === false || contact.erased_at) return { error: "El contacto se dio de baja de la publicidad y no puede recibir la secuencia" };
-  const consent = marketingDecision(contact);
-  if (!consent.ok) {
-    return { error: "Este contacto aún no aceptó recibir publicidad. Registra su consentimiento en su ficha antes de inscribirlo en la secuencia." };
-  }
+  const contactGate = contactEnrollGate(contact);
+  if (!contactGate.ok) return { error: contactGate.message };
   if (!channel) return { error: "No se encontró el canal" };
 
-  const steps = (sequence.steps as unknown as SequenceStep[]) || [];
-  if (steps.length === 0) return { error: "La secuencia no tiene pasos" };
+  // Y el canal tiene que ser uno por el que este contacto escribió (no el de otro cliente).
+  const { data: link } = await supabase
+    .from("contact_channels")
+    .select("id")
+    .eq("contact_id", contactId)
+    .eq("channel_id", channelId)
+    .limit(1)
+    .maybeSingle();
+  if (!link) return { error: ENROLL_CHANNEL_NOT_CONTACT_MESSAGE };
 
   const result = await enrollInSequence(supabase, {
     workspaceId: workspace.id,
@@ -190,7 +198,19 @@ export async function enrollContact(
     return { error: GENERIC_ERROR };
   }
 
+  // Registro de cambios: quién inscribió a mano y en qué secuencia (el cliente queda en su
+  // propio historial con «sequence_enrolled»; aquí no se guardan sus datos).
+  await auditAction({
+    workspaceId: workspace.id,
+    actorId: user.id,
+    action: "sequence_contact_enrolled",
+    entity: "sequence",
+    toValue: sequence.name,
+    meta: { name: sequence.name, reactivated: result.reactivated },
+  });
+
   revalidatePath(`/dashboard/sequences/${sequenceId}`);
+  revalidatePath(`/dashboard/contacts/${contactId}`);
   return { ok: true, reactivated: result.reactivated };
 }
 
